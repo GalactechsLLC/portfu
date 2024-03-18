@@ -1,0 +1,9 @@
+[workspace]
+resolver = "2"
+
+members = [
+    "portfu",
+    "portfu_core",
+    "portfu_macros"
+]
+
