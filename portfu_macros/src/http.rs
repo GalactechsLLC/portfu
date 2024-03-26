@@ -3,7 +3,7 @@ use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{ToTokens, TokenStreamExt};
 use syn::{Ident};
 use crate::input_and_compile_error;
-use crate::routes::Route;
+use crate::routes::DynRoute;
 
 macro_rules! standard_method_type {
     (
@@ -76,7 +76,7 @@ pub fn with_method(
         Err(err) => return input_and_compile_error(input, err),
     };
 
-    match Route::new(args, ast, method) {
+    match DynRoute::new(args, ast, method) {
         Ok(route) => route.into_token_stream().into(),
         // on macro related error, make IDEs happy; see fn docs
         Err(err) => input_and_compile_error(input, err),

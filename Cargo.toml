@@ -2,6 +2,7 @@
 resolver = "2"
 
 members = [
+    "example_portfu_server",
     "portfu",
     "portfu_core",
     "portfu_macros"

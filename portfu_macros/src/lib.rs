@@ -1,8 +1,11 @@
 mod websocket;
 mod http;
 mod routes;
+mod static_files;
 
 use proc_macro::TokenStream;
+use quote::ToTokens;
+use crate::static_files::StaticFiles;
 
 /// Converts the error to a token stream and appends it to the original input.
 ///
@@ -34,3 +37,22 @@ method_macro!(Connect, connect);
 method_macro!(Options, options);
 method_macro!(Trace, trace);
 method_macro!(Patch, patch);
+
+#[proc_macro_attribute]
+pub fn files(args: TokenStream, input: TokenStream) -> TokenStream {
+    let args = match syn::parse(args) {
+        Ok(args) => args,
+        // on parse error, make IDEs happy; see fn docs
+        Err(err) => return input_and_compile_error(input, err),
+    };
+    let ast = match syn::parse::<syn::ItemStruct>(input.clone()) {
+        Ok(ast) => ast,
+        // on parse error, make IDEs happy; see fn docs
+        Err(err) => return input_and_compile_error(input, err),
+    };
+    match StaticFiles::new(args, ast.ident) {
+        Ok(route) => route.into_token_stream().into(),
+        // on macro related error, make IDEs happy; see fn docs
+        Err(err) => input_and_compile_error(input, err),
+    }
+}

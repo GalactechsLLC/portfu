@@ -2,15 +2,15 @@ use std::collections::HashSet;
 use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
 use quote::{quote, ToTokens};
 use syn::{FnArg, LitStr, parse_quote, Pat, Path, punctuated::Punctuated, Token, Type};
-use portfu_core::paths::PathSegment;
+use portfu_core::route::PathSegment;
 use crate::http::Method;
 
-pub struct RouteArgs {
+pub struct DynRouteArgs {
     path: syn::LitStr,
     options: Punctuated<syn::MetaNameValue, Token![,]>,
 }
 
-impl syn::parse::Parse for RouteArgs {
+impl syn::parse::Parse for DynRouteArgs {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
         let path = input.parse::<syn::LitStr>().map_err(|mut err| {
             err.combine(syn::Error::new(
@@ -21,7 +21,7 @@ impl syn::parse::Parse for RouteArgs {
         })?;
 
         // verify that path pattern is valid
-        let _ = portfu_core::paths::Path::parse(path.value());
+        let _ = portfu_core::route::Route::parse(path.value());
 
         // if there's no comma, assume that no options are provided
         if !input.peek(Token![,]) {
@@ -51,9 +51,9 @@ impl syn::parse::Parse for RouteArgs {
 
 
 
-pub struct Route {
+pub struct DynRoute {
     /// Name of the handler function being annotated.
-    name: syn::Ident,
+    name: Ident,
     /// Args passed to routing macro.
     args: Args,
     /// AST of the handler function being annotated.
@@ -61,8 +61,8 @@ pub struct Route {
     /// The doc comment attributes to copy to generated struct, if any.
     doc_attributes: Vec<syn::Attribute>,
 }
-impl Route {
-    pub fn new(args: RouteArgs, ast: syn::ItemFn, method: Option<Method>) -> syn::Result<Self> {
+impl DynRoute {
+    pub fn new(args: DynRouteArgs, ast: syn::ItemFn, method: Option<Method>) -> syn::Result<Self> {
         let name = ast.sig.ident.clone();
 
         // Try and pull out the doc comments so that we can reapply them to the generated struct.
@@ -100,7 +100,7 @@ impl Route {
 }
 
 
-impl ToTokens for Route {
+impl ToTokens for DynRoute {
     fn to_tokens(&self, output: &mut TokenStream2) {
         let Self {
             name,
@@ -128,37 +128,37 @@ impl ToTokens for Route {
             if methods.len() > 1 {
                 let other_method_guards: Vec<TokenStream2> = others
                     .map(| method| quote! {
-                            .or(::portfu_core::filters::#method.clone())
+                            .or(::portfu::core::filters::#method.clone())
                         }
                     ).collect();
                 quote! {
                     .filter(
-                        ::portfu_core::filters::any(::portfu_core::filters::#first.clone())
+                        ::portfu::core::filters::any(::portfu::core::filters::#first.clone())
                             #(#other_method_guards)*
                     )
                 }
             } else {
                 quote! {
-                    .filter(::portfu_core::filters::#first.clone())
+                    .filter(::portfu::core::filters::#first.clone())
                 }
             }
         };
 
         let registrations = quote! {
-            let __resource = ::portfu_core::service::ServiceBuilder::new(#path)
+            let __resource = ::portfu::core::service::ServiceBuilder::new(#path)
                 .name(#resource_name)
                 #method_guards
-                #(.filter(::portfu_core::filters::fn_guard(#filters)))*
+                #(.filter(::portfu::core::filters::fn_guard(#filters)))*
                 #(.wrap(#wrappers))*
                 .handler(std::sync::Arc::new(self)).build();
             service_registry.register(__resource);
         };
-        let mut existing_vars: Vec<String> = vec![];
-        let (path_vars, mut additional_function_vars) = match portfu_core::paths::Path::parse(path.value()) {
-            portfu_core::paths::Path::Static(_, _) => (vec![quote! {}], vec![quote! {}]),
-            portfu_core::paths::Path::Segmented(segments, _) => {
+        let mut path_vars = vec![];
+        let mut additional_function_vars = vec![];
+        let mut dyn_vars = match portfu_core::route::Route::parse(path.value()) {
+            portfu_core::route::Route::Static(_, _) => vec![quote! {}],
+            portfu_core::route::Route::Segmented(segments, _) => {
                 let mut variables = vec![];
-                let fn_args = vec![];
                 for segment in segments.iter().filter_map(|v| {
                     match v {
                         PathSegment::Static(_) => None,
@@ -167,16 +167,14 @@ impl ToTokens for Route {
                 }) {
                     variables.push(
                     quote! {
-                            let #segment = request.path.extract(request.request.uri().path(), stringify!(#segment));
+                            let #segment = ::portfu::prelude::Path::extract(&mut request, stringify!(#segment)).await.unwrap();
                         }
                     );
-                    existing_vars.push(format!("{segment}"));
+                    path_vars.push(format!("{segment}"));
                 }
-                (variables, fn_args)
+                variables
             }
         };
-
-        let mut dynamic_args = vec![];
         for arg in ast.sig.inputs.iter() {
             let (param_type, param_name) = match arg {
                 FnArg::Receiver(_) => {
@@ -190,59 +188,118 @@ impl ToTokens for Route {
                     }
                 }
             };
-            let ty_val : Type = parse_quote! { #param_type };
+            let ident_type : Type = parse_quote! { #param_type };
             let ident_val : Ident = parse_quote! { #param_name };
-            if existing_vars.contains(&format!("{ident_val}")) {
+            if path_vars.contains(&format!("{ident_val}")) {
+                additional_function_vars.push(quote! {
+                    #ident_val,
+                });
                 continue;
             }
-            additional_function_vars.push(
-                quote! {
-                    request_args.remove().unwrap()
+            if let Type::Path(path) = &ident_type {
+                if let Some(segment) = path.path.segments.first() {
+                    let body_ident: Ident = Ident::new("Body", segment.ident.span());
+                    let state_ident: Ident = Ident::new("State", segment.ident.span());
+                    if body_ident == segment.ident {
+                        dyn_vars.push(quote! {
+                            let #ident_val: #ident_type = match ::portfu::prelude::Body::extract(&mut request).await {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    *response.status_mut() = ::portfu::prelude::http::StatusCode::INTERNAL_SERVER_ERROR;
+                                    *response.body_mut() = Full::new(Bytes::from(format!("Failed to extract Body as {}, {e:?}", stringify!(#ident_type).replace(' ',""))));
+                                    return Err(ServiceResponse {
+                                        request,
+                                        response
+                                    });
+                                }
+                            };
+                        });
+                        additional_function_vars.push(quote! {
+                            #ident_val,
+                        });
+                        continue;
+                    } else if state_ident == segment.ident {
+                        dyn_vars.push(quote! {
+                            let #ident_val: #ident_type = match ::portfu::prelude::State::extract(&mut request).await {
+                                Some(v) => v,
+                                None => {
+                                    *response.status_mut() = ::portfu::prelude::http::StatusCode::INTERNAL_SERVER_ERROR;
+                                    *response.body_mut() = Full::new(Bytes::from(format!("Failed to find {}", stringify!(#ident_type).replace(' ',""))));
+                                    return Err(ServiceResponse {
+                                        request,
+                                        response
+                                    });
+                                }
+                            };
+                        });
+                        additional_function_vars.push(quote! {
+                            #ident_val,
+                        });
+                        continue;
+                    }
                 }
-            );
-            let stmt = quote! {
-                let #ident_val: #ty_val = request_args.remove().unwrap();
-            };
-            dynamic_args.push(stmt.to_token_stream());
+            }
+            let function_name = &ast.sig.ident;
+            additional_function_vars.push(quote! {
+                match request.get() {
+                    Some(v) => v,
+                    None => {
+                        *response.status_mut() = ::portfu::prelude::http::StatusCode::INTERNAL_SERVER_ERROR;
+                        *response.body_mut() = Full::new(Bytes::from(format!("Failed to find {} for {}", stringify!(#ident_type).replace(' ',""), stringify!(#function_name))));
+                        return Err(ServiceResponse {
+                            request,
+                            response
+                        });
+                    }
+                },
+            });
         }
-
         let stream = quote! {
             #(#doc_attributes)*
             #[allow(non_camel_case_types, missing_docs)]
             pub struct #name;
-            impl ::portfu_core::ServiceRegister for #name {
-                fn register(self, service_registry: &mut portfu_core::ServiceRegistry) {
+            impl ::portfu::core::ServiceRegister for #name {
+                fn register(self, service_registry: &mut portfu::prelude::ServiceRegistry) {
                     #registrations
                 }
             }
-            #[async_trait::async_trait]
-            impl ::portfu_core::ServiceHandler for #name {
+            #[::portfu::prelude::async_trait::async_trait]
+            impl ::portfu::core::ServiceHandler for #name {
                 fn name(&self) -> &str {
                     stringify!(#name)
                 }
                 async fn handle(
                     &self,
-                    address: &::std::net::SocketAddr,
-                    request: &::portfu_core::service::ServiceRequest,
-                    response: ::http::Response<::http_body_util::Full<::hyper::body::Bytes>>
-                ) -> Result<::http::Response<::http_body_util::Full<::hyper::body::Bytes>>, ::http::Response<::http_body_util::Full<::hyper::body::Bytes>>> {
+                    mut request: ::portfu::prelude::ServiceRequest,
+                    mut response: ::portfu::prelude::http::Response<::portfu::prelude::http_body_util::Full<::portfu::prelude::hyper::body::Bytes>>
+                ) -> Result<::portfu::prelude::ServiceResponse, ::portfu::prelude::ServiceResponse> {
                     #ast
-                    use std::any::Any;
-                    let mut request_args = ::portfu_core::data_map::DynMap::new();
-                    request_args.insert(address);
-                    request_args.insert(request);
-                    request_args.insert(response);
-                    #(#path_vars)*
-                    #(#dynamic_args)*
-                    #name(#(#additional_function_vars)*
-                    ).await
+                    #(#dyn_vars)*
+                    match #name(#(#additional_function_vars)*).await {
+                        Ok(t) => {
+                            let bytes: ::portfu::prelude::hyper::body::Bytes = t.into();
+                            *response.body_mut() = ::portfu::prelude::http_body_util::Full::new(bytes);
+                            Ok(::portfu::prelude::ServiceResponse {
+                                request,
+                                response
+                            })
+                        }
+                        Err(e) => {
+                            let err = format!("{e:?}");
+                            let bytes: ::portfu::prelude::hyper::body::Bytes = err.into();
+                            *response.body_mut() = ::portfu::prelude::http_body_util::Full::new(bytes);
+                            Ok(::portfu::prelude::ServiceResponse {
+                                request,
+                                response
+                            })
+                        }
+                    }
                 }
             }
         };
         output.extend(stream);
     }
 }
-
 
 struct Args {
     path: syn::LitStr,
@@ -253,7 +310,7 @@ struct Args {
 }
 
 impl Args {
-    fn new(args: RouteArgs, method: Option<Method>) -> syn::Result<Self> {
+    fn new(args: DynRouteArgs, method: Option<Method>) -> syn::Result<Self> {
         let mut resource_name = None;
         let mut filters = Vec::new();
         let mut wrappers = Vec::new();
