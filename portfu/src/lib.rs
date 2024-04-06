@@ -1,7 +1,11 @@
+pub mod endpoints;
+pub mod filters;
 mod server;
+pub mod signal;
 mod ssl;
-mod signal;
-pub extern crate portfu_core as core;
+pub mod wrappers;
+
+pub extern crate portfu_core as pfcore;
 pub extern crate portfu_macros as macros;
 
 pub mod prelude {
@@ -10,12 +14,22 @@ pub mod prelude {
     pub extern crate http;
     pub extern crate http_body_util;
     pub extern crate hyper;
-    pub type ServiceRequest = ::core::service::ServiceRequest;
-    pub type ServiceRegistry = ::core::ServiceRegistry;
-    pub type ServiceResponse = ::core::ServiceResponse;
+    pub extern crate hyper_util;
+    pub extern crate tokio_tungstenite;
+    pub extern crate uuid;
+    pub type Service = ::pfcore::service::Service;
+    pub type ServiceGroup = ::pfcore::service::ServiceGroup;
+    pub type ServiceRegistry = ::pfcore::ServiceRegistry;
+    pub type ServiceData = ::pfcore::ServiceData;
     pub type ServerBuilder = server::ServerBuilder;
     pub type SslConfig = server::SslConfig;
-    pub type Path = ::core::Path;
-    pub type Body<T> = ::core::Body<T>;
-    pub type State<T> = ::core::State<T>;
+    pub type Path = ::pfcore::Path;
+    pub type Body<T> = ::pfcore::Body<T>;
+    pub type State<T> = ::pfcore::State<T>;
+    pub type WebSocket = ::pfcore::sockets::WebSocket;
+    pub type WebsocketConnection = ::pfcore::sockets::WebsocketConnection;
+    pub type WebsocketMsgStream = tokio_tungstenite::WebSocketStream<
+        hyper_util::rt::tokio::TokioIo<hyper::upgrade::Upgraded>,
+    >;
+    pub type Peers = ::pfcore::sockets::Peers;
 }

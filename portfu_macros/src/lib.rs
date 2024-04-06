@@ -1,11 +1,20 @@
-mod websocket;
-mod http;
-mod routes;
+mod endpoints;
 mod static_files;
+mod websocket;
 
-use proc_macro::TokenStream;
-use quote::ToTokens;
+mod task;
+
+use crate::endpoints::Endpoint;
 use crate::static_files::StaticFiles;
+use crate::websocket::WebSocketRoute;
+use proc_macro::TokenStream;
+use std::collections::HashSet;
+use proc_macro2::{Ident, TokenStream as TokenStream2, Span};
+use quote::{quote, ToTokens};
+use syn::{LitStr};
+use portfu_core::routes::PathSegment;
+use crate::method::Method;
+use crate::task::Task;
 
 /// Converts the error to a token stream and appends it to the original input.
 ///
@@ -19,11 +28,79 @@ fn input_and_compile_error(mut item: TokenStream, err: syn::Error) -> TokenStrea
     item
 }
 
+mod method {
+    use proc_macro2::{Span, TokenStream as TokenStream2};
+    use quote::{ToTokens, TokenStreamExt};
+    use syn::Ident;
+    macro_rules! standard_method_type {
+        (
+            $($variant:ident, $upper:ident, $lower:ident,)+
+        ) => {
+            #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+            pub enum Method {
+                $(
+                    $variant,
+                )+
+            }
+            impl Method {
+                pub fn as_str(&self) -> &'static str {
+                    match self {
+                        $(Self::$variant => stringify!($upper),)+
+                    }
+                }
+                fn parse(method: &str) -> Result<Self, String> {
+                    match method {
+                        $(stringify!($upper) => Ok(Self::$variant),)+
+                        _ => Err(format!("HTTP method must be uppercase: `{}`", method)),
+                    }
+                }
+            }
+        };
+    }
+
+    standard_method_type! {
+        Get,       GET,     get,
+        Post,      POST,    post,
+        Put,       PUT,     put,
+        Delete,    DELETE,  delete,
+        Head,      HEAD,    head,
+        Connect,   CONNECT, connect,
+        Options,   OPTIONS, options,
+        Trace,     TRACE,   trace,
+        Patch,     PATCH,   patch,
+    }
+
+    impl TryFrom<&syn::LitStr> for Method {
+        type Error = syn::Error;
+        fn try_from(value: &syn::LitStr) -> Result<Self, Self::Error> {
+            Self::parse(value.value().as_str())
+                .map_err(|message| syn::Error::new_spanned(value, message))
+        }
+    }
+    impl ToTokens for Method {
+        fn to_tokens(&self, stream: &mut TokenStream2) {
+            let ident = Ident::new(self.as_str(), Span::call_site());
+            stream.append(ident);
+        }
+    }
+}
+
 macro_rules! method_macro {
     ($variant:ident, $method:ident) => {
         #[proc_macro_attribute]
         pub fn $method(args: TokenStream, input: TokenStream) -> TokenStream {
-            http::with_method(Some(http::Method::$variant), args, input)
+            let args = match syn::parse(args) {
+                Ok(args) => args,
+                Err(err) => return input_and_compile_error(input, err),
+            };
+            let ast = match syn::parse::<syn::ItemFn>(input.clone()) {
+                Ok(ast) => ast,
+                Err(err) => return input_and_compile_error(input, err),
+            };
+            match Endpoint::new(args, ast, Some(method::Method::$variant)) {
+                Ok(route) => route.into_token_stream().into(),
+                Err(err) => input_and_compile_error(input, err),
+            }
         }
     };
 }
@@ -42,17 +119,92 @@ method_macro!(Patch, patch);
 pub fn files(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = match syn::parse(args) {
         Ok(args) => args,
-        // on parse error, make IDEs happy; see fn docs
         Err(err) => return input_and_compile_error(input, err),
     };
     let ast = match syn::parse::<syn::ItemStruct>(input.clone()) {
         Ok(ast) => ast,
-        // on parse error, make IDEs happy; see fn docs
         Err(err) => return input_and_compile_error(input, err),
     };
     match StaticFiles::new(args, ast.ident) {
         Ok(route) => route.into_token_stream().into(),
-        // on macro related error, make IDEs happy; see fn docs
         Err(err) => input_and_compile_error(input, err),
+    }
+}
+
+#[proc_macro_attribute]
+pub fn websocket(args: TokenStream, input: TokenStream) -> TokenStream {
+    let args = match syn::parse(args) {
+        Ok(args) => args,
+        Err(err) => return input_and_compile_error(input, err),
+    };
+    let ast = match syn::parse::<syn::ItemFn>(input.clone()) {
+        Ok(ast) => ast,
+        Err(err) => return input_and_compile_error(input, err),
+    };
+    match WebSocketRoute::new(args, ast) {
+        Ok(route) => route.into_token_stream().into(),
+        Err(err) => input_and_compile_error(input, err),
+    }
+}
+
+#[proc_macro_attribute]
+pub fn task(_: TokenStream, input: TokenStream) -> TokenStream {
+    let ast = match syn::parse::<syn::ItemFn>(input.clone()) {
+        Ok(ast) => ast,
+        Err(err) => return input_and_compile_error(input, err),
+    };
+    match Task::new(ast) {
+        Ok(task) => task.into_token_stream().into(),
+        Err(err) => input_and_compile_error(input, err),
+    }
+}
+
+
+fn parse_path_variables(path: &LitStr) -> (Vec<TokenStream2>, Vec<String>) {
+    let mut path_vars = vec![];
+    match portfu_core::routes::Route::new(path.value()) {
+        portfu_core::routes::Route::Static(_, _) => (vec![quote! {}], vec![]),
+        portfu_core::routes::Route::Segmented(segments, _) => {
+            let mut variables = vec![];
+            for segment in segments.iter().filter_map(|v| match v {
+                PathSegment::Static(_) => None,
+                PathSegment::Variable(v) => {
+                    Some(Ident::new(v.name.as_str(), Span::call_site()))
+                }
+            }) {
+                variables.push(
+                    quote! {
+                            let #segment: ::portfu::prelude::Path = ::portfu::pfcore::FromRequest::from_request(&mut data.request, stringify!(#segment)).await.unwrap();
+                        }
+                );
+                path_vars.push(format!("{segment}"));
+            }
+            (variables, path_vars)
+        }
+    }
+}
+
+fn extract_method_filters(methods: &HashSet<Method>) -> TokenStream2 {
+    debug_assert!(!methods.is_empty(), "Args::methods should not be empty");
+    let mut others = methods.iter();
+    let first = others.next().unwrap();
+    if methods.len() > 1 {
+        let other_method_guards: Vec<TokenStream2> = others
+            .map(|method| {
+                quote! {
+                    .or(::portfu::filters::method::#method.clone())
+                }
+            })
+            .collect();
+        quote! {
+            .filter(
+                ::portfu::filters::any(::portfu::filters::method::#first.clone())
+                    #(#other_method_guards)*
+            )
+        }
+    } else {
+        quote! {
+            .filter(::portfu::filters::method::#first.clone())
+        }
     }
 }

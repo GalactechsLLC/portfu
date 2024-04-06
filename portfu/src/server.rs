@@ -1,9 +1,10 @@
-use std::io::{Error, ErrorKind};
-use std::net::{Ipv4Addr, SocketAddr};
-use std::str::FromStr;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use crate::signal::await_termination;
+use crate::ssl::load_ssl_certs;
+use crate::pfcore::filters::FilterFn;
+use crate::pfcore::filters::{Filter, FilterResult};
+use crate::pfcore::wrappers::{WrapperFn, WrapperResult};
+use crate::pfcore::service::{IncomingRequest, ServiceRequest};
+use crate::pfcore::{ServiceRegister, ServiceRegistry, ServiceData};
 use http::{Extensions, Request, Response, StatusCode};
 use http_body_util::Full;
 use hyper::body::{Bytes, Incoming};
@@ -11,14 +12,18 @@ use hyper::server::conn::http1::Builder;
 use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
 use log::error;
-use tokio::net::TcpListener;
-use portfu_core::{ServiceRegister, ServiceRegistry};
 use serde::{Deserialize, Serialize};
+use std::io::{Error, ErrorKind};
+use std::net::{Ipv4Addr, SocketAddr};
+use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::net::TcpListener;
 use tokio::{select, spawn};
+use tokio::task::JoinSet;
 use tokio_rustls::TlsAcceptor;
-use portfu_core::service::{IncomingRequest, ServiceRequest};
-use crate::signal::await_termination;
-use crate::ssl::load_ssl_certs;
+use pfcore::task::Task;
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SslConfig {
@@ -32,7 +37,7 @@ pub struct SslConfig {
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
-    pub ssl_config: Option<SslConfig>
+    pub ssl_config: Option<SslConfig>,
 }
 impl Default for ServerConfig {
     fn default() -> Self {
@@ -47,9 +52,12 @@ impl Default for ServerConfig {
 #[derive(Debug)]
 pub struct Server {
     pub services: Arc<ServiceRegistry>,
-    pub config : ServerConfig,
+    pub config: ServerConfig,
     pub run: Arc<AtomicBool>,
-    pub shared_state: Extensions
+    pub shared_state: Extensions,
+    filters: Vec<Arc<dyn FilterFn + Sync + Send>>,
+    tasks: Vec<Arc<Task>>,
+    wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
 }
 impl Server {
     pub async fn run(self) -> Result<(), Error> {
@@ -61,7 +69,7 @@ impl Server {
                 let certs = load_ssl_certs(&server.config)?;
                 Some(TlsAcceptor::from(certs))
             }
-            None => { None }
+            None => None,
         });
         let mut http = Builder::new();
         http.keep_alive(true);
@@ -71,6 +79,13 @@ impl Server {
             let _ = await_termination().await;
             server_run_handle.store(false, Ordering::Relaxed);
         });
+        let mut background_tasks = JoinSet::new();
+        for task in server.tasks.iter().cloned() {
+            let state = server.shared_state.clone();
+            background_tasks.spawn(async move {
+                task.task_fn.run(state).await
+            });
+        }
         while server.run.load(Ordering::Relaxed) {
             select!(
                 res = listener.accept() => {
@@ -82,12 +97,12 @@ impl Server {
                             spawn(async move {
                                 let service = service_fn(move |req| {
                                     let server = server.clone();
-                                    Self::connection_handler(server, req, address.into())
+                                    Self::connection_handler(server, req, address)
                                 });
                                 if let Some(acceptor) = tls_acceptor.as_ref() {
                                     match acceptor.accept(stream).await {
                                         Ok(stream) => {
-                                            let connection = http.serve_connection(TokioIo::new(stream), service);
+                                            let connection = http.serve_connection(TokioIo::new(stream), service).with_upgrades();
                                             if let Err(err) = connection.await {
                                                 error!("Error serving connection: {:?}", err);
                                             }
@@ -97,7 +112,7 @@ impl Server {
                                         }
                                     }
                                 } else {
-                                    let connection = http.serve_connection(TokioIo::new(stream), service);
+                                    let connection = http.serve_connection(TokioIo::new(stream), service).with_upgrades();
                                     if let Err(err) = connection.await {
                                         error!("Error serving connection: {:?}", err);
                                     }
@@ -109,9 +124,10 @@ impl Server {
                         }
                     }
                 },
-                _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+                _ = tokio::time::sleep(Duration::from_millis(100)) => {}
             )
         }
+        background_tasks.shutdown().await;
         Ok(())
     }
 
@@ -122,67 +138,88 @@ impl Server {
             } else {
                 &config.host
             })
-                .map_err(|e| {
-                    Error::new(
-                        ErrorKind::InvalidInput,
-                        format!("Failed to parse Host: {:?}", e),
-                    )
-                })?,
+            .map_err(|e| {
+                Error::new(
+                    ErrorKind::InvalidInput,
+                    format!("Failed to parse Host: {:?}", e),
+                )
+            })?,
             config.port,
         )))
     }
 
+    #[inline]
     async fn connection_handler(
         server: Arc<Self>,
         mut request: Request<Incoming>,
         address: SocketAddr,
     ) -> Result<Response<Full<Bytes>>, Error> {
-        let mut response = Response::builder().status(StatusCode::NOT_FOUND).body(Full::new(Bytes::new())).unwrap();
-        for service in server.services.services.iter().cloned() {
-            if service.handles(&request) {
-                *response.status_mut() = StatusCode::OK;
-                request.extensions_mut().extend(server.shared_state.clone());
-                let mut request = ServiceRequest {
-                    request: IncomingRequest::Stream(request),
-                    path: service.path.clone(),
-                };
-                request.insert(address);
-                return Ok(match service.handle(request, response).await {
-                    Ok(r) => {
-                        r.response
+        let mut response: Response<Full<Bytes>> = Default::default();
+        if !server
+            .filters.is_empty() && !server
+            .filters
+            .iter()
+            .cloned()
+            .all(|f| f.filter(&request) == FilterResult::Allow) {
+            *response.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+            Ok(response)
+        } else {
+            match server.services.services.iter().find(|s| s.handles(&request)).cloned() {
+                Some(service) => {
+                    request.extensions_mut().extend(server.shared_state.clone());
+                    let mut service_data = ServiceData {
+                        request: ServiceRequest {
+                            request: IncomingRequest::Stream(request),
+                            path: service.path.clone(),
+                        },
+                        response,
+                    };
+                    service_data.request.insert(address);
+                    for func in server.wrappers.iter() {
+                        match func.before(&mut service_data).await {
+                            WrapperResult::Continue => {},
+                            WrapperResult::Return => {
+                                return Ok(service_data.response);
+                            }
+                        }
                     }
-                    Err(e) => {
-                        e.response
+                    service.handle(&mut service_data).await?;
+                    for func in server.wrappers.iter() {
+                        match func.after(&mut service_data).await {
+                            WrapperResult::Continue => {},
+                            WrapperResult::Return => {
+                                return Ok(service_data.response);
+                            }
+                        }
                     }
-                });
+                    Ok(service_data.response)
+                }
+                None => {
+                    *response.status_mut() = StatusCode::NOT_FOUND;
+                    Ok(response)
+                }
             }
         }
-        Ok(response)
     }
 }
 
 pub struct ServerBuilder {
     services: ServiceRegistry,
-    pub config : ServerConfig,
-    pub shared_state: Extensions
+    config: ServerConfig,
+    shared_state: Extensions,
+    filters: Vec<Arc<dyn FilterFn + Sync + Send>>,
+    tasks: Vec<Arc<Task>>,
+    wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
 }
 impl ServerBuilder {
-    pub fn new() -> Self {
-        Self {
-            services: ServiceRegistry{
-                services: vec![]
-            },
-            config: ServerConfig::default(),
-            shared_state: Extensions::default(),
-        }
-    }
     pub fn from_config(config: ServerConfig) -> Self {
         Self {
-            services: ServiceRegistry{
-                services: vec![]
-            },
+            services: ServiceRegistry { services: vec![] },
             config,
             shared_state: Extensions::default(),
+            filters: vec![],
+            tasks: vec![],
+            wrappers: vec![],
         }
     }
     pub fn host(self, host: String) -> Self {
@@ -205,6 +242,20 @@ impl ServerBuilder {
         service.register(&mut s.services);
         s
     }
+    pub fn filter(self, filter: Filter) -> Self {
+        let mut s = self;
+        s.filters.push(Arc::new(filter));
+        s
+    }
+    pub fn wrap(self, wrapper: Arc<dyn WrapperFn + Sync + Send>) -> Self {
+        let mut s = self;
+        s.wrappers.push(wrapper);
+        s
+    }
+    pub fn task<T: Into<Task>>(mut self, task: T) -> Self {
+        self.tasks.push(Arc::new(task.into()));
+        self
+    }
     pub fn shared_state<T: Send + Sync + 'static>(self, shared_state: T) -> Self {
         let mut s = self;
         s.shared_state.insert(Arc::new(shared_state));
@@ -216,6 +267,21 @@ impl ServerBuilder {
             config: self.config,
             run: Arc::new(AtomicBool::new(true)),
             shared_state: self.shared_state,
+            filters: self.filters,
+            tasks: self.tasks,
+            wrappers: self.wrappers,
+        }
+    }
+}
+impl Default for ServerBuilder {
+    fn default() -> Self {
+        Self {
+            services: ServiceRegistry { services: vec![] },
+            config: ServerConfig::default(),
+            shared_state: Extensions::default(),
+            filters: vec![],
+            tasks: vec![],
+            wrappers: vec![],
         }
     }
 }

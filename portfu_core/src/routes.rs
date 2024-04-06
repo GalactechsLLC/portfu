@@ -1,5 +1,5 @@
-use std::borrow::Cow;
 use regex::{escape, Regex};
+use std::borrow::Cow;
 
 const REGEX_FLAGS: &str = "(?s-m)";
 
@@ -25,25 +25,7 @@ pub enum Route {
     Segmented(Vec<PathSegment>, Regex),
 }
 impl Route {
-    pub fn matches(&self, path: &str) -> bool {
-        match self {
-            Route::Static(_, r) => r.is_match(path),
-            Route::Segmented(_, r) => r.is_match(path),
-        }
-    }
-    pub fn extract(&self, path: &str, name: &str) -> Option<String> {
-        match self {
-            Route::Static(_, _) => None,
-            Route::Segmented(_, r) => {
-                if let Some(captures) = r.captures(path) {
-                    captures.name(name).map(|m| m.as_str().to_string())
-                } else {
-                    None
-                }
-            },
-        }
-    }
-    pub fn parse(input: String) -> Self {
+    pub fn new(input: String) -> Self {
         let mut re = format!("{}^", REGEX_FLAGS);
         let mut to_parse = input.as_str();
         let mut segments = Vec::new();
@@ -61,27 +43,43 @@ impl Route {
             to_parse = rem;
         }
         if to_parse.ends_with('*') {
-            re.push_str(&escape(to_parse.strip_suffix("*").unwrap()));
+            re.push_str(&escape(to_parse.strip_suffix('*').unwrap()));
             re.push_str(".*");
         } else if !has_tail && !to_parse.is_empty() {
             segments.push(PathSegment::Static(to_parse.to_string()));
             re.push_str(&escape(to_parse));
-            re.push_str("$");
+            re.push('$');
         }
         if segments.is_empty() {
-            Self::Static(Cow::Owned(input.to_string()), Regex::new(re.as_str()).unwrap())
+            Self::Static(Cow::Owned(input), Regex::new(re.as_str()).unwrap())
         } else {
             Self::Segmented(segments, Regex::new(re.as_str()).unwrap())
         }
     }
-    fn parse_param(input: &str) -> (PathSegment, String, &str, bool){
+    pub fn matches(&self, path: &str) -> bool {
+        match self {
+            Route::Static(_, r) => r.is_match(path),
+            Route::Segmented(_, r) => r.is_match(path),
+        }
+    }
+    pub fn extract(&self, path: &str, name: &str) -> Option<String> {
+        match self {
+            Route::Static(_, _) => None,
+            Route::Segmented(_, r) => {
+                if let Some(captures) = r.captures(path) {
+                    captures.name(name).map(|m| m.as_str().to_string())
+                } else {
+                    None
+                }
+            }
+        }
+    }
+    fn parse_param(input: &str) -> (PathSegment, String, &str, bool) {
         const DEFAULT_PATTERN: &str = "[^/]+";
         const DEFAULT_PATTERN_TAIL: &str = ".*";
         let close_idx = input
             .find('}')
-            .unwrap_or_else(|| {
-                panic!(r#"pattern "{}" contains malformed dynamic segment"#, input)
-            });
+            .unwrap_or_else(|| panic!(r#"pattern "{}" contains malformed dynamic segment"#, input));
         let (mut param, mut unprocessed) = input.split_at(close_idx + 1);
         let tail = unprocessed == "*";
         // remove outer curly brackets
@@ -93,10 +91,12 @@ impl Route {
                 DEFAULT_PATTERN_TAIL
             } else {
                 DEFAULT_PATTERN
-            }
+            },
         );
 
-        let segment = PathSegment::Variable(PathVariable{ name: name.to_string()});
+        let segment = PathSegment::Variable(PathVariable {
+            name: name.to_string(),
+        });
         let regex = format!(r"(?P<{}>{})", &name, &pattern);
         (segment, regex, unprocessed, tail)
     }

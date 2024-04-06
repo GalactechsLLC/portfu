@@ -1,31 +1,69 @@
+use std::fmt::{Debug, Formatter};
+use crate::{ServiceData};
+use std::sync::Arc;
 use async_trait::async_trait;
-use http::Response;
-use http_body_util::Full;
-use hyper::body::Bytes;
-use crate::service::ServiceRequest;
-use crate::ServiceResponse;
+
+pub enum WrapperResult {
+    Continue,
+    Return,
+}
 
 #[async_trait]
-pub trait Wrapper {
+pub trait WrapperFn {
     fn name(&self) -> &str;
     async fn before(
         &self,
-        request: ServiceRequest,
-        response: Response<Full<Bytes>>
-    ) -> Result<ServiceResponse, ServiceResponse> {
-        Ok(ServiceResponse {
-            request,
-            response,
-        })
-    }
+        data: &mut ServiceData
+    ) -> WrapperResult;
     async fn after(
         &self,
-        request: ServiceRequest,
-        response: Response<Full<Bytes>>
-    ) -> Result<ServiceResponse, ServiceResponse>{
-        Ok(ServiceResponse {
-            request,
-            response,
-        })
+        data: &mut ServiceData
+    ) -> WrapperResult;
+}
+impl Debug for (dyn WrapperFn + Send + Sync + 'static) {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Wrapper {
+    name: String,
+    wrapper_functions: Vec<Arc<dyn WrapperFn + Sync + Send>>,
+}
+#[async_trait]
+impl WrapperFn for Wrapper {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    async fn before(
+        &self,
+        data: &mut ServiceData
+    ) -> WrapperResult {
+        for func in self.wrapper_functions.iter() {
+            match func.before(data).await {
+                WrapperResult::Continue => continue,
+                WrapperResult::Return => {
+                    return WrapperResult::Return;
+                }
+            }
+        }
+        WrapperResult::Continue
+    }
+
+    async fn after(
+        &self,
+        data: &mut ServiceData
+    ) -> WrapperResult {
+        for func in self.wrapper_functions.iter() {
+            match func.after(data).await {
+                WrapperResult::Continue => continue,
+                WrapperResult::Return => {
+                    return WrapperResult::Return;
+                }
+            }
+        }
+        WrapperResult::Continue
     }
 }

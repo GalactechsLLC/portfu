@@ -1,12 +1,12 @@
-use std::collections::HashMap;
-use std::{env, fs};
-use std::path::{Path, PathBuf};
 use proc_macro2::{Ident, TokenStream};
 use quote::{quote, ToTokens};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::{env, fs};
 use syn::__private::TokenStream2;
 
 pub struct StaticFileArgs {
-    files: HashMap<String, String>
+    files: HashMap<String, String>,
 }
 
 impl syn::parse::Parse for StaticFileArgs {
@@ -22,59 +22,66 @@ impl syn::parse::Parse for StaticFileArgs {
         let path = if as_str.starts_with('/') {
             PathBuf::from(as_str)
         } else {
-            let path = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("Expected to find env var CARGO_MANIFEST_DIR"));
+            let path = PathBuf::from(
+                env::var("CARGO_MANIFEST_DIR")
+                    .expect("Expected to find env var CARGO_MANIFEST_DIR"),
+            );
             path.join(as_str)
         };
         let mut files = HashMap::new();
         read_directory(path.as_path(), path.as_path(), &mut files);
-        Ok(Self {
-            files
-        })
-
+        Ok(Self { files })
     }
 }
 
 pub struct StaticFiles {
     args: StaticFileArgs,
-    name: Ident
+    name: Ident,
 }
 impl StaticFiles {
     pub fn new(args: StaticFileArgs, name: Ident) -> syn::Result<Self> {
-        Ok(Self {
-            args,
-            name
-        })
+        Ok(Self { args, name })
     }
 }
 impl ToTokens for StaticFiles {
     fn to_tokens(&self, output: &mut TokenStream) {
         let name = &self.name;
-        let registrations: Vec<TokenStream2> = self.args.files.iter()
-            .map(| (key, value)| quote! {
-                    let __resource = ::portfu::core::service::ServiceBuilder::new(#key)
-                        .name(stringify!(#name))
-                        .filter(
-                            Arc::new(::portfu::core::filters::any(
-                                "static_filters".to_string(),
-                                &[
-                                    ::portfu::core::filters::GET.clone(),
-                                    ::portfu::core::filters::HEAD.clone(),
-                                    ::portfu::core::filters::OPTIONS.clone(),
-                                    ::portfu::core::filters::TRACE.clone(),
-                                ]
-                            ))
-                        )
-                        .handler(Arc::new((stringify!(#key), stringify!(#value)))).build();
-                    service_registry.register(__resource);
+        let service_defs: Vec<TokenStream2> = self
+            .args
+            .files
+            .iter()
+            .map(|(key, value)| {
+                quote! {
+                    ::portfu::pfcore::service::ServiceBuilder::new(#key)
+                    .name(stringify!(#name))
+                    .handler(Arc::new((stringify!(#key), stringify!(#value)))).build(),
                 }
-            ).collect();
+            }).collect();
+        let static_file_group = quote! {
+            ServiceGroup {
+                services: vec![
+                    #(#service_defs)*
+                ],
+                filters: vec![
+                    Arc::new(::portfu::filters::any(
+                        "static_filters".to_string(),
+                        &[
+                            ::portfu::filters::method::GET.clone(),
+                            ::portfu::filters::method::HEAD.clone(),
+                            ::portfu::filters::method::OPTIONS.clone(),
+                            ::portfu::filters::method::TRACE.clone(),
+                        ]
+                    ))
+                ],
+                wrappers: vec![]
+            }
+        };
         let out = quote! {
             #[allow(non_camel_case_types, missing_docs)]
             pub struct #name;
-            impl ::portfu::core::ServiceRegister for #name {
-                fn register(self, service_registry: &mut portfu::prelude::ServiceRegistry) {
-                    let _self = std::sync::Arc::new(self);
-                    #(#registrations)*
+            impl From<#name> for ::portfu::prelude::ServiceGroup {
+                fn from(_: #name) -> ::portfu::prelude::ServiceGroup {
+                    #static_file_group
                 }
             }
         };

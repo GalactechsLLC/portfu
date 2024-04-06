@@ -1,25 +1,32 @@
-use std::sync::Arc;
+use std::io::Error;
+use crate::filters::{FilterFn, FilterResult};
+use crate::routes::Route;
+use crate::{ServiceHandler, ServiceRegister, ServiceRegistry, ServiceData};
 use http::{Extensions, HeaderMap, HeaderValue, Method, Request, Response, Uri};
 use http_body_util::Full;
 use hyper::body::{Body, Bytes, Incoming, SizeHint};
-use crate::filters::{Filter, FilterFn, FilterResult};
-use crate::route::Route;
-use crate::{ServiceHandler, ServiceRegister, ServiceRegistry, ServiceResponse};
+use hyper::upgrade::OnUpgrade;
+use std::sync::Arc;
+use tokio_tungstenite::tungstenite::error::ProtocolError;
+use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
+use crate::wrappers::{WrapperFn, WrapperResult};
 
 #[derive(Debug)]
 pub struct ServiceBuilder {
     path: Route,
     name: Option<String>,
-    filters: Vec<Arc<Filter>>,
-    handler: Option<Arc<dyn ServiceHandler + Send + Sync>>
+    filters: Vec<Arc<dyn FilterFn + Sync + Send>>,
+    wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
+    handler: Option<Arc<dyn ServiceHandler + Send + Sync>>,
 }
-impl<'a> ServiceBuilder {
+impl ServiceBuilder {
     pub fn new(path: &str) -> Self {
         Self {
-            path: Route::parse(path.to_string()),
+            path: Route::new(path.to_string()),
             name: None,
             filters: vec![],
-            handler: None
+            wrappers: vec![],
+            handler: None,
         }
     }
     pub fn name<S: AsRef<str>>(self, path: S) -> Self {
@@ -27,9 +34,14 @@ impl<'a> ServiceBuilder {
         s.name = Some(path.as_ref().to_string());
         s
     }
-    pub fn filter(self, filter: Arc<Filter>) -> Self {
+    pub fn filter(self, filter: Arc<dyn FilterFn + Sync + Send>) -> Self {
         let mut s = self;
         s.filters.push(filter);
+        s
+    }
+    pub fn wrap(self, wrappers: Arc<dyn WrapperFn + Sync + Send>) -> Self {
+        let mut s = self;
+        s.wrappers.push(wrappers);
         s
     }
     pub fn handler(self, service_handler: Arc<dyn ServiceHandler + Send + Sync>) -> Self {
@@ -40,10 +52,49 @@ impl<'a> ServiceBuilder {
     pub fn build(self) -> Service {
         Service {
             path: Arc::new(self.path),
-            name: self.name.expect("Service Name Not Set"),
+            name: self.name.unwrap_or_default(),
             filters: self.filters,
+            wrappers: self.wrappers,
             handler: self.handler,
         }
+    }
+}
+
+#[derive(Default)]
+pub struct ServiceGroup {
+    pub services: Vec<Service>,
+    pub filters: Vec<Arc<dyn FilterFn + Sync + Send>>,
+    pub wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
+}
+impl ServiceRegister for ServiceGroup {
+    fn register(self, service_registry: &mut ServiceRegistry) {
+        for service in self.services {
+            service.register(service_registry);
+        }
+    }
+}
+impl ServiceGroup {
+    pub fn service<T: ServiceRegister + Into<Service>>(mut self, service: T) -> Self {
+        let mut service = service.into();
+        service.filters.extend(self.filters.clone());
+        service.wrappers.extend(self.wrappers.clone());
+        self.services.push(service);
+        self
+    }
+    pub fn sub_group<T: Into<ServiceGroup>>(mut self, group: T) -> Self {
+        let group = group.into();
+        for service in group.services {
+            self = self.service(service);
+        }
+        self
+    }
+    pub fn filter(mut self, filter: Arc<dyn FilterFn + Sync + Send>) -> Self {
+        self.filters.push(filter);
+        self
+    }
+    pub fn wrap(mut self, wrappers: Arc<dyn WrapperFn + Sync + Send>) -> Self {
+        self.wrappers.push(wrappers);
+        self
     }
 }
 
@@ -51,23 +102,44 @@ impl<'a> ServiceBuilder {
 pub struct Service {
     pub path: Arc<Route>,
     pub name: String,
-    filters: Vec<Arc<Filter>>,
-    handler: Option<Arc<dyn ServiceHandler + Send + Sync>>,
+    pub filters: Vec<Arc<dyn FilterFn + Sync + Send>>,
+    pub wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
+    pub handler: Option<Arc<dyn ServiceHandler + Send + Sync>>,
 }
 impl Service {
     pub fn handles(&self, req: &Request<Incoming>) -> bool {
-        self.path.matches(req.uri().path()) && self.filters.iter().cloned().all(|f| f.filter(req) == FilterResult::Allow)
+        self.path.matches(req.uri().path())
+            && self
+                .filters
+                .iter()
+                .cloned()
+                .all(|f| f.filter(req) == FilterResult::Allow)
     }
-    pub async fn handle(&self, request: ServiceRequest, response: Response<Full<Bytes>>) -> Result<ServiceResponse, ServiceResponse> {
-        let mut response = ServiceResponse {
-            request,
-            response
-        };
+    pub async fn handle(
+        &self,
+        data: &mut ServiceData,
+    ) -> Result<(), Error> {
         println!("Handled by {:?}", self.name());
-        if let Some(handler) = self.handler.as_ref() {
-            response = handler.handle(response.request, response.response).await?;
+        for func in self.wrappers.iter() {
+            match func.before(data).await {
+                WrapperResult::Continue => {},
+                WrapperResult::Return => {
+                    return Ok(());
+                }
+            }
         }
-        Ok(response)
+        if let Some(handler) = self.handler.as_ref() {
+            handler.handle(data).await?;
+        }
+        for func in self.wrappers.iter() {
+            match func.after(data).await {
+                WrapperResult::Continue => {},
+                WrapperResult::Return => {
+                    return Ok(());
+                }
+            };
+        }
+        Ok(())
     }
     pub fn name(&self) -> &str {
         self.name.as_str()
@@ -89,7 +161,6 @@ pub enum BodyType<'a> {
     Sized(&'a mut Full<Bytes>),
 }
 impl IncomingRequest {
-
     pub fn uri(&self) -> &Uri {
         match &self {
             IncomingRequest::Sized(r) => r.uri(),
@@ -102,8 +173,14 @@ impl IncomingRequest {
             IncomingRequest::Stream(r) => r.headers(),
         }
     }
+    pub fn headers_mut(&mut self) -> &mut HeaderMap<HeaderValue> {
+        match self {
+            IncomingRequest::Sized(r) => r.headers_mut(),
+            IncomingRequest::Stream(r) => r.headers_mut(),
+        }
+    }
     pub fn method(&self) -> &Method {
-        match &self {
+        match self {
             IncomingRequest::Sized(r) => r.method(),
             IncomingRequest::Stream(r) => r.method(),
         }
@@ -132,6 +209,54 @@ impl IncomingRequest {
             IncomingRequest::Stream(r) => BodyType::Stream(r.body_mut()),
         }
     }
+    pub fn is_upgrade_request(&self) -> bool {
+        header_contains_value(self.headers(), hyper::header::CONNECTION, "Upgrade")
+            && header_contains_value(self.headers(), hyper::header::UPGRADE, "websocket")
+    }
+    pub fn upgrade(&mut self) -> Result<(Response<Full<Bytes>>, OnUpgrade), ProtocolError> {
+        let key = self
+            .headers()
+            .get("Sec-WebSocket-Key")
+            .ok_or(ProtocolError::MissingSecWebSocketKey)?;
+        if self
+            .headers()
+            .get("Sec-WebSocket-Version")
+            .map(|v| v.as_bytes())
+            != Some(b"13")
+        {
+            return Err(ProtocolError::MissingSecWebSocketVersionHeader);
+        }
+        let response = Response::builder()
+            .status(hyper::StatusCode::SWITCHING_PROTOCOLS)
+            .header(hyper::header::CONNECTION, "upgrade")
+            .header(hyper::header::UPGRADE, "websocket")
+            .header("Sec-WebSocket-Accept", &derive_accept_key(key.as_bytes()))
+            .body(Full::<Bytes>::from("switching to websocket protocol"))
+            .expect("bug: failed to build response");
+        match self {
+            IncomingRequest::Stream(request) => Ok((response, hyper::upgrade::on(request))),
+            IncomingRequest::Sized(request) => Ok((response, hyper::upgrade::on(request))),
+        }
+    }
+}
+
+fn header_contains_value(
+    headers: &HeaderMap,
+    header: impl hyper::header::AsHeaderName,
+    value: impl AsRef<str>,
+) -> bool {
+    let value = value.as_ref();
+    for header in headers.get_all(header) {
+        if header
+            .to_str()
+            .unwrap_or_default()
+            .split(',')
+            .any(|x| x.trim().eq_ignore_ascii_case(value))
+        {
+            return true;
+        }
+    }
+    false
 }
 
 pub struct ServiceRequest {
