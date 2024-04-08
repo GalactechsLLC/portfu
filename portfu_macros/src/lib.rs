@@ -2,11 +2,12 @@ mod endpoints;
 mod static_files;
 mod websocket;
 
-mod task;
 mod interval;
 mod postgres;
+mod task;
 
 use crate::endpoints::Endpoint;
+use crate::interval::Interval;
 use crate::method::Method;
 use crate::static_files::StaticFiles;
 use crate::task::Task;
@@ -17,7 +18,6 @@ use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
 use quote::{quote, ToTokens};
 use std::collections::HashSet;
 use syn::LitStr;
-use crate::interval::Interval;
 
 /// Converts the error to a token stream and appends it to the original input.
 ///

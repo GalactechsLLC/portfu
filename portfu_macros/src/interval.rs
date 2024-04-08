@@ -1,6 +1,6 @@
 use proc_macro2::{Ident, TokenStream};
 use quote::{quote, ToTokens};
-use syn::{FnArg, GenericArgument, parse_quote, Pat, PathArguments, Type};
+use syn::{parse_quote, FnArg, GenericArgument, Pat, PathArguments, Type};
 
 pub struct IntervalArgs {
     interval: u64,
@@ -52,7 +52,7 @@ impl Interval {
             name,
             ast,
             doc_attributes,
-            args
+            args,
         })
     }
 }

@@ -1,8 +1,8 @@
 use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{format_ident, quote, ToTokens};
 use std::collections::HashMap;
+use std::env;
 use std::path::{Path, PathBuf};
-use std::{env};
 
 pub struct StaticFileArgs {
     files: HashMap<String, String>,
@@ -126,5 +126,8 @@ fn read_file(root: &'_ Path, starting_path: &'_ Path, file_map: &'_ mut HashMap<
     let path = starting_path.canonicalize().unwrap();
     let path = path.strip_prefix(root).unwrap();
     new_root.extend(path);
-    file_map.insert(new_root.to_string_lossy().to_string(), starting_path.to_string_lossy().to_string());
+    file_map.insert(
+        new_root.to_string_lossy().to_string(),
+        starting_path.to_string_lossy().to_string(),
+    );
 }
