@@ -2,13 +2,13 @@ use crate::server::ServerConfig;
 use log::error;
 use rustls::crypto::ring::sign::RsaSigningKey;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use rustls::server::ResolvesServerCertUsingSni;
 use rustls::sign::CertifiedKey;
 use rustls::RootCertStore;
 use rustls_pemfile::{certs, read_one, Item};
 use std::env;
 use std::io::{BufReader, Error, ErrorKind};
 use std::sync::Arc;
-use tokio_rustls::rustls::server::ResolvesServerCertUsingSni;
 
 pub fn load_ssl_certs(config: &ServerConfig) -> Result<Arc<rustls::ServerConfig>, Error> {
     let (certs, key, root_certs) = if let Some(ssl_info) = &config.ssl_config {

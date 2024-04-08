@@ -97,16 +97,15 @@ async fn main() -> Result<(), Error> {
         .shared_state("By this value")
         .register(StaticFiles)
         .register(
-            ServiceGroup::default()
-                .sub_group(
-                    ServiceGroup::default()
-                        .wrap(Arc::new(SessionWrapper::default()))
-                        .service(example_fn)
-                        .service(example_fn2)
-                        .service(example_websocket {
-                            peers: Default::default(),
-                        }),
-                )
+            ServiceGroup::default().sub_group(
+                ServiceGroup::default()
+                    .wrap(Arc::new(SessionWrapper::default()))
+                    .service(example_fn)
+                    .service(example_fn2)
+                    .service(example_websocket {
+                        peers: Default::default(),
+                    }),
+            ),
         )
         .task(example_task)
         .task(example_interval)

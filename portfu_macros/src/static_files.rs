@@ -1,8 +1,8 @@
 use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{format_ident, quote, ToTokens};
 use std::collections::HashMap;
+use std::env;
 use std::path::{Path, PathBuf};
-use std::{env};
 
 pub struct StaticFileArgs {
     files: HashMap<String, String>,
@@ -54,24 +54,20 @@ impl ToTokens for StaticFiles {
                 let file_len = Path::new(value).metadata().unwrap().len() as usize;
                 let key_name = key.replace(['/', '.',')','(','-',' ','+'], "_").replace("__", "_");
                 let static_bytes_name = format_ident!("STATIC_FILE{}", key_name);
-                let static_ref_name = format_ident!("STATIC_FILE_REF{}", key_name);
                 static_file_defs.push( quote! {
                     static #static_bytes_name: &'static [u8; #file_len] = include_bytes!(#value);
-                    static #static_ref_name: ::portfu::prelude::once_cell::sync::Lazy<&'static [u8]> = ::portfu::prelude::once_cell::sync::Lazy::new(|| {
-                        #static_ref_name.as_ref()
-                    });
                 });
                 quote! {
                     ::portfu::pfcore::service::ServiceBuilder::new(#key)
                     .name(stringify!(#name))
-                    .handler(::std::sync::Arc::new((stringify!(#key), #static_ref_name.as_ref()))).build(),
+                    .handler(::std::sync::Arc::new((stringify!(#key), #static_bytes_name.as_ref()))).build()
                 }
             })
             .collect();
         let static_file_group = quote! {
             ServiceGroup {
                 services: vec![
-                    #(#service_defs)*
+                    #(#service_defs),*
                 ],
                 filters: vec![
                     ::std::sync::Arc::new(::portfu::filters::any(
@@ -90,6 +86,7 @@ impl ToTokens for StaticFiles {
         let out = quote! {
             #[allow(non_camel_case_types, missing_docs)]
             pub struct #name;
+            #(#static_file_defs)*
             impl ::portfu::pfcore::ServiceRegister for #name {
                 fn register(self, service_registry: &mut portfu::prelude::ServiceRegistry) {
                     let group: ::portfu::prelude::ServiceGroup = self.into();
@@ -98,7 +95,6 @@ impl ToTokens for StaticFiles {
                     }
                 }
             }
-            #(#static_file_defs)*
             impl From<#name> for ::portfu::prelude::ServiceGroup {
                 fn from(_: #name) -> ::portfu::prelude::ServiceGroup {
                     #static_file_group
@@ -126,5 +122,8 @@ fn read_file(root: &'_ Path, starting_path: &'_ Path, file_map: &'_ mut HashMap<
     let path = starting_path.canonicalize().unwrap();
     let path = path.strip_prefix(root).unwrap();
     new_root.extend(path);
-    file_map.insert(new_root.to_string_lossy().to_string(), starting_path.to_string_lossy().to_string());
+    file_map.insert(
+        new_root.to_string_lossy().to_string(),
+        starting_path.to_string_lossy().to_string(),
+    );
 }
