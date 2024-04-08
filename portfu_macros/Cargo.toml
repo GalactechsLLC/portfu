@@ -2,10 +2,13 @@
 name = "portfu_macros"
 version = "0.1.0"
 edition = "2021"
-license = "MIT OR Apache-2.0"
+authors = ["James Hoerr"]
+description = "Portfu Macros for Generating Endpoints and Tasks"
+license = "Apache-2.0"
+homepage = "https://github.com/GalactechsLLC/portfu"
+repository = "https://github.com/GalactechsLLC/portfu/portfu_macros"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [lib]
 proc-macro = true
 

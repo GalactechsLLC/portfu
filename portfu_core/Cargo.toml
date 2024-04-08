@@ -2,6 +2,10 @@
 name = "portfu_core"
 version = "0.1.0"
 edition = "2021"
+description = "Portfu Core Types and Definitions Library"
+license = "Apache-2.0"
+homepage = "https://github.com/GalactechsLLC/portfu"
+repository = "https://github.com/GalactechsLLC/portfu/portfu_core"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
