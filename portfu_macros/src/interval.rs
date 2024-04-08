@@ -1,17 +1,36 @@
-use proc_macro2::{Ident, TokenStream as TokenStream2};
+use proc_macro2::{Ident, TokenStream};
 use quote::{quote, ToTokens};
-use syn::{parse_quote, FnArg, GenericArgument, Pat, PathArguments, Type};
+use syn::{FnArg, GenericArgument, parse_quote, Pat, PathArguments, Type};
 
-pub struct Task {
+pub struct IntervalArgs {
+    interval: u64,
+}
+
+impl syn::parse::Parse for IntervalArgs {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let interval = input.parse::<syn::LitInt>().map_err(|mut err| {
+            err.combine(syn::Error::new(
+                err.span(),
+                r#"invalid interval definition, expected #[interval(<interval>)]"#,
+            ));
+            err
+        })?;
+        let interval: u64 = interval.base10_parse()?;
+        Ok(Self { interval })
+    }
+}
+
+pub struct Interval {
     /// Name of the handler function being annotated.
     name: Ident,
     /// AST of the handler function being annotated.
     ast: syn::ItemFn,
     /// The doc comment attributes to copy to generated struct, if any.
     doc_attributes: Vec<syn::Attribute>,
+    args: IntervalArgs,
 }
-impl Task {
-    pub fn new(ast: syn::ItemFn) -> syn::Result<Self> {
+impl Interval {
+    pub fn new(args: IntervalArgs, ast: syn::ItemFn) -> syn::Result<Self> {
         let name = ast.sig.ident.clone();
         // Try and pull out the doc comments so that we can reapply them to the generated struct.
         // Note that multi line doc comments are converted to multiple doc attributes.
@@ -33,15 +52,16 @@ impl Task {
             name,
             ast,
             doc_attributes,
+            args
         })
     }
 }
-
-impl ToTokens for Task {
-    fn to_tokens(&self, output: &mut TokenStream2) {
+impl ToTokens for Interval {
+    fn to_tokens(&self, output: &mut TokenStream) {
         let Self {
             name,
             ast,
+            args,
             doc_attributes,
         } = self;
         let mut additional_function_vars = vec![];
@@ -88,22 +108,27 @@ impl ToTokens for Task {
                             });
                             continue;
                         } else {
-                            panic!("Only State Objects are Available to Tasks");
+                            panic!("Only State Objects are Available to Intervals");
                         }
                     }
+                } else {
+                    panic!("Only State Objects are Available to Intervals");
                 }
+            } else {
+                panic!("Only State Objects are Available to Intervals");
             }
         }
-        let stream = quote! {
+        let interval = args.interval;
+        let out = quote! {
             #(#doc_attributes)*
             #[allow(non_camel_case_types, missing_docs)]
             pub struct #name;
             impl From<#name> for ::portfu::pfcore::task::Task {
-                fn from(task: #name) -> ::portfu::pfcore::task::Task {
+                fn from(interval: #name) -> ::portfu::pfcore::task::Task {
                     use ::portfu::pfcore::task::TaskFn;
                     ::portfu::pfcore::task::Task {
-                        name: task.name().to_string(),
-                        task_fn: Arc::new(task)
+                        name: interval.name().to_string(),
+                        task_fn: Arc::new(interval)
                     }
                 }
             }
@@ -116,25 +141,23 @@ impl ToTokens for Task {
                     &self,
                     state: ::portfu::prelude::http::Extensions
                 ) -> Result<(), ::std::io::Error> {
-                    ::tokio::spawn( async move {
+                    #ast
+                    let mut __interval_duration = ::tokio::time::interval(std::time::Duration::from_millis(#interval));
+                    loop {
+                        #(#dyn_vars)*
                         select! {
-                            _ = async {
-                                #ast
-                                #(#dyn_vars)*
+                            _ = __interval_duration.tick() => {
                                 let _ = #name(#(#additional_function_vars)*).await;
-                                Ok::<(), ::std::io::Error>(())
-                            } => {
-                                 Ok::<(), ::std::io::Error>(())
                             }
                             _ = portfu::signal::await_termination() => {
-                                Ok::<(), ::std::io::Error>(())
+                                break;
                             }
                         }
-                    });
+                    }
                     Ok::<(), ::std::io::Error>(())
                 }
             }
         };
-        output.extend(stream);
+        output.extend(out);
     }
 }

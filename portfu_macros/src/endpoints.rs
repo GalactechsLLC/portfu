@@ -1,9 +1,9 @@
 use crate::method::Method;
+use crate::{extract_method_filters, parse_path_variables};
 use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
 use quote::{quote, ToTokens};
 use std::collections::HashSet;
 use syn::{parse_quote, punctuated::Punctuated, FnArg, LitStr, Pat, Path, Token, Type};
-use crate::{extract_method_filters, parse_path_variables};
 
 pub struct EndpointArgs {
     pub path: syn::LitStr,

@@ -6,9 +6,9 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-log.workspace = true
+log = "0.4.21"
 oauth2 = "4.4.2"
 octocrab = "0.34.3"
-portfu.workspace = true
-simple_logger.workspace = true
-tokio.workspace = true
+portfu = {path = "../portfu", version = "0.1.0"}
+simple_logger = "4.3.3"
+tokio = {version = "1.37.0", features=["rt-multi-thread", "sync", "signal", "macros", "process", "time", "fs", "net"]}

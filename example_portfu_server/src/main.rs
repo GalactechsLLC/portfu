@@ -1,7 +1,8 @@
 use log::{info, LevelFilter};
-use portfu::pfcore::service::{ServiceGroup};
-use portfu::macros::{files, get, post, task, websocket};
+use portfu::macros::{files, get, interval, post, task, websocket};
+use portfu::pfcore::service::ServiceGroup;
 use portfu::prelude::*;
+use portfu::wrappers::sessions::SessionWrapper;
 use simple_logger::SimpleLogger;
 use std::io::Error;
 use std::net::SocketAddr;
@@ -10,7 +11,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::select;
 use tokio::sync::RwLock;
-use portfu::wrappers::sessions::SessionWrapper;
 
 #[files("front_end_dist/")]
 pub struct StaticFiles;
@@ -33,7 +33,6 @@ pub async fn example_fn(
     Ok(rtn)
 }
 
-
 #[post("/{test2}")]
 pub async fn example_fn2(
     _address: SocketAddr,
@@ -53,6 +52,13 @@ pub async fn example_fn2(
         val + 1
     );
     Ok(rtn)
+}
+
+#[interval(500u64)]
+pub async fn example_interval(state: State<RwLock<AtomicUsize>>) -> Result<(), Error> {
+    state.inner().read().await.fetch_add(1, Ordering::Relaxed);
+    info!("Tick");
+    Ok(())
 }
 
 #[task("")]
@@ -89,18 +95,21 @@ async fn main() -> Result<(), Error> {
         .shared_state(RwLock::new(AtomicUsize::new(0))) //Shared State Data is auto wrapped in an Arc
         .shared_state("This value gets Overridden") //Only one version of a type can exist in the Shared data, to get around this use a wrapper struct/enum
         .shared_state("By this value")
-        .register(ServiceGroup::default()
-            .sub_group(ServiceGroup::default()
-                .wrap(Arc::new(SessionWrapper::default()))
-                .service(example_fn)
-                .service(example_fn2)
-                .service(example_websocket {
-                    peers: Default::default(),
-                })
-            )
-            .sub_group(StaticFiles)
+        .register(StaticFiles)
+        .register(
+            ServiceGroup::default()
+                .sub_group(
+                    ServiceGroup::default()
+                        .wrap(Arc::new(SessionWrapper::default()))
+                        .service(example_fn)
+                        .service(example_fn2)
+                        .service(example_websocket {
+                            peers: Default::default(),
+                        }),
+                )
         )
         .task(example_task)
+        .task(example_interval)
         .build();
     info!("{server:#?}");
     server.run().await

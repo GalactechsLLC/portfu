@@ -2,8 +2,8 @@ pub mod filters;
 pub mod routes;
 pub mod service;
 pub mod sockets;
-pub mod wrappers;
 pub mod task;
+pub mod wrappers;
 
 use crate::service::{BodyType, Service, ServiceRequest};
 use async_trait::async_trait;
@@ -21,10 +21,7 @@ use std::sync::Arc;
 #[async_trait]
 pub trait ServiceHandler {
     fn name(&self) -> &str;
-    async fn handle(
-        &self,
-        data: &mut ServiceData,
-    ) -> Result<(), Error>;
+    async fn handle(&self, data: &mut ServiceData) -> Result<(), Error>;
 }
 impl Debug for (dyn ServiceHandler + Send + Sync + 'static) {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -38,11 +35,20 @@ impl ServiceHandler for (&'static str, &'static str) {
         self.0
     }
 
-    async fn handle(
-        &self,
-        data: &mut ServiceData,
-    ) -> Result<(), Error> {
+    async fn handle(&self, data: &mut ServiceData) -> Result<(), Error> {
         *data.response.body_mut() = Full::new(Bytes::from_static(self.1.as_bytes()));
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl ServiceHandler for (&'static str, &'static [u8]) {
+    fn name(&self) -> &str {
+        self.0
+    }
+
+    async fn handle(&self, data: &mut ServiceData) -> Result<(), Error> {
+        *data.response.body_mut() = Full::new(Bytes::from_static(self.1));
         Ok(())
     }
 }
@@ -69,10 +75,7 @@ impl ServiceHandler for DefaultHandler {
     fn name(&self) -> &str {
         "DefaultHandler"
     }
-    async fn handle(
-        &self,
-        data: &mut ServiceData
-    ) -> Result<(), Error> {
+    async fn handle(&self, data: &mut ServiceData) -> Result<(), Error> {
         *data.response.status_mut() = StatusCode::NOT_FOUND;
         *data.response.body_mut() = Full::new(Bytes::from(format!(
             "Failed to find Path: {}",
@@ -100,8 +103,14 @@ impl ServiceRegistry {
 }
 
 #[async_trait]
-pub trait FromRequest<'a> where Self: Sized {
-    async fn from_request(request: &'a mut ServiceRequest, var_name: &'a str) -> Result<Self, Error>;
+pub trait FromRequest<'a>
+where
+    Self: Sized,
+{
+    async fn from_request(
+        request: &'a mut ServiceRequest,
+        var_name: &'a str,
+    ) -> Result<Self, Error>;
 }
 
 #[derive(Clone)]
@@ -124,9 +133,8 @@ impl<'a, T: Send + Sync + 'static> FromRequest<'a> for State<T> {
             .extensions()
             .get::<Arc<T>>()
             .cloned()
-            .map(State).ok_or(
-                Error::new(ErrorKind::NotFound, "Failed to find State")
-            )
+            .map(State)
+            .ok_or(Error::new(ErrorKind::NotFound, "Failed to find State"))
     }
 }
 #[async_trait]
@@ -139,7 +147,10 @@ impl<'a> FromRequest<'a> for &'a mut HeaderMap {
 #[async_trait]
 impl<'a> FromRequest<'a> for SocketAddr {
     async fn from_request(request: &'a mut ServiceRequest, _: &'a str) -> Result<Self, Error> {
-        request.get().copied().ok_or(Error::new(ErrorKind::NotFound, "Failed to find SocketAddr"))
+        request
+            .get()
+            .copied()
+            .ok_or(Error::new(ErrorKind::NotFound, "Failed to find SocketAddr"))
     }
 }
 
@@ -152,7 +163,10 @@ impl Path {
 }
 #[async_trait]
 impl<'a> FromRequest<'a> for Path {
-    async fn from_request(request: &'a mut ServiceRequest, var_name: &'a str) -> Result<Self, Error> {
+    async fn from_request(
+        request: &'a mut ServiceRequest,
+        var_name: &'a str,
+    ) -> Result<Self, Error> {
         request
             .path
             .extract(request.request.uri().path(), var_name)
@@ -185,7 +199,7 @@ impl<T: FromBody> AsMut<T> for Body<T> {
     }
 }
 #[async_trait]
-impl<'a, T: FromBody> FromRequest<'a> for Body<T>  {
+impl<'a, T: FromBody> FromRequest<'a> for Body<T> {
     async fn from_request(request: &'a mut ServiceRequest, _: &'a str) -> Result<Self, Error> {
         let mut body = request.request.body();
         T::from_body(&mut body).await.map(Body)
@@ -221,12 +235,14 @@ where
 {
     async fn from_body(body: &mut BodyType) -> Result<Self, Error> {
         let bytes = body_to_bytes(body).await?;
-        serde_json::from_slice(bytes.as_ref()).map_err(|e| {
-            Error::new(
-                ErrorKind::InvalidInput,
-                format!("Failed to parse body as JSON: {e:?}"),
-            )
-        }).map(Json)
+        serde_json::from_slice(bytes.as_ref())
+            .map_err(|e| {
+                Error::new(
+                    ErrorKind::InvalidInput,
+                    format!("Failed to parse body as JSON: {e:?}"),
+                )
+            })
+            .map(Json)
     }
 }
 

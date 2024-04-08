@@ -1,15 +1,15 @@
-use std::net::SocketAddr;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use cookie::Cookie;
 use dashmap::DashMap;
-use http::{Extensions, header, HeaderName, HeaderValue};
-use portfu_core::ServiceData;
+use http::{header, Extensions, HeaderName, HeaderValue};
 use portfu_core::wrappers::{WrapperFn, WrapperResult};
+use portfu_core::ServiceData;
+use sha2::{Digest, Sha256};
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use uuid::Uuid;
-use sha2::{Digest, Sha256};
 
 pub static SESSION_HEADER: &str = "session_id";
 pub struct Session {
@@ -48,23 +48,21 @@ impl SessionWrapper {
             data: Extensions::new(),
             last_update: RwLock::new(Instant::now()),
         });
-        self.sessions.insert(
-            server_session_id,
-            session.clone(),
-        );
+        self.sessions.insert(server_session_id, session.clone());
         (cookie, session)
     }
-    pub async fn get_session(
-        &self,
-        data: &ServiceData
-    ) -> Option<Arc<Session>> {
+    pub async fn get_session(&self, data: &ServiceData) -> Option<Arc<Session>> {
         let address: &SocketAddr = data.request.get().unwrap();
         let session_cookie = get_session_cookie_from_request(data)?;
         let salt = data.get_best_guess_public_ip(address);
         let mut hasher = Sha256::new();
         hasher.update([session_cookie.value().as_bytes(), salt.as_bytes()].concat());
         let server_session_id = hex::encode(hasher.finalize().as_slice());
-        if let Some(session) = self.sessions.get(&server_session_id).map(|v| v.value().clone()) {
+        if let Some(session) = self
+            .sessions
+            .get(&server_session_id)
+            .map(|v| v.value().clone())
+        {
             let last_update = *session.last_update.read().await;
             if Instant::now().duration_since(last_update) >= self.session_duration {
                 None
@@ -104,28 +102,31 @@ impl WrapperFn for SessionWrapper {
     async fn before(&self, data: &mut ServiceData) -> WrapperResult {
         let session = match get_session_cookie_from_request(data) {
             None => {
-                let (cookie, session) = self
-                    .create_session_cookie(data)
-                    .await;
+                let (cookie, session) = self.create_session_cookie(data).await;
                 if let Ok(value) = HeaderValue::from_str(&cookie.to_string()) {
-                    data.request.request.headers_mut().insert(HeaderName::from_static(SESSION_HEADER), value.clone());
-                    data.response.headers_mut().insert(header::SET_COOKIE, value);
+                    data.request
+                        .request
+                        .headers_mut()
+                        .insert(HeaderName::from_static(SESSION_HEADER), value.clone());
+                    data.response
+                        .headers_mut()
+                        .insert(header::SET_COOKIE, value);
                 }
                 session
             }
             Some(_) => {
-                if let Some(sessiopn) = self
-                    .get_session(data)
-                    .await
-                {
+                if let Some(sessiopn) = self.get_session(data).await {
                     sessiopn
                 } else {
-                    let (cookie, session) = self
-                        .create_session_cookie(data)
-                        .await;
+                    let (cookie, session) = self.create_session_cookie(data).await;
                     if let Ok(value) = HeaderValue::from_str(&cookie.to_string()) {
-                        data.request.request.headers_mut().insert(HeaderName::from_static(SESSION_HEADER), value.clone());
-                        data.response.headers_mut().insert(header::SET_COOKIE, value);
+                        data.request
+                            .request
+                            .headers_mut()
+                            .insert(HeaderName::from_static(SESSION_HEADER), value.clone());
+                        data.response
+                            .headers_mut()
+                            .insert(header::SET_COOKIE, value);
                     }
                     session
                 }

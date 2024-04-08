@@ -1,10 +1,10 @@
-use crate::signal::await_termination;
-use crate::ssl::load_ssl_certs;
 use crate::pfcore::filters::FilterFn;
 use crate::pfcore::filters::{Filter, FilterResult};
-use crate::pfcore::wrappers::{WrapperFn, WrapperResult};
 use crate::pfcore::service::{IncomingRequest, ServiceRequest};
-use crate::pfcore::{ServiceRegister, ServiceRegistry, ServiceData};
+use crate::pfcore::wrappers::{WrapperFn, WrapperResult};
+use crate::pfcore::{ServiceData, ServiceRegister, ServiceRegistry};
+use crate::signal::await_termination;
+use crate::ssl::load_ssl_certs;
 use http::{Extensions, Request, Response, StatusCode};
 use http_body_util::Full;
 use hyper::body::{Bytes, Incoming};
@@ -12,6 +12,7 @@ use hyper::server::conn::http1::Builder;
 use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
 use log::error;
+use pfcore::task::Task;
 use serde::{Deserialize, Serialize};
 use std::io::{Error, ErrorKind};
 use std::net::{Ipv4Addr, SocketAddr};
@@ -20,10 +21,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
-use tokio::{select, spawn};
 use tokio::task::JoinSet;
+use tokio::{select, spawn};
 use tokio_rustls::TlsAcceptor;
-use pfcore::task::Task;
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SslConfig {
@@ -82,9 +82,7 @@ impl Server {
         let mut background_tasks = JoinSet::new();
         for task in server.tasks.iter().cloned() {
             let state = server.shared_state.clone();
-            background_tasks.spawn(async move {
-                task.task_fn.run(state).await
-            });
+            background_tasks.spawn(async move { task.task_fn.run(state).await });
         }
         while server.run.load(Ordering::Relaxed) {
             select!(
@@ -155,16 +153,23 @@ impl Server {
         address: SocketAddr,
     ) -> Result<Response<Full<Bytes>>, Error> {
         let mut response: Response<Full<Bytes>> = Default::default();
-        if !server
-            .filters.is_empty() && !server
-            .filters
-            .iter()
-            .cloned()
-            .all(|f| f.filter(&request) == FilterResult::Allow) {
+        if !server.filters.is_empty()
+            && !server
+                .filters
+                .iter()
+                .cloned()
+                .all(|f| f.filter(&request) == FilterResult::Allow)
+        {
             *response.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
             Ok(response)
         } else {
-            match server.services.services.iter().find(|s| s.handles(&request)).cloned() {
+            match server
+                .services
+                .services
+                .iter()
+                .find(|s| s.handles(&request))
+                .cloned()
+            {
                 Some(service) => {
                     request.extensions_mut().extend(server.shared_state.clone());
                     let mut service_data = ServiceData {
@@ -177,7 +182,7 @@ impl Server {
                     service_data.request.insert(address);
                     for func in server.wrappers.iter() {
                         match func.before(&mut service_data).await {
-                            WrapperResult::Continue => {},
+                            WrapperResult::Continue => {}
                             WrapperResult::Return => {
                                 return Ok(service_data.response);
                             }
@@ -186,7 +191,7 @@ impl Server {
                     service.handle(&mut service_data).await?;
                     for func in server.wrappers.iter() {
                         match func.after(&mut service_data).await {
-                            WrapperResult::Continue => {},
+                            WrapperResult::Continue => {}
                             WrapperResult::Return => {
                                 return Ok(service_data.response);
                             }

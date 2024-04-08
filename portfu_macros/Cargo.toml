@@ -10,11 +10,11 @@ license = "MIT OR Apache-2.0"
 proc-macro = true
 
 [dependencies]
-async-trait.workspace = true
-http.workspace = true
-http-body-util.workspace = true
-hyper.workspace = true
-portfu_core.workspace = true
+async-trait = "0.1.79"
+http = "1.1.0"
+http-body-util = { version = "0.1.1"}
+hyper = {version="1.2.0", features=["full"]}
+portfu_core = {path = "../portfu_core", version = "0.1.0"}
 proc-macro2 = "1.0.79"
 quote = "1.0.35"
-syn = "2.0.55"
+syn = "2.0.58"

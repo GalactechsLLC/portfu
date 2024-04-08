@@ -1,13 +1,13 @@
-use std::fmt::{Debug, Formatter};
-use std::io::{Error};
-use std::sync::Arc;
 use async_trait::async_trait;
 use http::Extensions;
+use std::fmt::{Debug, Formatter};
+use std::io::Error;
+use std::sync::Arc;
 
 #[derive(Debug)]
-pub struct Task{
+pub struct Task {
     pub name: String,
-    pub task_fn: Arc<dyn TaskFn + Sync + Send>
+    pub task_fn: Arc<dyn TaskFn + Sync + Send>,
 }
 
 #[async_trait]

@@ -1,20 +1,23 @@
+use crate::endpoints::{redirect_to_url, send_internal_error};
+use crate::filters::method::GET;
+use crate::prelude::Body;
+use crate::wrappers::sessions::Session;
+use http::HeaderValue;
+use hyper::{header, StatusCode};
+use oauth2::basic::BasicClient;
+use oauth2::reqwest::async_http_client;
+use oauth2::{
+    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, PkceCodeChallenge, RedirectUrl,
+    Scope, TokenResponse, TokenUrl,
+};
+use octocrab::models::orgs::Organization;
+use octocrab::models::Author;
+use pfcore::service::{ServiceBuilder, ServiceGroup};
+use pfcore::{FromRequest, Json, ServiceHandler};
+use serde::Deserialize;
 use std::env;
 use std::io::{Error, ErrorKind};
 use std::sync::Arc;
-use pfcore::{FromRequest, Json, ServiceHandler};
-use hyper::{header, StatusCode};
-use http::HeaderValue;
-use pfcore::service::{ServiceBuilder, ServiceGroup};
-use crate::filters::method::GET;
-use oauth2::{AuthorizationCode, AuthUrl, ClientId, ClientSecret, CsrfToken, PkceCodeChallenge, RedirectUrl, Scope, TokenResponse, TokenUrl};
-use oauth2::basic::BasicClient;
-use oauth2::reqwest::async_http_client;
-use octocrab::models::Author;
-use octocrab::models::orgs::Organization;
-use serde::Deserialize;
-use crate::endpoints::{redirect_to_url, send_internal_error};
-use crate::prelude::Body;
-use crate::wrappers::sessions::Session;
 
 pub struct OAuthConfig {
     pub client: BasicClient,
@@ -33,14 +36,14 @@ pub struct OAuthConfig {
 pub enum UserLevel {
     User,
     #[default]
-    Admin
+    Admin,
 }
 
 #[derive(Default, Clone, Deserialize)]
 pub struct UserData {
     pub user_id: Vec<u64>,
     pub org_id: Vec<u64>,
-    pub user_level: UserLevel
+    pub user_level: UserLevel,
 }
 
 #[derive(Default, Clone, Deserialize)]
@@ -50,17 +53,14 @@ pub struct AuthRequest {
 }
 
 pub struct OAuthLoginHandler {
-    config: Arc<OAuthConfig>
+    config: Arc<OAuthConfig>,
 }
 #[async_trait::async_trait]
 impl ServiceHandler for OAuthLoginHandler {
     fn name(&self) -> &str {
         "login"
     }
-    async fn handle(
-        &self,
-        data: &mut crate::prelude::ServiceData,
-    ) -> Result<(), Error> {
+    async fn handle(&self, data: &mut crate::prelude::ServiceData) -> Result<(), Error> {
         // Create a PKCE code verifier and SHA-256 encode it as a code challenge.
         let (pkce_code_challenge, _pkce_code_verifier) = PkceCodeChallenge::new_random_sha256();
         // Generate the authorization URL to which we'll redirect the user.
@@ -81,17 +81,14 @@ impl ServiceHandler for OAuthLoginHandler {
     }
 }
 pub struct OAuthAuthHandler {
-    config: Arc<OAuthConfig>
+    config: Arc<OAuthConfig>,
 }
 #[async_trait::async_trait]
 impl ServiceHandler for OAuthAuthHandler {
     fn name(&self) -> &str {
         "auth"
     }
-    async fn handle(
-        &self,
-        data: &mut crate::prelude::ServiceData,
-    ) -> Result<(), Error> {
+    async fn handle(&self, data: &mut crate::prelude::ServiceData) -> Result<(), Error> {
         let mut user_data: UserData = if let Some(session) = data.request.get_mut::<Session>() {
             session.data.remove().unwrap_or(UserData {
                 user_id: vec![],
@@ -107,7 +104,10 @@ impl ServiceHandler for OAuthAuthHandler {
         let body: Json<AuthRequest> = match Body::from_request(&mut data.request, "").await {
             Ok(v) => v.inner(),
             Err(e) => {
-                return send_internal_error(&mut data.response, format!("Failed to extract Body as AuthRequest, {e:?}"));
+                return send_internal_error(
+                    &mut data.response,
+                    format!("Failed to extract Body as AuthRequest, {e:?}"),
+                );
             }
         };
         let body: AuthRequest = body.inner();
@@ -191,20 +191,32 @@ impl OAuthLoginBuilder {
             env::var("OAUTH_SERVER").expect("Missing the OAUTH_SERVER environment variable.");
         OAuthLoginBuilder::new()
             .client_id(ClientId::new(
-                env::var("OAUTH_CLIENT_ID").expect("Missing the OAUTH_CLIENT_ID environment variable."),
+                env::var("OAUTH_CLIENT_ID")
+                    .expect("Missing the OAUTH_CLIENT_ID environment variable."),
             ))
             .client_secret(ClientSecret::new(
                 env::var("OAUTH_CLIENT_SECRET")
                     .expect("Missing the OAUTH_CLIENT_SECRET environment variable."),
             ))
-            .oauthserver(env::var("OAUTH_SERVER").expect("Missing the OAUTH_SERVER environment variable."))
-            .auth_url(AuthUrl::new(format!("https://{}/oauth/authorize", oauthserver))
-                .expect("Invalid authorization endpoint URL"))
-            .token_url(TokenUrl::new(format!("https://{}/oauth/access_token", oauthserver))
-                .expect("Invalid token endpoint URL"))
+            .oauthserver(
+                env::var("OAUTH_SERVER").expect("Missing the OAUTH_SERVER environment variable."),
+            )
+            .auth_url(
+                AuthUrl::new(format!("https://{}/oauth/authorize", oauthserver))
+                    .expect("Invalid authorization endpoint URL"),
+            )
+            .token_url(
+                TokenUrl::new(format!("https://{}/oauth/access_token", oauthserver))
+                    .expect("Invalid token endpoint URL"),
+            )
             .api_base_url(format!("https://{}/api/v4", oauthserver))
-            .redirect_url(RedirectUrl::new(env::var("OAUTH_REDIRECT_URL")
-                .expect("Missing the OAUTH_REDIRECT_URL environment variable.")).expect("Invalid redirect URL"))
+            .redirect_url(
+                RedirectUrl::new(
+                    env::var("OAUTH_REDIRECT_URL")
+                        .expect("Missing the OAUTH_REDIRECT_URL environment variable."),
+                )
+                .expect("Invalid redirect URL"),
+            )
     }
     pub fn new() -> Self {
         Default::default()
@@ -260,34 +272,42 @@ impl OAuthLoginBuilder {
         s
     }
     pub fn build(self) -> Result<ServiceGroup, Error> {
-        let client_id = self.client_id.ok_or(
-            Error::new(ErrorKind::InvalidInput, "OAuth client_id not set")
-        )?;
-        let client_secret = self.client_secret.ok_or(
-            Error::new(ErrorKind::InvalidInput, "OAuth client_secret not set")
-        )?;
-        let oauthserver = self.oauthserver.ok_or(
-            Error::new(ErrorKind::InvalidInput, "OAuth oauthserver not set")
-        )?;
-        let auth_url = self.auth_url.ok_or(
-            Error::new(ErrorKind::InvalidInput, "OAuth auth_url not set")
-        )?;
-        let token_url = self.token_url.ok_or(
-            Error::new(ErrorKind::InvalidInput, "OAuth token_url not set")
-        )?;
-        let api_base_url = self.api_base_url.ok_or(
-            Error::new(ErrorKind::InvalidInput, "OAuth api_base_url not set")
-        )?;
-        let redirect_url = self.redirect_url.ok_or(
-            Error::new(ErrorKind::InvalidInput, "OAuth redirect_url not set")
-        )?;
+        let client_id = self.client_id.ok_or(Error::new(
+            ErrorKind::InvalidInput,
+            "OAuth client_id not set",
+        ))?;
+        let client_secret = self.client_secret.ok_or(Error::new(
+            ErrorKind::InvalidInput,
+            "OAuth client_secret not set",
+        ))?;
+        let oauthserver = self.oauthserver.ok_or(Error::new(
+            ErrorKind::InvalidInput,
+            "OAuth oauthserver not set",
+        ))?;
+        let auth_url = self.auth_url.ok_or(Error::new(
+            ErrorKind::InvalidInput,
+            "OAuth auth_url not set",
+        ))?;
+        let token_url = self.token_url.ok_or(Error::new(
+            ErrorKind::InvalidInput,
+            "OAuth token_url not set",
+        ))?;
+        let api_base_url = self.api_base_url.ok_or(Error::new(
+            ErrorKind::InvalidInput,
+            "OAuth api_base_url not set",
+        ))?;
+        let redirect_url = self.redirect_url.ok_or(Error::new(
+            ErrorKind::InvalidInput,
+            "OAuth redirect_url not set",
+        ))?;
         let config = Arc::new(OAuthConfig {
             client: BasicClient::new(
                 client_id.clone(),
                 Some(client_secret.clone()),
                 auth_url.clone(),
                 Some(token_url.clone()),
-            ).set_redirect_uri(redirect_url),
+            )
+            .set_redirect_uri(redirect_url),
             client_id,
             client_secret,
             oauthserver,
@@ -302,14 +322,14 @@ impl OAuthLoginBuilder {
             .name("index")
             .filter(GET.clone())
             .handler(Arc::new(OAuthLoginHandler {
-                config: config.clone()
+                config: config.clone(),
             }))
             .build();
         let auth_service = ServiceBuilder::new("/")
             .name("index")
             .filter(GET.clone())
             .handler(Arc::new(OAuthAuthHandler {
-                config: config.clone()
+                config: config.clone(),
             }))
             .build();
         Ok(ServiceGroup::default()

@@ -3,18 +3,21 @@ mod static_files;
 mod websocket;
 
 mod task;
+mod interval;
+mod postgres;
 
 use crate::endpoints::Endpoint;
-use crate::static_files::StaticFiles;
-use crate::websocket::WebSocketRoute;
-use proc_macro::TokenStream;
-use std::collections::HashSet;
-use proc_macro2::{Ident, TokenStream as TokenStream2, Span};
-use quote::{quote, ToTokens};
-use syn::{LitStr};
-use portfu_core::routes::PathSegment;
 use crate::method::Method;
+use crate::static_files::StaticFiles;
 use crate::task::Task;
+use crate::websocket::WebSocketRoute;
+use portfu_core::routes::PathSegment;
+use proc_macro::TokenStream;
+use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
+use quote::{quote, ToTokens};
+use std::collections::HashSet;
+use syn::LitStr;
+use crate::interval::Interval;
 
 /// Converts the error to a token stream and appends it to the original input.
 ///
@@ -159,6 +162,21 @@ pub fn task(_: TokenStream, input: TokenStream) -> TokenStream {
     }
 }
 
+#[proc_macro_attribute]
+pub fn interval(args: TokenStream, input: TokenStream) -> TokenStream {
+    let args = match syn::parse(args) {
+        Ok(args) => args,
+        Err(err) => return input_and_compile_error(input, err),
+    };
+    let ast = match syn::parse::<syn::ItemFn>(input.clone()) {
+        Ok(ast) => ast,
+        Err(err) => return input_and_compile_error(input, err),
+    };
+    match Interval::new(args, ast) {
+        Ok(task) => task.into_token_stream().into(),
+        Err(err) => input_and_compile_error(input, err),
+    }
+}
 
 fn parse_path_variables(path: &LitStr) -> (Vec<TokenStream2>, Vec<String>) {
     let mut path_vars = vec![];
@@ -168,9 +186,7 @@ fn parse_path_variables(path: &LitStr) -> (Vec<TokenStream2>, Vec<String>) {
             let mut variables = vec![];
             for segment in segments.iter().filter_map(|v| match v {
                 PathSegment::Static(_) => None,
-                PathSegment::Variable(v) => {
-                    Some(Ident::new(v.name.as_str(), Span::call_site()))
-                }
+                PathSegment::Variable(v) => Some(Ident::new(v.name.as_str(), Span::call_site())),
             }) {
                 variables.push(
                     quote! {

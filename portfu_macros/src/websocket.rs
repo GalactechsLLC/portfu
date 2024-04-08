@@ -1,8 +1,8 @@
 use crate::endpoints::EndpointArgs;
+use crate::parse_path_variables;
 use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{quote, ToTokens};
 use syn::{parse_quote, FnArg, LitStr, Pat, Path, Type};
-use crate::parse_path_variables;
 
 pub struct WebSocketRoute {
     /// Name of the handler function being annotated.
@@ -65,7 +65,7 @@ impl ToTokens for WebSocketRoute {
         let mut additional_function_vars = vec![];
         let (mut dyn_vars, path_vars) = parse_path_variables(path);
         for arg in ast.sig.inputs.iter() {
-            let (ident_type, ident_val): (Type, Ident)  = match arg {
+            let (ident_type, ident_val): (Type, Ident) = match arg {
                 FnArg::Receiver(_) => {
                     continue;
                 }

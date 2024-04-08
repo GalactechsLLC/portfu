@@ -1,10 +1,9 @@
-use std::io::Error;
 use http::{header, HeaderValue, Response, StatusCode};
 use http_body_util::Full;
 use hyper::body::Bytes;
+use std::io::Error;
 
 pub mod oauth_login;
-
 
 pub fn send_internal_error(
     response: &mut Response<Full<Bytes>>,

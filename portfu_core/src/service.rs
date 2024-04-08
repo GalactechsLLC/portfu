@@ -1,15 +1,15 @@
-use std::io::Error;
 use crate::filters::{FilterFn, FilterResult};
 use crate::routes::Route;
-use crate::{ServiceHandler, ServiceRegister, ServiceRegistry, ServiceData};
+use crate::wrappers::{WrapperFn, WrapperResult};
+use crate::{ServiceData, ServiceHandler, ServiceRegister, ServiceRegistry};
 use http::{Extensions, HeaderMap, HeaderValue, Method, Request, Response, Uri};
 use http_body_util::Full;
 use hyper::body::{Body, Bytes, Incoming, SizeHint};
 use hyper::upgrade::OnUpgrade;
+use std::io::Error;
 use std::sync::Arc;
 use tokio_tungstenite::tungstenite::error::ProtocolError;
 use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
-use crate::wrappers::{WrapperFn, WrapperResult};
 
 #[derive(Debug)]
 pub struct ServiceBuilder {
@@ -115,14 +115,11 @@ impl Service {
                 .cloned()
                 .all(|f| f.filter(req) == FilterResult::Allow)
     }
-    pub async fn handle(
-        &self,
-        data: &mut ServiceData,
-    ) -> Result<(), Error> {
+    pub async fn handle(&self, data: &mut ServiceData) -> Result<(), Error> {
         println!("Handled by {:?}", self.name());
         for func in self.wrappers.iter() {
             match func.before(data).await {
-                WrapperResult::Continue => {},
+                WrapperResult::Continue => {}
                 WrapperResult::Return => {
                     return Ok(());
                 }
@@ -133,7 +130,7 @@ impl Service {
         }
         for func in self.wrappers.iter() {
             match func.after(data).await {
-                WrapperResult::Continue => {},
+                WrapperResult::Continue => {}
                 WrapperResult::Return => {
                     return Ok(());
                 }
