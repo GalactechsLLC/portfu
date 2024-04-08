@@ -1234,7 +1234,7 @@ checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 
 [[package]]
 name = "portfu"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "cookie",
@@ -1266,7 +1266,7 @@ dependencies = [
 
 [[package]]
 name = "portfu_core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -1286,7 +1286,7 @@ dependencies = [
 
 [[package]]
 name = "portfu_macros"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "http 1.1.0",

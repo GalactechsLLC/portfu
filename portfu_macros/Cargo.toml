@@ -1,6 +1,6 @@
 [package]
 name = "portfu_macros"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["James Hoerr"]
 description = "Portfu Macros for Generating Endpoints and Tasks"
@@ -17,7 +17,7 @@ async-trait = "0.1.79"
 http = "1.1.0"
 http-body-util = { version = "0.1.1"}
 hyper = {version="1.2.0", features=["full"]}
-portfu_core = {path = "../portfu_core", version = "0.1.0"}
+portfu_core = {path = "../portfu_core", version = "0.1.1"}
 proc-macro2 = "1.0.79"
 quote = "1.0.35"
 syn = "2.0.58"
