@@ -1,72 +1,51 @@
 use log::{info, LevelFilter};
-use portfu::macros::{files, get, interval, post, task, websocket};
+use portfu::filters::method::*;
+use portfu::filters::{any, has_header};
+use portfu::macros::{get, interval, post, static_files, task, websocket};
 use portfu::pfcore::service::ServiceGroup;
+use portfu::prelude::http::HeaderName;
 use portfu::prelude::*;
 use portfu::wrappers::sessions::SessionWrapper;
 use simple_logger::SimpleLogger;
 use std::io::Error;
-use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::select;
 use tokio::sync::RwLock;
 
-#[files("front_end_dist/")]
+#[static_files("front_end_dist/")]
 pub struct StaticFiles;
 
-#[get("/{test2}")]
-pub async fn example_fn(
-    get_counter: State<RwLock<AtomicUsize>>,
-    test2: Path,
-) -> Result<String, Error> {
-    let val = get_counter
-        .inner()
-        .write()
-        .await
-        .fetch_add(1, Ordering::Relaxed);
-    let rtn = format!(
-        "Path: {}\nrequest_count: {}",
-        test2.inner().as_str(),
-        val + 1
-    );
-    Ok(rtn)
+#[get("/")]
+pub async fn index() -> Result<Vec<u8>, Error> {
+    Ok(STATIC_FILE_index_html.to_vec())
 }
 
-#[post("/{test2}")]
-pub async fn example_fn2(
-    _address: SocketAddr,
-    get_counter: State<RwLock<AtomicUsize>>,
-    body: Body<u32>,
-    test2: Path,
-) -> Result<String, Error> {
-    let val = get_counter
-        .inner()
-        .write()
-        .await
-        .fetch_add(1, Ordering::Relaxed);
-    let rtn = format!(
-        "Path: {}\nBody: {}\nrequest_count: {}",
-        test2.inner().as_str(),
-        body.inner(),
-        val + 1
-    );
-    Ok(rtn)
+#[get("/echo/{path_variable}")]
+pub async fn example_get(path_variable: Path) -> Result<String, Error> {
+    Ok(path_variable.inner())
+}
+
+#[post("/counter")]
+pub async fn example_post(get_counter: State<AtomicUsize>) -> Result<String, Error> {
+    let val = get_counter.inner().fetch_add(1, Ordering::Relaxed) + 1;
+    Ok(val.to_string())
 }
 
 #[interval(500u64)]
-pub async fn example_interval(state: State<RwLock<AtomicUsize>>) -> Result<(), Error> {
-    state.inner().read().await.fetch_add(1, Ordering::Relaxed);
+pub async fn example_interval(state: State<AtomicUsize>) -> Result<(), Error> {
+    state.inner().fetch_add(1, Ordering::Relaxed);
     info!("Tick");
     Ok(())
 }
 
-#[task("")]
-pub async fn example_task(state: State<RwLock<AtomicUsize>>) -> Result<(), Error> {
-    loop {
-        state.inner().read().await.fetch_add(1, Ordering::Relaxed);
-        tokio::time::sleep(Duration::from_secs(1)).await;
-    }
+#[task]
+pub async fn example_task() -> Result<(), Error> {
+    info!("Starting Server Task");
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    info!("Server Task Complete");
+    Ok(())
 }
 
 #[websocket("/ws/{test2}")]
@@ -88,28 +67,38 @@ pub async fn example_websocket(websocket: WebSocket) -> Result<(), Error> {
 async fn main() -> Result<(), Error> {
     SimpleLogger::new()
         .with_level(LevelFilter::Info)
-        .with_colors(true)
         .init()
-        .unwrap_or_default();
-    let server = ServerBuilder::default()
+        .unwrap(); //Init your logger of choice
+    let server = ServerBuilder::default() //Start building the Server
         .shared_state(RwLock::new(AtomicUsize::new(0))) //Shared State Data is auto wrapped in an Arc
         .shared_state("This value gets Overridden") //Only one version of a type can exist in the Shared data, to get around this use a wrapper struct/enum
         .shared_state("By this value")
-        .register(StaticFiles)
+        //Filters applied at the server level apply to all services regardless of when they were registered
+        .filter(any(
+            "Method Filters".to_string(),
+            &[GET.clone(), POST.clone(), PUT.clone(), DELETE.clone()],
+        ))
+        .register(StaticFiles) //Register Each Service directly with the server
         .register(
-            ServiceGroup::default().sub_group(
-                ServiceGroup::default()
-                    .wrap(Arc::new(SessionWrapper::default()))
-                    .service(example_fn)
-                    .service(example_fn2)
-                    .service(example_websocket {
+            //Sub Groups are also services
+            ServiceGroup::default() //Services can be grouped into ServiceGroups to make it easier to apply shared wrappers or filters
+                //Filters at the ServiceGroup level apply to service defined below them only, this is the same with any wrappers
+                .service(example_get) //This service is defined above the filter and will not have the filter applied
+                .filter(has_header(HeaderName::from_static("content-length")))
+                .service(example_post) //This service is defined below the filter and will have the filter applied
+                .wrap(Arc::new(SessionWrapper::default())) //The session wrapper will create a session using cookies for each connection
+                //All Requests below this will only work for connections that have a session and send the cookie with requests
+                .sub_group(
+                    //Add another group to this group
+                    ServiceGroup::default().service(example_websocket {
+                        //Peers Need to be defined for a websocket, to share peers pass the same map to multiple websockets
                         peers: Default::default(),
                     }),
-            ),
+                ),
         )
-        .task(example_task)
-        .task(example_interval)
+        .task(example_task) //Add a background task to start when the server is started
+        .task(example_interval) //Intervals are also tasks
         .build();
-    info!("{server:#?}");
-    server.run().await
+    info!("{server:#?}"); //Servers impl debug so you can see the structure
+    server.run().await //Run the server and wait for a termination signal
 }

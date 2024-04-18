@@ -1,3 +1,4 @@
+pub mod files;
 pub mod filters;
 pub mod routes;
 pub mod service;
@@ -37,6 +38,18 @@ impl ServiceHandler for (&'static str, &'static str) {
 
     async fn handle(&self, data: &mut ServiceData) -> Result<(), Error> {
         *data.response.body_mut() = Full::new(Bytes::from_static(self.1.as_bytes()));
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl ServiceHandler for (String, String) {
+    fn name(&self) -> &str {
+        &self.0
+    }
+
+    async fn handle(&self, data: &mut ServiceData) -> Result<(), Error> {
+        *data.response.body_mut() = Full::new(Bytes::from(self.1.clone()));
         Ok(())
     }
 }

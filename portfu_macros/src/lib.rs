@@ -1,4 +1,5 @@
 mod endpoints;
+mod files;
 mod static_files;
 mod websocket;
 
@@ -7,6 +8,7 @@ mod postgres;
 mod task;
 
 use crate::endpoints::Endpoint;
+use crate::files::Files;
 use crate::interval::Interval;
 use crate::method::Method;
 use crate::static_files::StaticFiles;
@@ -119,7 +121,7 @@ method_macro!(Trace, trace);
 method_macro!(Patch, patch);
 
 #[proc_macro_attribute]
-pub fn files(args: TokenStream, input: TokenStream) -> TokenStream {
+pub fn static_files(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = match syn::parse(args) {
         Ok(args) => args,
         Err(err) => return input_and_compile_error(input, err),
@@ -129,6 +131,22 @@ pub fn files(args: TokenStream, input: TokenStream) -> TokenStream {
         Err(err) => return input_and_compile_error(input, err),
     };
     match StaticFiles::new(args, ast.ident) {
+        Ok(route) => route.into_token_stream().into(),
+        Err(err) => input_and_compile_error(input, err),
+    }
+}
+
+#[proc_macro_attribute]
+pub fn files(args: TokenStream, input: TokenStream) -> TokenStream {
+    let args = match syn::parse(args) {
+        Ok(args) => args,
+        Err(err) => return input_and_compile_error(input, err),
+    };
+    let ast = match syn::parse::<syn::ItemStruct>(input.clone()) {
+        Ok(ast) => ast,
+        Err(err) => return input_and_compile_error(input, err),
+    };
+    match Files::new(args, ast.ident) {
         Ok(route) => route.into_token_stream().into(),
         Err(err) => input_and_compile_error(input, err),
     }

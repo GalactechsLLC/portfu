@@ -15,6 +15,7 @@ pub mod prelude {
     pub extern crate http_body_util;
     pub extern crate hyper;
     pub extern crate hyper_util;
+    pub extern crate log;
     pub extern crate once_cell;
     pub extern crate tokio_tungstenite;
     pub extern crate uuid;

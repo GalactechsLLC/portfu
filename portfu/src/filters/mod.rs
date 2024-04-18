@@ -36,10 +36,10 @@ impl FilterFn for HasHeader {
     }
 }
 
-pub fn has_header(header: HeaderName) -> Filter {
-    Filter {
+pub fn has_header(header: HeaderName) -> Arc<Filter> {
+    Arc::new(Filter {
         name: format!("has_header_{header}"),
         mode: FilterMode::All,
         filter_functions: vec![Arc::new(HasHeader(header))],
-    }
+    })
 }

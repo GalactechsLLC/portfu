@@ -1,6 +1,6 @@
 [package]
 name = "portfu_macros"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 authors = ["James Hoerr"]
 description = "Portfu Macros for Generating Endpoints and Tasks"
@@ -13,11 +13,13 @@ repository = "https://github.com/GalactechsLLC/portfu/portfu_macros"
 proc-macro = true
 
 [dependencies]
-async-trait = "0.1.79"
+async-trait = "0.1.80"
 http = "1.1.0"
 http-body-util = { version = "0.1.1"}
 hyper = {version="1.2.0", features=["full"]}
-portfu_core = {path = "../portfu_core", version = "0.1.1"}
-proc-macro2 = "1.0.79"
-quote = "1.0.35"
-syn = "2.0.58"
+mime_guess = "2.0.4"
+portfu_core = {path = "../portfu_core", version = "0.1.2"}
+proc-macro2 = "1.0.81"
+quote = "1.0.36"
+syn = "2.0.60"
+tokio = {version = "1.37.0" , default-features = false, features = ["fs"]}
