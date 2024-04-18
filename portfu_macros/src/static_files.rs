@@ -52,15 +52,23 @@ impl ToTokens for StaticFiles {
             .iter()
             .map(|(key, value)| {
                 let file_len = Path::new(value).metadata().unwrap().len() as usize;
-                let key_name = key.replace(['/', '.',')','(','-',' ','+'], "_").replace("__", "_");
+                let key_name = key
+                    .replace(['/', '.', ')', '(', '-', ' ', '+'], "_")
+                    .replace("__", "_");
                 let static_bytes_name = format_ident!("STATIC_FILE{}", key_name);
-                static_file_defs.push( quote! {
+                static_file_defs.push(quote! {
                     static #static_bytes_name: &'static [u8; #file_len] = include_bytes!(#value);
                 });
                 quote! {
                     ::portfu::pfcore::service::ServiceBuilder::new(#key)
                     .name(stringify!(#name))
-                    .handler(::std::sync::Arc::new((stringify!(#key), #static_bytes_name.as_ref()))).build()
+                    .handler(::std::sync::Arc::new(
+                        ::portfu::pfcore::files::StaticFile {
+                            name: #key,
+                            mime: ::portfu::pfcore::files::get_mime_type(#key),
+                            file_contents: #static_bytes_name.as_ref()
+                        }
+                    )).build()
                 }
             })
             .collect();

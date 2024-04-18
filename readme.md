@@ -13,7 +13,7 @@ Macro Examples
 --------
 GET Request using a Path Variable
 ```rust
-#[get("/{path_variable}")]
+#[get("/echo/{path_variable}")]
 pub async fn example_fn(
     path_variable: Path,
 ) -> Result<String, Error> {
