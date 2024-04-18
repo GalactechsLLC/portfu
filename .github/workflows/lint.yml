@@ -1,0 +1,16 @@
+on:
+  workflow_call:
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Checkout submodules
+        run: git submodule update --init --recursive
+      - name: Run Format
+        run: cargo fmt --all -- --check
+      - name: Run Clippy
+        run: cargo clippy -- -Dwarnings

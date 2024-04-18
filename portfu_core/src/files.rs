@@ -12,12 +12,6 @@ pub struct FileLoader {
     pub path: String,
 }
 
-pub fn get_mime_type<P: AsRef<Path>>(path: P) -> String {
-    from_path(path)
-        .first_or_octet_stream() // Picks the first MIME type if multiple are guessed, or defaults to 'application/octet-stream'
-        .to_string()
-}
-
 #[async_trait::async_trait]
 impl ServiceHandler for FileLoader {
     fn name(&self) -> &str {
@@ -41,6 +35,32 @@ impl ServiceHandler for FileLoader {
             }
         }
     }
+}
+
+pub struct StaticFile {
+    pub name: &'static str,
+    pub mime: String,
+    pub file_contents: &'static [u8],
+}
+#[async_trait::async_trait]
+impl ServiceHandler for StaticFile {
+    fn name(&self) -> &str {
+        self.name
+    }
+    async fn handle(&self, data: &mut ServiceData) -> Result<(), Error> {
+        let bytes: hyper::body::Bytes = self.file_contents.into();
+        if let Ok(val) = HeaderValue::from_str(&self.mime) {
+            data.response.headers_mut().insert(CONTENT_TYPE, val);
+        }
+        *data.response.body_mut() = http_body_util::Full::new(bytes);
+        Ok(())
+    }
+}
+
+pub fn get_mime_type<P: AsRef<Path>>(path: P) -> String {
+    from_path(path)
+        .first_or_octet_stream() // Picks the first MIME type if multiple are guessed, or defaults to 'application/octet-stream'
+        .to_string()
 }
 pub fn read_directory(
     root: &Path,
