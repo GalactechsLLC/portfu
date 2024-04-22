@@ -116,7 +116,6 @@ impl Service {
                 .all(|f| f.filter(req) == FilterResult::Allow)
     }
     pub async fn handle(&self, data: &mut ServiceData) -> Result<(), Error> {
-        println!("Handled by {:?}", self.name());
         for func in self.wrappers.iter() {
             match func.before(data).await {
                 WrapperResult::Continue => {}
