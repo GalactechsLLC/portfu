@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use http::Request;
 use hyper::body::Incoming;
 use std::sync::Arc;
@@ -5,11 +6,15 @@ use std::sync::Arc;
 macro_rules! method_macro {
     ($variant:ident, $object:ident, $method:ident) => {
         pub struct $object {}
+        #[async_trait]
         impl<'a> portfu_core::filters::FilterFn for $object {
             fn name(&self) -> &str {
                 stringify!($variant)
             }
-            fn filter(&self, request: &Request<Incoming>) -> ::portfu_core::filters::FilterResult {
+            async fn filter(
+                &self,
+                request: &Request<Incoming>,
+            ) -> ::portfu_core::filters::FilterResult {
                 (*request.method() == ::http::method::Method::$variant).into()
             }
         }

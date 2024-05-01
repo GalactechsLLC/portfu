@@ -137,33 +137,74 @@ impl ToTokens for Endpoint {
         let mut additional_function_vars = vec![];
         let (mut dyn_vars, path_vars) = parse_path_variables(path);
         for arg in ast.sig.inputs.iter() {
-            let (param_type, param_name) = match arg {
+            let (ident_type, ident_val): (Type, Ident) = match arg {
                 FnArg::Receiver(_) => {
                     continue;
                 }
                 FnArg::Typed(typed) => {
                     if let Pat::Ident(pat_ident) = typed.pat.as_ref() {
-                        (&typed.ty, &pat_ident.ident)
+                        if path_vars.contains(&format!("{}", &pat_ident.ident)) {
+                            let ident = &pat_ident.ident;
+                            additional_function_vars.push(quote! {
+                                #ident,
+                            });
+                            continue;
+                        } else {
+                            let ty = &typed.ty;
+                            let ident = &pat_ident.ident;
+                            (parse_quote! { #ty }, parse_quote! { #ident })
+                        }
                     } else {
-                        continue;
+                        panic!("Invalid Type Passed to Endpoint: {typed:?}");
                     }
                 }
             };
-            let ident_type: Type = parse_quote! { #param_type };
-            let ident_val: Ident = parse_quote! { #param_name };
-            if path_vars.contains(&format!("{ident_val}")) {
-                additional_function_vars.push(quote! {
-                    #ident_val,
-                });
-                continue;
+            if let Type::Path(path) = &ident_type {
+                if let Some(segment) = path.path.segments.first() {
+                    let response: Ident = Ident::new("Response", segment.ident.span());
+                    let service_data: Ident = Ident::new("ServiceData", segment.ident.span());
+                    if response == segment.ident {
+                        dyn_vars.push(quote! {
+                            let #ident_val: &mut Response<Full<Bytes>> = &mut data.response;
+                        });
+                        additional_function_vars.push(quote! {
+                            #ident_val,
+                        });
+                        continue;
+                    } else if service_data == segment.ident {
+                        dyn_vars.push(quote! {
+                            let #ident_val: &mut ServiceData = data;
+                        });
+                        additional_function_vars.push(quote! {
+                            #ident_val,
+                        });
+                        continue;
+                    }
+                }
+            }
+            if let Type::Reference(reference) = &ident_type {
+                if let Type::Path(path) = &reference.elem.as_ref() {
+                    if let Some(segment) = path.path.segments.first() {
+                        let service_data: Ident = Ident::new("ServiceData", segment.ident.span());
+                        if service_data == segment.ident {
+                            dyn_vars.push(quote! {
+                                let #ident_val: &mut ServiceData = data;
+                            });
+                            additional_function_vars.push(quote! {
+                                #ident_val,
+                            });
+                            continue;
+                        }
+                    }
+                }
             }
             dyn_vars.push(quote! {
                 let #ident_val: #ident_type = match ::portfu::pfcore::FromRequest::from_request(&mut data.request, stringify!(#ident_val)).await {
                     Ok(v) => v,
                     Err(e) => {
                         *data.response.status_mut() = ::portfu::prelude::http::StatusCode::INTERNAL_SERVER_ERROR;
-                        *data.response.body_mut() = ::portfu::prelude::http_body_util::Full::new(::portfu::prelude::hyper::body::Bytes::from(format!("Failed to extract {} as {}, {e:?}", stringify!(#ident_val), stringify!(#ident_type).replace(' ',""))));
-                        return Ok(());
+                        *data.response.body_mut() = ::portfu::prelude::hyper::body::Bytes::from(format!("Failed to extract {} as {}, {e:?}", stringify!(#ident_val), stringify!(#ident_type).replace(' ',""))).stream_body();
+                        return Ok(data);
                     }
                 };
             });
@@ -192,21 +233,22 @@ impl ToTokens for Endpoint {
                 }
                 async fn handle(
                     &self,
-                    data: &mut ::portfu::prelude::ServiceData
-                ) -> Result<(), ::std::io::Error> {
+                    mut data: ::portfu::prelude::ServiceData
+                ) -> Result<::portfu::prelude::ServiceData, ::std::io::Error> {
+                    use ::portfu::pfcore::IntoStreamBody;
                     #ast
                     #(#dyn_vars)*
                     match #name(#(#additional_function_vars)*).await {
                         Ok(t) => {
                             let bytes: ::portfu::prelude::hyper::body::Bytes = t.into();
-                            *data.response.body_mut() = ::portfu::prelude::http_body_util::Full::new(bytes);
-                            Ok(())
+                            *data.response.body_mut() = bytes.stream_body();
+                            Ok(data)
                         }
                         Err(e) => {
                             let err = format!("{e:?}");
                             let bytes: ::portfu::prelude::hyper::body::Bytes = err.into();
-                            *data.response.body_mut() = ::portfu::prelude::http_body_util::Full::new(bytes);
-                            Ok(())
+                            *data.response.body_mut() = bytes.stream_body();
+                            Ok(data)
                         }
                     }
                 }

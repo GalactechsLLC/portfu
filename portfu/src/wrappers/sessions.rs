@@ -77,18 +77,20 @@ impl SessionWrapper {
 }
 pub fn get_session_cookie_from_request(data: &ServiceData) -> Option<Cookie> {
     let mut session_cookie = None;
-    'outer: for value in data.request.request.headers().get_all(header::COOKIE) {
-        match value.to_str() {
-            Ok(val) => {
-                let mut split_cookies = Cookie::split_parse(val);
-                while let Some(Ok(cookie)) = split_cookies.next() {
-                    if cookie.name() == SESSION_HEADER {
-                        session_cookie = Some(cookie);
-                        break 'outer;
+    if let Some(headers) = data.request.request.headers() {
+        'outer: for value in headers.get_all(header::COOKIE) {
+            match value.to_str() {
+                Ok(val) => {
+                    let mut split_cookies = Cookie::split_parse(val);
+                    while let Some(Ok(cookie)) = split_cookies.next() {
+                        if cookie.name() == SESSION_HEADER {
+                            session_cookie = Some(cookie);
+                            break 'outer;
+                        }
                     }
                 }
+                Err(_) => continue,
             }
-            Err(_) => continue,
         }
     }
     session_cookie
@@ -104,10 +106,9 @@ impl WrapperFn for SessionWrapper {
             None => {
                 let (cookie, session) = self.create_session_cookie(data).await;
                 if let Ok(value) = HeaderValue::from_str(&cookie.to_string()) {
-                    data.request
-                        .request
-                        .headers_mut()
-                        .insert(HeaderName::from_static(SESSION_HEADER), value.clone());
+                    if let Some(headers) = data.request.request.headers_mut() {
+                        headers.insert(HeaderName::from_static(SESSION_HEADER), value.clone());
+                    }
                     data.response
                         .headers_mut()
                         .insert(header::SET_COOKIE, value);
@@ -120,10 +121,9 @@ impl WrapperFn for SessionWrapper {
                 } else {
                     let (cookie, session) = self.create_session_cookie(data).await;
                     if let Ok(value) = HeaderValue::from_str(&cookie.to_string()) {
-                        data.request
-                            .request
-                            .headers_mut()
-                            .insert(HeaderName::from_static(SESSION_HEADER), value.clone());
+                        if let Some(headers) = data.request.request.headers_mut() {
+                            headers.insert(HeaderName::from_static(SESSION_HEADER), value.clone());
+                        }
                         data.response
                             .headers_mut()
                             .insert(header::SET_COOKIE, value);
@@ -132,7 +132,9 @@ impl WrapperFn for SessionWrapper {
                 }
             }
         };
-        data.request.request.extensions_mut().insert(session);
+        if let Some(ext) = data.request.request.extensions_mut() {
+            ext.insert(session);
+        }
         WrapperResult::Continue
     }
 

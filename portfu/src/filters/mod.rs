@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use http::{HeaderName, Request};
 use hyper::body::Incoming;
 use portfu_core::filters::{Filter, FilterFn, FilterMode, FilterResult};
@@ -26,12 +27,13 @@ pub fn all(name: String, filter: &[Arc<dyn FilterFn + Sync + Send>]) -> Filter {
 }
 
 struct HasHeader(HeaderName);
+#[async_trait]
 impl FilterFn for HasHeader {
     fn name(&self) -> &str {
         self.0.as_str()
     }
 
-    fn filter(&self, request: &Request<Incoming>) -> FilterResult {
+    async fn filter(&self, request: &Request<Incoming>) -> FilterResult {
         request.headers().contains_key(&self.0).into()
     }
 }

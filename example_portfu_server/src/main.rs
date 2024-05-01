@@ -2,8 +2,8 @@ use log::{info, LevelFilter};
 use portfu::filters::method::*;
 use portfu::filters::{any, has_header};
 use portfu::macros::{get, interval, post, static_files, task, websocket};
-use portfu::pfcore::service::ServiceGroup;
-use portfu::prelude::http::HeaderName;
+use portfu::pfcore::service::{IncomingRequest, ServiceGroup};
+use portfu::prelude::http::{HeaderName, Response};
 use portfu::prelude::*;
 use portfu::wrappers::sessions::SessionWrapper;
 use simple_logger::SimpleLogger;
@@ -18,7 +18,7 @@ use tokio::sync::RwLock;
 pub struct StaticFiles;
 
 #[get("/")]
-pub async fn index() -> Result<Vec<u8>, Error> {
+pub async fn index(_index: &IncomingRequest) -> Result<Vec<u8>, Error> {
     Ok(STATIC_FILE_index_html.to_vec())
 }
 
@@ -66,7 +66,7 @@ pub async fn example_websocket(websocket: WebSocket) -> Result<(), Error> {
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     SimpleLogger::new()
-        .with_level(LevelFilter::Info)
+        .with_level(LevelFilter::Debug)
         .init()
         .unwrap(); //Init your logger of choice
     let server = ServerBuilder::default() //Start building the Server

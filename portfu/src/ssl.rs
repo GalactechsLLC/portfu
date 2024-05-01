@@ -1,6 +1,6 @@
 use crate::server::ServerConfig;
 use log::error;
-use rustls::crypto::ring::sign::RsaSigningKey;
+use rustls::crypto::aws_lc_rs::sign::RsaSigningKey;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::server::ResolvesServerCertUsingSni;
 use rustls::sign::CertifiedKey;

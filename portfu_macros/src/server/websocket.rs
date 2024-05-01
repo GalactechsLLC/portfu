@@ -1,5 +1,5 @@
-use crate::endpoints::EndpointArgs;
 use crate::parse_path_variables;
+use crate::server::endpoints::EndpointArgs;
 use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{quote, ToTokens};
 use syn::{parse_quote, FnArg, LitStr, Pat, Path, Type};
@@ -100,7 +100,8 @@ impl ToTokens for WebSocketRoute {
                                 Some(v) => v,
                                 None => {
                                     *response.status_mut() = ::portfu::prelude::http::StatusCode::INTERNAL_SERVER_ERROR;
-                                    *response.body_mut() = ::portfu::prelude::http_body_util::Full::new(::portfu::prelude::hyper::body::Bytes::from(format!("Failed to find {}", stringify!(#ident_type).replace(' ',""))));
+                                    let bytes =::portfu::prelude::hyper::body::Bytes::from(format!("Failed to find {}", stringify!(#ident_type).replace(' ',"")));
+                                    *data.response.body_mut() = bytes.stream_body();
                                     return Err(ServiceResponse {
                                         request,
                                         response
@@ -126,7 +127,8 @@ impl ToTokens for WebSocketRoute {
                     Some(v) => v,
                     None => {
                         *response.status_mut() = ::portfu::prelude::http::StatusCode::INTERNAL_SERVER_ERROR;
-                        *response.body_mut() = ::portfu::prelude::http_body_util::Full::new(::portfu::prelude::hyper::body::Bytes::from(format!("Failed to find {} for {}", stringify!(#ident_type).replace(' ',""), stringify!(#function_name))));
+                        let bytes =::portfu::prelude::hyper::body::Bytes::from(format!("Failed to find {} for {}", stringify!(#ident_type).replace(' ',""), stringify!(#function_name)));
+                        *data.response.body_mut() = bytes.stream_body();
                         return Err(ServiceResponse {
                             request,
                             response
@@ -169,8 +171,9 @@ impl ToTokens for WebSocketRoute {
                 }
                 async fn handle(
                     &self,
-                    data: &mut ::portfu::prelude::ServiceData
-                ) -> Result<(), ::std::io::Error> {
+                    mut data: ::portfu::prelude::ServiceData
+                ) -> Result<::portfu::prelude::ServiceData, ::std::io::Error> {
+                    use ::portfu::pfcore::IntoStreamBody;
                     if data.request.request.is_upgrade_request() {
                         #ast
                         #(#dyn_vars)*
@@ -179,8 +182,8 @@ impl ToTokens for WebSocketRoute {
                             Ok((response, websocket)) => (response, websocket),
                             Err(e) => {
                                 let bytes = ::portfu::prelude::hyper::body::Bytes::from("Failed to Upgrade Request");
-                                *data.response.body_mut() = ::portfu::prelude::http_body_util::Full::new(bytes);
-                                return Ok::<(), ::std::io::Error>(());
+                                *data.response.body_mut() = bytes.stream_body();
+                                return Ok::<::portfu::prelude::ServiceData, ::std::io::Error>(data);
                             }
                         };
                         let peers = self.peers.clone();
@@ -218,12 +221,13 @@ impl ToTokens for WebSocketRoute {
                             }
                         });
                         log::info!("Sending Upgrade Response");
-                        data.response = response;
-                        Ok::<(), ::std::io::Error>(())
+                        let (parts, body) = response.into_parts();
+                        data.response = Response::from_parts(parts, body.stream_body());
+                        Ok::<::portfu::prelude::ServiceData, ::std::io::Error>(data)
                     } else {
                         let bytes = ::portfu::prelude::hyper::body::Bytes::from("HTTP NOT SUPPORTED ON THIS ENDPOINT");
-                        *data.response.body_mut() = ::portfu::prelude::http_body_util::Full::new(bytes);
-                        Ok::<(), ::std::io::Error>(())
+                        *data.response.body_mut() = bytes.stream_body();
+                        Ok::<::portfu::prelude::ServiceData, ::std::io::Error>(data)
                     }
                 }
             }
