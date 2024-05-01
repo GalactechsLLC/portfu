@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use http::Request;
 use hyper::body::Incoming;
 use std::fmt::{Debug, Formatter};
@@ -24,9 +25,10 @@ impl From<bool> for FilterResult {
     }
 }
 
+#[async_trait]
 pub trait FilterFn {
     fn name(&self) -> &str;
-    fn filter(&self, request: &Request<Incoming>) -> FilterResult;
+    async fn filter(&self, request: &Request<Incoming>) -> FilterResult;
 }
 impl Debug for (dyn FilterFn + Send + Sync + 'static) {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -58,36 +60,29 @@ impl Debug for Filter {
     }
 }
 
+#[async_trait]
 impl FilterFn for Filter {
     fn name(&self) -> &str {
         self.name.as_str()
     }
 
-    fn filter(&self, request: &Request<Incoming>) -> FilterResult {
+    async fn filter(&self, request: &Request<Incoming>) -> FilterResult {
         match self.mode {
             FilterMode::Any => {
-                if self
-                    .filter_functions
-                    .iter()
-                    .cloned()
-                    .any(|f| f.filter(request) == FilterResult::Allow)
-                {
-                    FilterResult::Allow
-                } else {
-                    FilterResult::Block
+                for f in self.filter_functions.iter() {
+                    if f.filter(request).await == FilterResult::Allow {
+                        return FilterResult::Allow;
+                    }
                 }
+                FilterResult::Block
             }
             FilterMode::All => {
-                if self
-                    .filter_functions
-                    .iter()
-                    .cloned()
-                    .all(|f| f.filter(request) == FilterResult::Allow)
-                {
-                    FilterResult::Allow
-                } else {
-                    FilterResult::Block
+                for f in self.filter_functions.iter() {
+                    if f.filter(request).await != FilterResult::Allow {
+                        return FilterResult::Block;
+                    }
                 }
+                FilterResult::Allow
             }
         }
     }

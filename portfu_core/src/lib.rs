@@ -6,23 +6,24 @@ pub mod sockets;
 pub mod task;
 pub mod wrappers;
 
-use crate::service::{BodyType, Service, ServiceRequest};
+use crate::service::{BodyType, IncomingRequest, Service, ServiceRequest};
 use async_trait::async_trait;
-use http::{HeaderMap, Response, StatusCode};
-use http_body_util::BodyExt;
+use http::{Response, StatusCode};
 use http_body_util::Full;
+use http_body_util::{BodyExt, BodyStream, StreamBody};
 use hyper::body::Bytes;
 use once_cell::sync::Lazy;
 use serde::Deserialize;
 use std::fmt::{Debug, Formatter};
 use std::io::{Error, ErrorKind};
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::Arc;
 
 #[async_trait]
 pub trait ServiceHandler {
     fn name(&self) -> &str;
-    async fn handle(&self, data: &mut ServiceData) -> Result<(), Error>;
+    async fn handle(&self, data: ServiceData) -> Result<ServiceData, Error>;
 }
 impl Debug for (dyn ServiceHandler + Send + Sync + 'static) {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -36,9 +37,9 @@ impl ServiceHandler for (&'static str, &'static str) {
         self.0
     }
 
-    async fn handle(&self, data: &mut ServiceData) -> Result<(), Error> {
-        *data.response.body_mut() = Full::new(Bytes::from_static(self.1.as_bytes()));
-        Ok(())
+    async fn handle(&self, mut data: ServiceData) -> Result<ServiceData, Error> {
+        *data.response.body_mut() = Bytes::from_static(self.1.as_bytes()).stream_body();
+        Ok(data)
     }
 }
 
@@ -48,9 +49,9 @@ impl ServiceHandler for (String, String) {
         &self.0
     }
 
-    async fn handle(&self, data: &mut ServiceData) -> Result<(), Error> {
-        *data.response.body_mut() = Full::new(Bytes::from(self.1.clone()));
-        Ok(())
+    async fn handle(&self, mut data: ServiceData) -> Result<ServiceData, Error> {
+        *data.response.body_mut() = Bytes::from(self.1.clone()).stream_body();
+        Ok(data)
     }
 }
 
@@ -60,22 +61,80 @@ impl ServiceHandler for (&'static str, &'static [u8]) {
         self.0
     }
 
-    async fn handle(&self, data: &mut ServiceData) -> Result<(), Error> {
-        *data.response.body_mut() = Full::new(Bytes::from_static(self.1));
-        Ok(())
+    async fn handle(&self, mut data: ServiceData) -> Result<ServiceData, Error> {
+        *data.response.body_mut() = Bytes::from_static(self.1).stream_body();
+        Ok(data)
+    }
+}
+pub type BoxedBody =
+    Box<dyn hyper::body::Body<Data = Bytes, Error = IntoStreamError> + Send + Sync + 'static>;
+pub type ServiceBody = StreamBody<BodyStream<Pin<BoxedBody>>>;
+pub type ServiceResponse = Response<ServiceBody>;
+
+type IntoStreamError = &'static str;
+
+pub trait IntoStreamBody {
+    type Data;
+    type Error;
+    fn stream_body(self) -> ServiceBody;
+}
+
+impl IntoStreamBody for Bytes {
+    type Data = Bytes;
+    type Error = IntoStreamError;
+    fn stream_body(self) -> ServiceBody {
+        StreamBody::new(BodyStream::new(Box::pin(
+            Full::new(self).map_err(|_| "Failed to Convert Bytes into ServiceBody"),
+        )))
+    }
+}
+
+impl IntoStreamBody for String {
+    type Data = Bytes;
+    type Error = IntoStreamError;
+    fn stream_body(self) -> ServiceBody {
+        StreamBody::new(BodyStream::new(Box::pin(
+            Full::new(Bytes::from(self)).map_err(|_| "Failed to Convert Bytes into ServiceBody"),
+        )))
+    }
+}
+
+impl<'a> IntoStreamBody for &'a str {
+    type Data = Bytes;
+    type Error = IntoStreamError;
+    fn stream_body(self) -> ServiceBody {
+        StreamBody::new(BodyStream::new(Box::pin(
+            Full::new(Bytes::from(self.to_string()))
+                .map_err(|_| "Failed to Convert Bytes into ServiceBody"),
+        )))
+    }
+}
+
+impl IntoStreamBody for Full<Bytes> {
+    type Data = Bytes;
+    type Error = IntoStreamError;
+
+    fn stream_body(self) -> ServiceBody {
+        StreamBody::new(BodyStream::new(Box::pin(
+            self.map_err(|_| "Failed to Convert Bytes into ServiceBody"),
+        )))
     }
 }
 
 pub struct ServiceData {
     pub request: ServiceRequest,
-    pub response: Response<Full<Bytes>>,
+    pub response: ServiceResponse,
 }
 impl ServiceData {
     pub fn get_best_guess_public_ip(&self, address: &SocketAddr) -> String {
-        if let Some(real_ip) = self.request.request.headers().get("x-real-ip") {
-            format!("{:?}", real_ip)
-        } else if let Some(forwards) = self.request.request.headers().get("x-forwarded-for") {
-            format!("{:?}", forwards)
+        if let Some(headers) = self.request.request.headers() {
+            if let Some(real_ip) = headers.get("x-real-ip") {
+                format!("{:?}", real_ip)
+            } else if let Some(forwards) = headers.get("x-forwarded-for") {
+                format!("{:?}", forwards)
+            } else {
+                address.to_string()
+            }
         } else {
             address.to_string()
         }
@@ -88,13 +147,14 @@ impl ServiceHandler for DefaultHandler {
     fn name(&self) -> &str {
         "DefaultHandler"
     }
-    async fn handle(&self, data: &mut ServiceData) -> Result<(), Error> {
+    async fn handle(&self, mut data: ServiceData) -> Result<ServiceData, Error> {
         *data.response.status_mut() = StatusCode::NOT_FOUND;
-        *data.response.body_mut() = Full::new(Bytes::from(format!(
+        *data.response.body_mut() = Bytes::from(format!(
             "Failed to find Path: {}",
             data.request.request.uri().path()
-        )));
-        Ok(())
+        ))
+        .stream_body();
+        Ok(data)
     }
 }
 
@@ -144,16 +204,11 @@ impl<'a, T: Send + Sync + 'static> FromRequest<'a> for State<T> {
         request
             .request
             .extensions()
+            .ok_or(Error::new(ErrorKind::NotFound, "Failed to find State"))?
             .get::<Arc<T>>()
             .cloned()
             .map(State)
             .ok_or(Error::new(ErrorKind::NotFound, "Failed to find State"))
-    }
-}
-#[async_trait]
-impl<'a> FromRequest<'a> for &'a mut HeaderMap {
-    async fn from_request(request: &'a mut ServiceRequest, _: &'a str) -> Result<Self, Error> {
-        Ok(request.request.headers_mut())
     }
 }
 
@@ -164,6 +219,16 @@ impl<'a> FromRequest<'a> for SocketAddr {
             .get()
             .copied()
             .ok_or(Error::new(ErrorKind::NotFound, "Failed to find SocketAddr"))
+    }
+}
+
+#[async_trait]
+impl<'a> FromRequest<'a> for &'a IncomingRequest {
+    async fn from_request(
+        request: &'a mut ServiceRequest,
+        _: &'a str,
+    ) -> Result<&'a IncomingRequest, Error> {
+        Ok(&request.request)
     }
 }
 
@@ -224,6 +289,20 @@ pub trait FromBody {
     async fn from_body(body: &mut BodyType) -> Result<Self, Error>
     where
         Self: Sized;
+}
+
+#[async_trait::async_trait]
+impl FromBody for Bytes {
+    async fn from_body(body: &mut BodyType) -> Result<Self, Error> {
+        body_to_bytes(body).await
+    }
+}
+
+#[async_trait::async_trait]
+impl FromBody for Vec<u8> {
+    async fn from_body(body: &mut BodyType) -> Result<Self, Error> {
+        body_to_bytes(body).await.map(|b| b.to_vec())
+    }
 }
 
 #[async_trait::async_trait]
@@ -302,5 +381,6 @@ async fn body_to_bytes(body: &mut BodyType<'_>) -> Result<Bytes, Error> {
                 format!("Failed to read body: {e:?}"),
             )
         }),
+        BodyType::Empty => Ok(Bytes::new()),
     }
 }

@@ -1,19 +1,15 @@
-mod endpoints;
-mod files;
-mod static_files;
-mod websocket;
+mod client;
+mod method;
+mod server;
 
-mod interval;
-mod postgres;
-mod task;
-
-use crate::endpoints::Endpoint;
-use crate::files::Files;
-use crate::interval::Interval;
+use crate::client::websocket::WebSocketClient;
 use crate::method::Method;
-use crate::static_files::StaticFiles;
-use crate::task::Task;
-use crate::websocket::WebSocketRoute;
+use crate::server::endpoints::Endpoint;
+use crate::server::files::Files;
+use crate::server::interval::Interval;
+use crate::server::static_files::StaticFiles;
+use crate::server::task::Task;
+use crate::server::websocket::WebSocketRoute;
 use portfu_core::routes::PathSegment;
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
@@ -31,63 +27,6 @@ fn input_and_compile_error(mut item: TokenStream, err: syn::Error) -> TokenStrea
     let compile_err = TokenStream::from(err.to_compile_error());
     item.extend(compile_err);
     item
-}
-
-mod method {
-    use proc_macro2::{Span, TokenStream as TokenStream2};
-    use quote::{ToTokens, TokenStreamExt};
-    use syn::Ident;
-    macro_rules! standard_method_type {
-        (
-            $($variant:ident, $upper:ident, $lower:ident,)+
-        ) => {
-            #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-            pub enum Method {
-                $(
-                    $variant,
-                )+
-            }
-            impl Method {
-                pub fn as_str(&self) -> &'static str {
-                    match self {
-                        $(Self::$variant => stringify!($upper),)+
-                    }
-                }
-                fn parse(method: &str) -> Result<Self, String> {
-                    match method {
-                        $(stringify!($upper) => Ok(Self::$variant),)+
-                        _ => Err(format!("HTTP method must be uppercase: `{}`", method)),
-                    }
-                }
-            }
-        };
-    }
-
-    standard_method_type! {
-        Get,       GET,     get,
-        Post,      POST,    post,
-        Put,       PUT,     put,
-        Delete,    DELETE,  delete,
-        Head,      HEAD,    head,
-        Connect,   CONNECT, connect,
-        Options,   OPTIONS, options,
-        Trace,     TRACE,   trace,
-        Patch,     PATCH,   patch,
-    }
-
-    impl TryFrom<&syn::LitStr> for Method {
-        type Error = syn::Error;
-        fn try_from(value: &syn::LitStr) -> Result<Self, Self::Error> {
-            Self::parse(value.value().as_str())
-                .map_err(|message| syn::Error::new_spanned(value, message))
-        }
-    }
-    impl ToTokens for Method {
-        fn to_tokens(&self, stream: &mut TokenStream2) {
-            let ident = Ident::new(self.as_str(), Span::call_site());
-            stream.append(ident);
-        }
-    }
 }
 
 macro_rules! method_macro {
@@ -163,6 +102,22 @@ pub fn websocket(args: TokenStream, input: TokenStream) -> TokenStream {
         Err(err) => return input_and_compile_error(input, err),
     };
     match WebSocketRoute::new(args, ast) {
+        Ok(route) => route.into_token_stream().into(),
+        Err(err) => input_and_compile_error(input, err),
+    }
+}
+
+#[proc_macro_attribute]
+pub fn client_websocket(args: TokenStream, input: TokenStream) -> TokenStream {
+    let args = match syn::parse(args) {
+        Ok(args) => args,
+        Err(err) => return input_and_compile_error(input, err),
+    };
+    let ast = match syn::parse::<syn::ItemFn>(input.clone()) {
+        Ok(ast) => ast,
+        Err(err) => return input_and_compile_error(input, err),
+    };
+    match WebSocketClient::new(args, ast) {
         Ok(route) => route.into_token_stream().into(),
         Err(err) => input_and_compile_error(input, err),
     }

@@ -2,12 +2,12 @@ use crate::pfcore::filters::FilterFn;
 use crate::pfcore::filters::{Filter, FilterResult};
 use crate::pfcore::service::{IncomingRequest, ServiceRequest};
 use crate::pfcore::wrappers::{WrapperFn, WrapperResult};
-use crate::pfcore::{ServiceData, ServiceRegister, ServiceRegistry};
+use crate::pfcore::{ServiceData, ServiceRegister, ServiceRegistry, ServiceResponse};
 use crate::signal::await_termination;
 use crate::ssl::load_ssl_certs;
 use http::{Extensions, Request, Response, StatusCode};
-use http_body_util::Full;
-use hyper::body::{Bytes, Incoming};
+use http_body_util::{BodyExt, BodyStream, Empty, StreamBody};
+use hyper::body::Incoming;
 use hyper::server::conn::http1::Builder;
 use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
@@ -102,11 +102,11 @@ impl Server {
                                         Ok(stream) => {
                                             let connection = http.serve_connection(TokioIo::new(stream), service).with_upgrades();
                                             if let Err(err) = connection.await {
-                                                error!("Error serving connection: {:?}", err);
+                                                error!("Error serving tls connection: {:?}", err);
                                             }
                                         }
                                         Err(e) => {
-                                            error!("Error accepting connection: {:?}", e);
+                                            error!("Error accepting tls connection: {:?}", e);
                                         }
                                     }
                                 } else {
@@ -151,25 +151,35 @@ impl Server {
         server: Arc<Self>,
         mut request: Request<Incoming>,
         address: SocketAddr,
-    ) -> Result<Response<Full<Bytes>>, Error> {
-        let mut response: Response<Full<Bytes>> = Default::default();
-        if !server.filters.is_empty()
-            && !server
-                .filters
-                .iter()
-                .cloned()
-                .all(|f| f.filter(&request) == FilterResult::Allow)
-        {
+    ) -> Result<ServiceResponse, Error> {
+        request.extensions_mut().insert(address);
+        let mut response: ServiceResponse = Response::new(StreamBody::new(BodyStream::new(
+            Box::pin(Empty::new().map_err(|_| "Failed to Map Empty to Service Body")),
+        )));
+        let handle = if !server.filters.is_empty() {
+            let mut handle = true;
+            for f in server.filters.iter() {
+                if f.filter(&request).await != FilterResult::Allow {
+                    handle = false;
+                    break;
+                }
+            }
+            handle
+        } else {
+            true
+        };
+        if !handle {
             *response.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
             Ok(response)
         } else {
-            match server
-                .services
-                .services
-                .iter()
-                .find(|s| s.handles(&request))
-                .cloned()
-            {
+            let mut handler = None;
+            for service in server.services.services.iter() {
+                if service.handles(&request).await {
+                    handler = Some(service.clone());
+                    break;
+                }
+            }
+            match handler {
                 Some(service) => {
                     request.extensions_mut().extend(server.shared_state.clone());
                     let mut service_data = ServiceData {
@@ -179,7 +189,6 @@ impl Server {
                         },
                         response,
                     };
-                    service_data.request.insert(address);
                     for func in server.wrappers.iter() {
                         match func.before(&mut service_data).await {
                             WrapperResult::Continue => {}
@@ -188,7 +197,7 @@ impl Server {
                             }
                         }
                     }
-                    service.handle(&mut service_data).await?;
+                    service_data = service.handle(service_data).await?;
                     for func in server.wrappers.iter() {
                         match func.after(&mut service_data).await {
                             WrapperResult::Continue => {}

@@ -1,3 +1,4 @@
+pub mod client;
 pub mod endpoints;
 pub mod filters;
 mod server;
@@ -20,6 +21,7 @@ pub mod prelude {
     pub extern crate tokio_tungstenite;
     pub extern crate uuid;
     pub type Service = ::pfcore::service::Service;
+    pub type ServiceResponse = ::pfcore::ServiceResponse;
     pub type ServiceGroup = ::pfcore::service::ServiceGroup;
     pub type ServiceRegistry = ::pfcore::ServiceRegistry;
     pub type ServiceData = ::pfcore::ServiceData;

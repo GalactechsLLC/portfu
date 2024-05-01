@@ -13,7 +13,7 @@ use oauth2::{
 use octocrab::models::orgs::Organization;
 use octocrab::models::Author;
 use pfcore::service::{ServiceBuilder, ServiceGroup};
-use pfcore::{FromRequest, Json, ServiceHandler};
+use pfcore::{FromRequest, Json, ServiceData, ServiceHandler};
 use serde::Deserialize;
 use std::env;
 use std::io::{Error, ErrorKind};
@@ -60,7 +60,7 @@ impl ServiceHandler for OAuthLoginHandler {
     fn name(&self) -> &str {
         "login"
     }
-    async fn handle(&self, data: &mut crate::prelude::ServiceData) -> Result<(), Error> {
+    async fn handle(&self, mut data: crate::prelude::ServiceData) -> Result<ServiceData, Error> {
         // Create a PKCE code verifier and SHA-256 encode it as a code challenge.
         let (pkce_code_challenge, _pkce_code_verifier) = PkceCodeChallenge::new_random_sha256();
         // Generate the authorization URL to which we'll redirect the user.
@@ -77,7 +77,7 @@ impl ServiceHandler for OAuthLoginHandler {
             header::LOCATION,
             HeaderValue::from_str(auth_url.as_str()).unwrap_or(HeaderValue::from_static("/")),
         );
-        Ok(())
+        Ok(data)
     }
 }
 pub struct OAuthAuthHandler {
@@ -88,7 +88,7 @@ impl ServiceHandler for OAuthAuthHandler {
     fn name(&self) -> &str {
         "auth"
     }
-    async fn handle(&self, data: &mut crate::prelude::ServiceData) -> Result<(), Error> {
+    async fn handle(&self, mut data: crate::prelude::ServiceData) -> Result<ServiceData, Error> {
         let mut user_data: UserData = if let Some(session) = data.request.get_mut::<Session>() {
             session.data.remove().unwrap_or(UserData {
                 user_id: vec![],
@@ -96,16 +96,13 @@ impl ServiceHandler for OAuthAuthHandler {
                 user_level: UserLevel::User,
             })
         } else {
-            return send_internal_error(
-                &mut data.response,
-                "Failed to Find Session to Auth".to_string(),
-            );
+            return send_internal_error(data, "Failed to Find Session to Auth".to_string());
         };
         let body: Json<AuthRequest> = match Body::from_request(&mut data.request, "").await {
             Ok(v) => v.inner(),
             Err(e) => {
                 return send_internal_error(
-                    &mut data.response,
+                    data,
                     format!("Failed to extract Body as AuthRequest, {e:?}"),
                 );
             }
@@ -121,7 +118,7 @@ impl ServiceHandler for OAuthAuthHandler {
         {
             token
         } else {
-            return redirect_to_url(&mut data.response, "/".to_string());
+            return redirect_to_url(data, "/".to_string());
         };
         let token_val = format!("Bearer {}", token.access_token().secret());
         let client = reqwest::Client::builder().build().unwrap();
@@ -136,7 +133,7 @@ impl ServiceHandler for OAuthAuthHandler {
         {
             user_info.json().await.ok()
         } else {
-            return redirect_to_url(&mut data.response, "/".to_string());
+            return redirect_to_url(data, "/".to_string());
         };
         let org_info: Option<Vec<Organization>> = if let Ok(org_info) = client
             .get("https://api.github.com/user/orgs")
@@ -150,7 +147,7 @@ impl ServiceHandler for OAuthAuthHandler {
             let text = org_info.text().await.unwrap_or_default();
             serde_json::from_str(&text).ok()
         } else {
-            return redirect_to_url(&mut data.response, "/".to_string());
+            return redirect_to_url(data, "/".to_string());
         };
         if let Some(org_list) = &org_info {
             for org in org_list {
@@ -168,7 +165,7 @@ impl ServiceHandler for OAuthAuthHandler {
             }
         }
         data.request.insert(user_data);
-        redirect_to_url(&mut data.response, "/admin".to_string())
+        redirect_to_url(data, "/admin".to_string())
     }
 }
 

@@ -1,4 +1,4 @@
-use crate::{ServiceData, ServiceHandler};
+use crate::{IntoStreamBody, ServiceData, ServiceHandler};
 use http::header::CONTENT_TYPE;
 use http::HeaderValue;
 use mime_guess::from_path;
@@ -17,21 +17,21 @@ impl ServiceHandler for FileLoader {
     fn name(&self) -> &str {
         &self.name
     }
-    async fn handle(&self, data: &mut ServiceData) -> Result<(), Error> {
+    async fn handle(&self, mut data: ServiceData) -> Result<ServiceData, Error> {
         match tokio::fs::read_to_string(&self.path).await {
             Ok(t) => {
                 let bytes: hyper::body::Bytes = t.into();
                 if let Ok(val) = HeaderValue::from_str(&self.mime) {
                     data.response.headers_mut().insert(CONTENT_TYPE, val);
                 }
-                *data.response.body_mut() = http_body_util::Full::new(bytes);
-                Ok(())
+                *data.response.body_mut() = bytes.stream_body();
+                Ok(data)
             }
             Err(e) => {
                 let err = format!("{e:?}");
                 let bytes: hyper::body::Bytes = err.into();
-                *data.response.body_mut() = http_body_util::Full::new(bytes);
-                Ok(())
+                *data.response.body_mut() = bytes.stream_body();
+                Ok(data)
             }
         }
     }
@@ -47,13 +47,13 @@ impl ServiceHandler for StaticFile {
     fn name(&self) -> &str {
         self.name
     }
-    async fn handle(&self, data: &mut ServiceData) -> Result<(), Error> {
+    async fn handle(&self, mut data: ServiceData) -> Result<ServiceData, Error> {
         let bytes: hyper::body::Bytes = self.file_contents.into();
         if let Ok(val) = HeaderValue::from_str(&self.mime) {
             data.response.headers_mut().insert(CONTENT_TYPE, val);
         }
-        *data.response.body_mut() = http_body_util::Full::new(bytes);
-        Ok(())
+        *data.response.body_mut() = bytes.stream_body();
+        Ok(data)
     }
 }
 
