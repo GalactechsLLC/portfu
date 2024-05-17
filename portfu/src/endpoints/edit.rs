@@ -1,14 +1,15 @@
+use crate::filters::method::GET;
+use pfcore::service::ServiceBuilder;
+use pfcore::{
+    Body, FromRequest, IntoStreamBody, ServiceData, ServiceHandler, ServiceRegister,
+    ServiceRegistry,
+};
+use serde::Deserialize;
 use std::io::{Error, ErrorKind};
 use std::sync::Arc;
-use serde::Deserialize;
-use pfcore::{Body, FromRequest, IntoStreamBody, ServiceData, ServiceHandler, ServiceRegister, ServiceRegistry};
-use pfcore::service::{ServiceBuilder};
-use crate::filters::method::GET;
 
 #[derive(Deserialize)]
-pub struct EditRequest {
-    
-}
+pub struct EditRequest {}
 
 pub struct EditHandler {}
 impl ServiceRegister for EditHandler {
@@ -34,21 +35,19 @@ impl ServiceHandler for EditHandler {
                     Ok(_json) => {
                         let mut editable = vec![];
                         for service in &data.server.services.services {
-                            if service.editable.is_some(){
+                            if service.editable.is_some() {
                                 editable.push(service.name.clone());
                             }
                         }
-                        *data.response.body_mut() = serde_json::to_vec(&editable).unwrap_or_default().stream_body();
+                        *data.response.body_mut() = serde_json::to_vec(&editable)
+                            .unwrap_or_default()
+                            .stream_body();
                         Ok(data)
                     }
-                    Err(e) => {
-                        Err((data, Error::new(ErrorKind::InvalidData, format!("{e:?}"))))
-                    }
+                    Err(e) => Err((data, Error::new(ErrorKind::InvalidData, format!("{e:?}")))),
                 }
             }
-            Err(e) => {
-                Err((data, e))
-            }
+            Err(e) => Err((data, e)),
         }
     }
 }

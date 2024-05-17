@@ -1,3 +1,10 @@
+use crate::filters::{Filter, FilterFn, FilterResult};
+use crate::service::{IncomingRequest, ServiceRequest};
+use crate::signal::await_termination;
+use crate::ssl::load_ssl_certs;
+use crate::task::{Task, TaskFn};
+use crate::wrappers::{WrapperFn, WrapperResult};
+use crate::{IntoStreamBody, ServiceData, ServiceRegister, ServiceRegistry, ServiceResponse};
 use http::{Extensions, Request, Response, StatusCode};
 use http_body_util::{BodyExt, BodyStream, Empty, StreamBody};
 use hyper::body::Incoming;
@@ -16,13 +23,6 @@ use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 use tokio::{select, spawn};
 use tokio_rustls::TlsAcceptor;
-use crate::filters::{Filter, FilterFn, FilterResult};
-use crate::{IntoStreamBody, ServiceData, ServiceRegister, ServiceRegistry, ServiceResponse};
-use crate::service::{IncomingRequest, ServiceRequest};
-use crate::signal::await_termination;
-use crate::ssl::load_ssl_certs;
-use crate::task::{Task, TaskFn};
-use crate::wrappers::{WrapperFn, WrapperResult};
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SslConfig {
@@ -198,12 +198,19 @@ impl Server {
                             }
                         }
                     }
-                    service_data = service.handle(service_data).await.unwrap_or_else(|(mut sd, e)| {
-                        error!("Service Error when Handling {} - {e:?}", sd.request.request.uri());
-                        *sd.response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                        *sd.response.body_mut() = format!("{:?}", e).stream_body();
-                        sd
-                    });
+                    service_data =
+                        service
+                            .handle(service_data)
+                            .await
+                            .unwrap_or_else(|(mut sd, e)| {
+                                error!(
+                                    "Service Error when Handling {} - {e:?}",
+                                    sd.request.request.uri()
+                                );
+                                *sd.response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+                                *sd.response.body_mut() = format!("{:?}", e).stream_body();
+                                sd
+                            });
                     for func in server.wrappers.iter() {
                         match func.after(&mut service_data).await {
                             WrapperResult::Continue => {}

@@ -1,6 +1,7 @@
 use http::{Method, Request, Response, Uri};
 use http_body_util::{BodyStream, Empty, Full, StreamBody};
 use hyper::body::{Body, Bytes, Frame, Incoming, SizeHint};
+use log::error;
 use pfcore::service::ConsumedBodyType;
 use rustls::client::ClientConfig;
 use rustls::pki_types::ServerName;
@@ -8,7 +9,6 @@ use rustls::RootCertStore;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use log::error;
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 

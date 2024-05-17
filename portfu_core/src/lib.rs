@@ -1,18 +1,19 @@
+mod editable;
 pub mod files;
 pub mod filters;
 pub mod routes;
+pub mod server;
 pub mod service;
+pub mod signal;
 pub mod sockets;
+mod ssl;
 pub mod task;
 pub mod wrappers;
-mod editable;
-pub mod server;
-mod ssl;
-pub mod signal;
 
+use crate::server::Server;
 use crate::service::{BodyType, IncomingRequest, Service, ServiceRequest};
 use async_trait::async_trait;
-use http::{Response};
+use http::Response;
 use http_body_util::Full;
 use http_body_util::{BodyExt, BodyStream, StreamBody};
 use hyper::body::Bytes;
@@ -23,7 +24,6 @@ use std::io::{Error, ErrorKind};
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
-use crate::server::Server;
 
 #[async_trait]
 pub trait ServiceHandler {

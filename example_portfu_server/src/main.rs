@@ -1,4 +1,5 @@
 use log::{info, LevelFilter};
+use portfu::endpoints::edit::EditHandler;
 use portfu::filters::method::*;
 use portfu::filters::{any, has_header};
 use portfu::macros::{get, interval, post, static_files, task, websocket};
@@ -7,13 +8,12 @@ use portfu::prelude::http::{HeaderName, Response};
 use portfu::prelude::*;
 use portfu::wrappers::sessions::SessionWrapper;
 use simple_logger::SimpleLogger;
-use std::io::{Error};
+use std::io::Error;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::select;
 use tokio::sync::RwLock;
-use portfu::endpoints::edit::EditHandler;
 
 #[static_files("front_end_dist/")]
 pub struct StaticFiles;

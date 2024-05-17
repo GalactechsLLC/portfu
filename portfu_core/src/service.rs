@@ -1,3 +1,4 @@
+use crate::editable::EditFn;
 use crate::filters::{FilterFn, FilterResult};
 use crate::routes::Route;
 use crate::wrappers::{WrapperFn, WrapperResult};
@@ -17,13 +18,12 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio_tungstenite::tungstenite::error::ProtocolError;
 use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
-use crate::editable::EditFn;
 
 #[derive(Debug)]
 pub struct ServiceBuilder {
     path: Route,
     name: Option<String>,
-    editable: Option<Arc<dyn EditFn<Error=Error> + Sync + Send>>,
+    editable: Option<Arc<dyn EditFn<Error = Error> + Sync + Send>>,
     filters: Vec<Arc<dyn FilterFn + Sync + Send>>,
     wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
     handler: Option<Arc<dyn ServiceHandler + Send + Sync>>,
@@ -49,7 +49,7 @@ impl ServiceBuilder {
         s.filters.push(filter);
         s
     }
-    pub fn editable(self, editable: Arc<dyn EditFn<Error=Error> + Sync + Send>) -> Self {
+    pub fn editable(self, editable: Arc<dyn EditFn<Error = Error> + Sync + Send>) -> Self {
         let mut s = self;
         s.editable = Some(editable);
         s
@@ -118,7 +118,7 @@ impl ServiceGroup {
 pub struct Service {
     pub path: Arc<Route>,
     pub name: String,
-    pub editable: Option<Arc<dyn EditFn<Error=Error> + Sync + Send>>,
+    pub editable: Option<Arc<dyn EditFn<Error = Error> + Sync + Send>>,
     pub filters: Vec<Arc<dyn FilterFn + Sync + Send>>,
     pub wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
     pub handler: Option<Arc<dyn ServiceHandler + Send + Sync>>,
@@ -231,21 +231,19 @@ impl IncomingRequest {
         match self {
             IncomingRequest::Sized(r) => {
                 let (parts, body) = r.into_parts();
-                let body = ConsumedBodyType::Sized(Full::new(
-                    match body.collect().await {
-                        Ok(b) => b.to_bytes(),
-                        Err(_) => {
-                            return Err((IncomingRequest::Consumed(parts), Error::new(
+                let body = ConsumedBodyType::Sized(Full::new(match body.collect().await {
+                    Ok(b) => b.to_bytes(),
+                    Err(_) => {
+                        return Err((
+                            IncomingRequest::Consumed(parts),
+                            Error::new(
                                 ErrorKind::InvalidData,
                                 "Failed to read all Bytes from Request",
-                            )));
-                        }
+                            ),
+                        ));
                     }
-                ));
-                Ok((
-                    IncomingRequest::Consumed(parts),
-                    body
-                ))
+                }));
+                Ok((IncomingRequest::Consumed(parts), body))
             }
             IncomingRequest::Stream(r) => {
                 let (parts, body) = r.into_parts();
