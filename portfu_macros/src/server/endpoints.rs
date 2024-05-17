@@ -234,7 +234,7 @@ impl ToTokens for Endpoint {
                 async fn handle(
                     &self,
                     mut data: ::portfu::prelude::ServiceData
-                ) -> Result<::portfu::prelude::ServiceData, ::std::io::Error> {
+                ) -> Result<::portfu::prelude::ServiceData, (::portfu::prelude::ServiceData, ::std::io::Error)> {
                     use ::portfu::pfcore::IntoStreamBody;
                     #ast
                     #(#dyn_vars)*

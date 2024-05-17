@@ -145,11 +145,11 @@ impl ToTokens for Interval {
                     let mut __interval_duration = ::tokio::time::interval(std::time::Duration::from_millis(#interval));
                     loop {
                         #(#dyn_vars)*
-                        select! {
+                        tokio::select! {
                             _ = __interval_duration.tick() => {
                                 let _ = #name(#(#additional_function_vars)*).await;
                             }
-                            _ = portfu::signal::await_termination() => {
+                            _ = ::portfu::pfcore::signal::await_termination() => {
                                 break;
                             }
                         }

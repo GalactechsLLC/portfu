@@ -7,12 +7,13 @@ use portfu::prelude::http::{HeaderName, Response};
 use portfu::prelude::*;
 use portfu::wrappers::sessions::SessionWrapper;
 use simple_logger::SimpleLogger;
-use std::io::Error;
+use std::io::{Error};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::select;
 use tokio::sync::RwLock;
+use portfu::endpoints::edit::EditHandler;
 
 #[static_files("front_end_dist/")]
 pub struct StaticFiles;
@@ -78,10 +79,11 @@ async fn main() -> Result<(), Error> {
             "Method Filters".to_string(),
             &[GET.clone(), POST.clone(), PUT.clone(), DELETE.clone()],
         ))
+        .register(EditHandler {})
         .register(StaticFiles) //Register Each Service directly with the server
         .register(
             //Sub Groups are also services
-            ServiceGroup::default() //Services can be grouped into ServiceGroups to make it easier to apply shared wrappers or filters
+            ServiceGroup::default() //Services can be grouped into ServiceGroups to make it easier to apply shared wrappers or filters.
                 //Filters at the ServiceGroup level apply to service defined below them only, this is the same with any wrappers
                 .service(example_get) //This service is defined above the filter and will not have the filter applied
                 .filter(has_header(HeaderName::from_static("content-length")))

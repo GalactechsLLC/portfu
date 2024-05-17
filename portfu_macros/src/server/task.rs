@@ -126,7 +126,7 @@ impl ToTokens for Task {
                             } => {
                                  Ok::<(), ::std::io::Error>(())
                             }
-                            _ = portfu::signal::await_termination() => {
+                            _ = ::portfu::pfcore::signal::await_termination() => {
                                 Ok::<(), ::std::io::Error>(())
                             }
                         }

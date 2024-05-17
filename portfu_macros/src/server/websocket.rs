@@ -172,7 +172,7 @@ impl ToTokens for WebSocketRoute {
                 async fn handle(
                     &self,
                     mut data: ::portfu::prelude::ServiceData
-                ) -> Result<::portfu::prelude::ServiceData, ::std::io::Error> {
+                ) -> Result<::portfu::prelude::ServiceData, (::portfu::prelude::ServiceData, ::std::io::Error)> {
                     use ::portfu::pfcore::IntoStreamBody;
                     if data.request.request.is_upgrade_request() {
                         #ast
@@ -183,7 +183,7 @@ impl ToTokens for WebSocketRoute {
                             Err(e) => {
                                 let bytes = ::portfu::prelude::hyper::body::Bytes::from("Failed to Upgrade Request");
                                 *data.response.body_mut() = bytes.stream_body();
-                                return Ok::<::portfu::prelude::ServiceData, ::std::io::Error>(data);
+                                return Ok::<::portfu::prelude::ServiceData, (::portfu::prelude::ServiceData, ::std::io::Error)>(data);
                             }
                         };
                         let peers = self.peers.clone();
@@ -215,7 +215,7 @@ impl ToTokens for WebSocketRoute {
                                 } => {
                                      Ok::<(), ::std::io::Error>(())
                                 }
-                                _ = portfu::signal::await_termination() => {
+                                _ = ::portfu::pfcore::signal::await_termination() => {
                                     Ok::<(), ::std::io::Error>(())
                                 }
                             }
@@ -223,11 +223,11 @@ impl ToTokens for WebSocketRoute {
                         log::info!("Sending Upgrade Response");
                         let (parts, body) = response.into_parts();
                         data.response = Response::from_parts(parts, body.stream_body());
-                        Ok::<::portfu::prelude::ServiceData, ::std::io::Error>(data)
+                        Ok::<::portfu::prelude::ServiceData, (::portfu::prelude::ServiceData, ::std::io::Error)>(data)
                     } else {
                         let bytes = ::portfu::prelude::hyper::body::Bytes::from("HTTP NOT SUPPORTED ON THIS ENDPOINT");
                         *data.response.body_mut() = bytes.stream_body();
-                        Ok::<::portfu::prelude::ServiceData, ::std::io::Error>(data)
+                        Ok::<::portfu::prelude::ServiceData, (::portfu::prelude::ServiceData, ::std::io::Error)>(data)
                     }
                 }
             }

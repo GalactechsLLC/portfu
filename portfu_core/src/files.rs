@@ -17,7 +17,7 @@ impl ServiceHandler for FileLoader {
     fn name(&self) -> &str {
         &self.name
     }
-    async fn handle(&self, mut data: ServiceData) -> Result<ServiceData, Error> {
+    async fn handle(&self, mut data: ServiceData) -> Result<ServiceData, (ServiceData, Error)> {
         match tokio::fs::read_to_string(&self.path).await {
             Ok(t) => {
                 let bytes: hyper::body::Bytes = t.into();
@@ -47,7 +47,7 @@ impl ServiceHandler for StaticFile {
     fn name(&self) -> &str {
         self.name
     }
-    async fn handle(&self, mut data: ServiceData) -> Result<ServiceData, Error> {
+    async fn handle(&self, mut data: ServiceData) -> Result<ServiceData, (ServiceData, Error)> {
         let bytes: hyper::body::Bytes = self.file_contents.into();
         if let Ok(val) = HeaderValue::from_str(&self.mime) {
             data.response.headers_mut().insert(CONTENT_TYPE, val);

@@ -8,6 +8,7 @@ use rustls::RootCertStore;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use log::error;
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 
@@ -119,7 +120,7 @@ pub async fn send_request<T: Into<SupportedBody>>(
     let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await?;
     tokio::task::spawn(async move {
         if let Err(err) = conn.await {
-            println!("Connection failed: {:?}", err);
+            error!("Connection failed: {:?}", err);
         }
     });
     let path = url.path();
