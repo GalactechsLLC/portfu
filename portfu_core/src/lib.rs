@@ -115,7 +115,7 @@ impl<'a> IntoStreamBody for &'a str {
     }
 }
 
-impl<'a> IntoStreamBody for Vec<u8> {
+impl IntoStreamBody for Vec<u8> {
     type Data = Bytes;
     type Error = IntoStreamError;
     fn stream_body(self) -> ServiceBody {
