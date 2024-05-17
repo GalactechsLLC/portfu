@@ -1,6 +1,6 @@
 [package]
 name = "portfu"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 authors = ["James Hoerr"]
 description = "Rust HTTP Server Libary built Around Hyper.rs with Macros Similar to Actix "
@@ -23,8 +23,8 @@ log = "0.4.21"
 oauth2 = "4.4.2"
 octocrab = "0.38.0"
 once_cell = "1.19.0"
-portfu_core = {path = "../portfu_core", version = "1.0.0"}
-portfu_macros = {path = "../portfu_macros", version = "1.0.0"}
+portfu_core = {path = "../portfu_core", version = "1.1.0"}
+portfu_macros = {path = "../portfu_macros", version = "1.1.0"}
 reqwest = {version="0.12.3", default-features = false, features = ["rustls-tls", "json", "stream"] }
 rustls = { version= "0.23.4" }
 rustls-pemfile = "2.1.2"

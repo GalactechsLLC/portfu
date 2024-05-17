@@ -1,18 +1,17 @@
-use crate::pfcore::filters::FilterFn;
-use crate::pfcore::filters::{Filter, FilterResult};
-use crate::pfcore::service::{IncomingRequest, ServiceRequest};
-use crate::pfcore::wrappers::{WrapperFn, WrapperResult};
-use crate::pfcore::{ServiceData, ServiceRegister, ServiceRegistry, ServiceResponse};
+use crate::filters::{Filter, FilterFn, FilterResult};
+use crate::service::{IncomingRequest, ServiceRequest};
 use crate::signal::await_termination;
 use crate::ssl::load_ssl_certs;
+use crate::task::{Task, TaskFn};
+use crate::wrappers::{WrapperFn, WrapperResult};
+use crate::{IntoStreamBody, ServiceData, ServiceRegister, ServiceRegistry, ServiceResponse};
 use http::{Extensions, Request, Response, StatusCode};
 use http_body_util::{BodyExt, BodyStream, Empty, StreamBody};
 use hyper::body::Incoming;
 use hyper::server::conn::http1::Builder;
 use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
-use log::error;
-use pfcore::task::Task;
+use log::{error, info};
 use serde::{Deserialize, Serialize};
 use std::io::{Error, ErrorKind};
 use std::net::{Ipv4Addr, SocketAddr};
@@ -82,6 +81,7 @@ impl Server {
         let mut background_tasks = JoinSet::new();
         for task in server.tasks.iter().cloned() {
             let state = server.shared_state.clone();
+            info!("Spawning Task {}", task.name());
             background_tasks.spawn(async move { task.task_fn.run(state).await });
         }
         while server.run.load(Ordering::Relaxed) {
@@ -183,6 +183,7 @@ impl Server {
                 Some(service) => {
                     request.extensions_mut().extend(server.shared_state.clone());
                     let mut service_data = ServiceData {
+                        server: server.clone(),
                         request: ServiceRequest {
                             request: IncomingRequest::Stream(request),
                             path: service.path.clone(),
@@ -197,7 +198,19 @@ impl Server {
                             }
                         }
                     }
-                    service_data = service.handle(service_data).await?;
+                    service_data =
+                        service
+                            .handle(service_data)
+                            .await
+                            .unwrap_or_else(|(mut sd, e)| {
+                                error!(
+                                    "Service Error when Handling {} - {e:?}",
+                                    sd.request.request.uri()
+                                );
+                                *sd.response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+                                *sd.response.body_mut() = format!("{:?}", e).stream_body();
+                                sd
+                            });
                     for func in server.wrappers.iter() {
                         match func.after(&mut service_data).await {
                             WrapperResult::Continue => {}

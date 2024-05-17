@@ -1,6 +1,7 @@
 use http::{Method, Request, Response, Uri};
 use http_body_util::{BodyStream, Empty, Full, StreamBody};
 use hyper::body::{Body, Bytes, Frame, Incoming, SizeHint};
+use log::error;
 use pfcore::service::ConsumedBodyType;
 use rustls::client::ClientConfig;
 use rustls::pki_types::ServerName;
@@ -119,7 +120,7 @@ pub async fn send_request<T: Into<SupportedBody>>(
     let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await?;
     tokio::task::spawn(async move {
         if let Err(err) = conn.await {
-            println!("Connection failed: {:?}", err);
+            error!("Connection failed: {:?}", err);
         }
     });
     let path = url.path();

@@ -1,4 +1,5 @@
 use log::{info, LevelFilter};
+use portfu::endpoints::edit::EditHandler;
 use portfu::filters::method::*;
 use portfu::filters::{any, has_header};
 use portfu::macros::{get, interval, post, static_files, task, websocket};
@@ -78,10 +79,11 @@ async fn main() -> Result<(), Error> {
             "Method Filters".to_string(),
             &[GET.clone(), POST.clone(), PUT.clone(), DELETE.clone()],
         ))
+        .register(EditHandler {})
         .register(StaticFiles) //Register Each Service directly with the server
         .register(
             //Sub Groups are also services
-            ServiceGroup::default() //Services can be grouped into ServiceGroups to make it easier to apply shared wrappers or filters
+            ServiceGroup::default() //Services can be grouped into ServiceGroups to make it easier to apply shared wrappers or filters.
                 //Filters at the ServiceGroup level apply to service defined below them only, this is the same with any wrappers
                 .service(example_get) //This service is defined above the filter and will not have the filter applied
                 .filter(has_header(HeaderName::from_static("content-length")))

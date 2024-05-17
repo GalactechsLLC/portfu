@@ -60,7 +60,10 @@ impl ServiceHandler for OAuthLoginHandler {
     fn name(&self) -> &str {
         "login"
     }
-    async fn handle(&self, mut data: crate::prelude::ServiceData) -> Result<ServiceData, Error> {
+    async fn handle(
+        &self,
+        mut data: crate::prelude::ServiceData,
+    ) -> Result<ServiceData, (ServiceData, Error)> {
         // Create a PKCE code verifier and SHA-256 encode it as a code challenge.
         let (pkce_code_challenge, _pkce_code_verifier) = PkceCodeChallenge::new_random_sha256();
         // Generate the authorization URL to which we'll redirect the user.
@@ -88,7 +91,10 @@ impl ServiceHandler for OAuthAuthHandler {
     fn name(&self) -> &str {
         "auth"
     }
-    async fn handle(&self, mut data: crate::prelude::ServiceData) -> Result<ServiceData, Error> {
+    async fn handle(
+        &self,
+        mut data: crate::prelude::ServiceData,
+    ) -> Result<ServiceData, (ServiceData, Error)> {
         let mut user_data: UserData = if let Some(session) = data.request.get_mut::<Session>() {
             session.data.remove().unwrap_or(UserData {
                 user_id: vec![],

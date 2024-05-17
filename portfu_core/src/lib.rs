@@ -1,14 +1,19 @@
+mod editable;
 pub mod files;
 pub mod filters;
 pub mod routes;
+pub mod server;
 pub mod service;
+pub mod signal;
 pub mod sockets;
+mod ssl;
 pub mod task;
 pub mod wrappers;
 
+use crate::server::Server;
 use crate::service::{BodyType, IncomingRequest, Service, ServiceRequest};
 use async_trait::async_trait;
-use http::{Response, StatusCode};
+use http::Response;
 use http_body_util::Full;
 use http_body_util::{BodyExt, BodyStream, StreamBody};
 use hyper::body::Bytes;
@@ -23,7 +28,7 @@ use std::sync::Arc;
 #[async_trait]
 pub trait ServiceHandler {
     fn name(&self) -> &str;
-    async fn handle(&self, data: ServiceData) -> Result<ServiceData, Error>;
+    async fn handle(&self, data: ServiceData) -> Result<ServiceData, (ServiceData, Error)>;
 }
 impl Debug for (dyn ServiceHandler + Send + Sync + 'static) {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -37,7 +42,7 @@ impl ServiceHandler for (&'static str, &'static str) {
         self.0
     }
 
-    async fn handle(&self, mut data: ServiceData) -> Result<ServiceData, Error> {
+    async fn handle(&self, mut data: ServiceData) -> Result<ServiceData, (ServiceData, Error)> {
         *data.response.body_mut() = Bytes::from_static(self.1.as_bytes()).stream_body();
         Ok(data)
     }
@@ -49,7 +54,7 @@ impl ServiceHandler for (String, String) {
         &self.0
     }
 
-    async fn handle(&self, mut data: ServiceData) -> Result<ServiceData, Error> {
+    async fn handle(&self, mut data: ServiceData) -> Result<ServiceData, (ServiceData, Error)> {
         *data.response.body_mut() = Bytes::from(self.1.clone()).stream_body();
         Ok(data)
     }
@@ -61,7 +66,7 @@ impl ServiceHandler for (&'static str, &'static [u8]) {
         self.0
     }
 
-    async fn handle(&self, mut data: ServiceData) -> Result<ServiceData, Error> {
+    async fn handle(&self, mut data: ServiceData) -> Result<ServiceData, (ServiceData, Error)> {
         *data.response.body_mut() = Bytes::from_static(self.1).stream_body();
         Ok(data)
     }
@@ -110,6 +115,14 @@ impl<'a> IntoStreamBody for &'a str {
     }
 }
 
+impl IntoStreamBody for Vec<u8> {
+    type Data = Bytes;
+    type Error = IntoStreamError;
+    fn stream_body(self) -> ServiceBody {
+        Bytes::from(self).stream_body()
+    }
+}
+
 impl IntoStreamBody for Full<Bytes> {
     type Data = Bytes;
     type Error = IntoStreamError;
@@ -122,6 +135,7 @@ impl IntoStreamBody for Full<Bytes> {
 }
 
 pub struct ServiceData {
+    pub server: Arc<Server>,
     pub request: ServiceRequest,
     pub response: ServiceResponse,
 }
@@ -138,23 +152,6 @@ impl ServiceData {
         } else {
             address.to_string()
         }
-    }
-}
-
-struct DefaultHandler {}
-#[async_trait]
-impl ServiceHandler for DefaultHandler {
-    fn name(&self) -> &str {
-        "DefaultHandler"
-    }
-    async fn handle(&self, mut data: ServiceData) -> Result<ServiceData, Error> {
-        *data.response.status_mut() = StatusCode::NOT_FOUND;
-        *data.response.body_mut() = Bytes::from(format!(
-            "Failed to find Path: {}",
-            data.request.request.uri().path()
-        ))
-        .stream_body();
-        Ok(data)
     }
 }
 
