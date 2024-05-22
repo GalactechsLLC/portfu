@@ -421,6 +421,7 @@ dependencies = [
  "oauth2",
  "octocrab",
  "portfu",
+ "portfu_admin",
  "simple_logger",
  "tokio",
 ]
@@ -1358,7 +1359,7 @@ checksum = "d231b230927b5e4ad203db57bbcbee2802f6bce620b1e4a9024a07d94e2907ec"
 
 [[package]]
 name = "portfu"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "async-trait",
  "cookie",
@@ -1391,8 +1392,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "portfu_admin"
+version = "1.2.0"
+dependencies = [
+ "portfu",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "portfu_core"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -1419,7 +1429,7 @@ dependencies = [
 
 [[package]]
 name = "portfu_macros"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "async-trait",
  "http 1.1.0",

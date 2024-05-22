@@ -165,7 +165,7 @@ impl ToTokens for Endpoint {
                     let service_data: Ident = Ident::new("ServiceData", segment.ident.span());
                     if response == segment.ident {
                         dyn_vars.push(quote! {
-                            let #ident_val: &mut Response<Full<Bytes>> = &mut data.response;
+                            let #ident_val: &mut Response<Full<Bytes>> = &mut handle_data.response;
                         });
                         additional_function_vars.push(quote! {
                             #ident_val,
@@ -173,7 +173,7 @@ impl ToTokens for Endpoint {
                         continue;
                     } else if service_data == segment.ident {
                         dyn_vars.push(quote! {
-                            let #ident_val: &mut ServiceData = data;
+                            let #ident_val = &mut handle_data;
                         });
                         additional_function_vars.push(quote! {
                             #ident_val,
@@ -188,7 +188,7 @@ impl ToTokens for Endpoint {
                         let service_data: Ident = Ident::new("ServiceData", segment.ident.span());
                         if service_data == segment.ident {
                             dyn_vars.push(quote! {
-                                let #ident_val: &mut ServiceData = data;
+                                let #ident_val = &mut handle_data;
                             });
                             additional_function_vars.push(quote! {
                                 #ident_val,
@@ -199,12 +199,12 @@ impl ToTokens for Endpoint {
                 }
             }
             dyn_vars.push(quote! {
-                let #ident_val: #ident_type = match ::portfu::pfcore::FromRequest::from_request(&mut data.request, stringify!(#ident_val)).await {
+                let #ident_val: #ident_type = match ::portfu::pfcore::FromRequest::from_request(&mut handle_data.request, stringify!(#ident_val)).await {
                     Ok(v) => v,
                     Err(e) => {
-                        *data.response.status_mut() = ::portfu::prelude::http::StatusCode::INTERNAL_SERVER_ERROR;
-                        *data.response.body_mut() = ::portfu::prelude::hyper::body::Bytes::from(format!("Failed to extract {} as {}, {e:?}", stringify!(#ident_val), stringify!(#ident_type).replace(' ',""))).stream_body();
-                        return Ok(data);
+                        *handle_data.response.status_mut() = ::portfu::prelude::http::StatusCode::INTERNAL_SERVER_ERROR;
+                        *handle_data.response.body_mut() = ::portfu::prelude::hyper::body::Bytes::from(format!("Failed to extract {} as {}, {e:?}", stringify!(#ident_val), stringify!(#ident_type).replace(' ',""))).stream_body();
+                        return Ok(handle_data);
                     }
                 };
             });
@@ -233,7 +233,7 @@ impl ToTokens for Endpoint {
                 }
                 async fn handle(
                     &self,
-                    mut data: ::portfu::prelude::ServiceData
+                    mut handle_data: ::portfu::prelude::ServiceData
                 ) -> Result<::portfu::prelude::ServiceData, (::portfu::prelude::ServiceData, ::std::io::Error)> {
                     use ::portfu::pfcore::IntoStreamBody;
                     #ast
@@ -241,14 +241,14 @@ impl ToTokens for Endpoint {
                     match #name(#(#additional_function_vars)*).await {
                         Ok(t) => {
                             let bytes: ::portfu::prelude::hyper::body::Bytes = t.into();
-                            *data.response.body_mut() = bytes.stream_body();
-                            Ok(data)
+                            *handle_data.response.body_mut() = bytes.stream_body();
+                            Ok(handle_data)
                         }
                         Err(e) => {
                             let err = format!("{e:?}");
                             let bytes: ::portfu::prelude::hyper::body::Bytes = err.into();
-                            *data.response.body_mut() = bytes.stream_body();
-                            Ok(data)
+                            *handle_data.response.body_mut() = bytes.stream_body();
+                            Ok(handle_data)
                         }
                     }
                 }

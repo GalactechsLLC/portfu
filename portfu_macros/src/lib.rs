@@ -163,7 +163,7 @@ fn parse_path_variables(path: &LitStr) -> (Vec<TokenStream2>, Vec<String>) {
             }) {
                 variables.push(
                     quote! {
-                            let #segment: ::portfu::prelude::Path = ::portfu::pfcore::FromRequest::from_request(&mut data.request, stringify!(#segment)).await.unwrap();
+                            let #segment: ::portfu::prelude::Path = ::portfu::pfcore::FromRequest::from_request(&mut handle_data.request, stringify!(#segment)).await.unwrap();
                         }
                 );
                 path_vars.push(format!("{segment}"));

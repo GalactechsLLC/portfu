@@ -101,7 +101,7 @@ impl ToTokens for WebSocketRoute {
                                 None => {
                                     *response.status_mut() = ::portfu::prelude::http::StatusCode::INTERNAL_SERVER_ERROR;
                                     let bytes =::portfu::prelude::hyper::body::Bytes::from(format!("Failed to find {}", stringify!(#ident_type).replace(' ',"")));
-                                    *data.response.body_mut() = bytes.stream_body();
+                                    *handle_data.response.body_mut() = bytes.stream_body();
                                     return Err(ServiceResponse {
                                         request,
                                         response
@@ -128,7 +128,7 @@ impl ToTokens for WebSocketRoute {
                     None => {
                         *response.status_mut() = ::portfu::prelude::http::StatusCode::INTERNAL_SERVER_ERROR;
                         let bytes =::portfu::prelude::hyper::body::Bytes::from(format!("Failed to find {} for {}", stringify!(#ident_type).replace(' ',""), stringify!(#function_name)));
-                        *data.response.body_mut() = bytes.stream_body();
+                        *handle_data.response.body_mut() = bytes.stream_body();
                         return Err(ServiceResponse {
                             request,
                             response
@@ -171,19 +171,19 @@ impl ToTokens for WebSocketRoute {
                 }
                 async fn handle(
                     &self,
-                    mut data: ::portfu::prelude::ServiceData
+                    mut handle_data: ::portfu::prelude::ServiceData
                 ) -> Result<::portfu::prelude::ServiceData, (::portfu::prelude::ServiceData, ::std::io::Error)> {
                     use ::portfu::pfcore::IntoStreamBody;
-                    if data.request.request.is_upgrade_request() {
+                    if handle_data.request.request.is_upgrade_request() {
                         #ast
                         #(#dyn_vars)*
                         log::info!("Upgrading Websocket");
-                        let (response, websocket) = match data.request.request.upgrade() {
+                        let (response, websocket) = match handle_data.request.request.upgrade() {
                             Ok((response, websocket)) => (response, websocket),
                             Err(e) => {
                                 let bytes = ::portfu::prelude::hyper::body::Bytes::from("Failed to Upgrade Request");
-                                *data.response.body_mut() = bytes.stream_body();
-                                return Ok::<::portfu::prelude::ServiceData, (::portfu::prelude::ServiceData, ::std::io::Error)>(data);
+                                *handle_data.response.body_mut() = bytes.stream_body();
+                                return Ok::<::portfu::prelude::ServiceData, (::portfu::prelude::ServiceData, ::std::io::Error)>(handle_data);
                             }
                         };
                         let peers = self.peers.clone();
@@ -222,12 +222,12 @@ impl ToTokens for WebSocketRoute {
                         });
                         log::info!("Sending Upgrade Response");
                         let (parts, body) = response.into_parts();
-                        data.response = Response::from_parts(parts, body.stream_body());
-                        Ok::<::portfu::prelude::ServiceData, (::portfu::prelude::ServiceData, ::std::io::Error)>(data)
+                        handle_data.response = Response::from_parts(parts, body.stream_body());
+                        Ok::<::portfu::prelude::ServiceData, (::portfu::prelude::ServiceData, ::std::io::Error)>(handle_data)
                     } else {
                         let bytes = ::portfu::prelude::hyper::body::Bytes::from("HTTP NOT SUPPORTED ON THIS ENDPOINT");
-                        *data.response.body_mut() = bytes.stream_body();
-                        Ok::<::portfu::prelude::ServiceData, (::portfu::prelude::ServiceData, ::std::io::Error)>(data)
+                        *handle_data.response.body_mut() = bytes.stream_body();
+                        Ok::<::portfu::prelude::ServiceData, (::portfu::prelude::ServiceData, ::std::io::Error)>(handle_data)
                     }
                 }
             }

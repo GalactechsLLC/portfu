@@ -1,4 +1,3 @@
-use crate::editable::EditFn;
 use crate::filters::{FilterFn, FilterResult};
 use crate::routes::Route;
 use crate::wrappers::{WrapperFn, WrapperResult};
@@ -23,7 +22,6 @@ use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
 pub struct ServiceBuilder {
     path: Route,
     name: Option<String>,
-    editable: Option<Arc<dyn EditFn<Error = Error> + Sync + Send>>,
     filters: Vec<Arc<dyn FilterFn + Sync + Send>>,
     wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
     handler: Option<Arc<dyn ServiceHandler + Send + Sync>>,
@@ -33,7 +31,6 @@ impl ServiceBuilder {
         Self {
             path: Route::new(path.to_string()),
             name: None,
-            editable: None,
             filters: vec![],
             wrappers: vec![],
             handler: None,
@@ -49,11 +46,6 @@ impl ServiceBuilder {
         s.filters.push(filter);
         s
     }
-    pub fn editable(self, editable: Arc<dyn EditFn<Error = Error> + Sync + Send>) -> Self {
-        let mut s = self;
-        s.editable = Some(editable);
-        s
-    }
     pub fn wrap(self, wrappers: Arc<dyn WrapperFn + Sync + Send>) -> Self {
         let mut s = self;
         s.wrappers.push(wrappers);
@@ -67,7 +59,6 @@ impl ServiceBuilder {
     pub fn build(self) -> Service {
         Service {
             path: Arc::new(self.path),
-            editable: self.editable,
             name: self.name.unwrap_or_default(),
             filters: self.filters,
             wrappers: self.wrappers,
@@ -118,7 +109,6 @@ impl ServiceGroup {
 pub struct Service {
     pub path: Arc<Route>,
     pub name: String,
-    pub editable: Option<Arc<dyn EditFn<Error = Error> + Sync + Send>>,
     pub filters: Vec<Arc<dyn FilterFn + Sync + Send>>,
     pub wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
     pub handler: Option<Arc<dyn ServiceHandler + Send + Sync>>,

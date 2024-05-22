@@ -1,4 +1,4 @@
-mod editable;
+pub mod editable;
 pub mod files;
 pub mod filters;
 pub mod routes;
@@ -10,6 +10,7 @@ mod ssl;
 pub mod task;
 pub mod wrappers;
 
+use crate::editable::EditResult;
 use crate::server::Server;
 use crate::service::{BodyType, IncomingRequest, Service, ServiceRequest};
 use async_trait::async_trait;
@@ -17,6 +18,7 @@ use http::Response;
 use http_body_util::Full;
 use http_body_util::{BodyExt, BodyStream, StreamBody};
 use hyper::body::Bytes;
+use log::trace;
 use once_cell::sync::Lazy;
 use serde::Deserialize;
 use std::fmt::{Debug, Formatter};
@@ -29,6 +31,20 @@ use std::sync::Arc;
 pub trait ServiceHandler {
     fn name(&self) -> &str;
     async fn handle(&self, data: ServiceData) -> Result<ServiceData, (ServiceData, Error)>;
+    fn is_editable(&self) -> bool {
+        false
+    }
+    async fn current_value(&self) -> EditResult {
+        EditResult::NotEditable
+    }
+    async fn update_value(&self, new_value: Vec<u8>, current_value: Option<Vec<u8>>) -> EditResult {
+        trace!(
+            "Bytes sent to not Editable Service: {:?} - Current Value {:?}",
+            new_value,
+            current_value
+        );
+        EditResult::NotEditable
+    }
 }
 impl Debug for (dyn ServiceHandler + Send + Sync + 'static) {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {

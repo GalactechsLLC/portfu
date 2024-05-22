@@ -37,6 +37,10 @@ pub struct ServerConfig {
     pub host: String,
     pub port: u16,
     pub ssl_config: Option<SslConfig>,
+    pub keep_alive: bool,
+    pub half_close: bool,
+    pub preserve_header_case: bool,
+    pub max_buf_size: usize,
 }
 impl Default for ServerConfig {
     fn default() -> Self {
@@ -44,16 +48,20 @@ impl Default for ServerConfig {
             host: "localhost".to_string(),
             port: 8080,
             ssl_config: None,
+            keep_alive: true,
+            half_close: true,
+            preserve_header_case: true,
+            max_buf_size: 1024 * 1024 * 2, //2 Mib
         }
     }
 }
 
 #[derive(Debug)]
 pub struct Server {
-    pub services: Arc<ServiceRegistry>,
+    pub registry: Arc<ServiceRegistry>,
     pub config: ServerConfig,
     pub run: Arc<AtomicBool>,
-    pub shared_state: Extensions,
+    pub shared_state: Arc<Extensions>,
     filters: Vec<Arc<dyn FilterFn + Sync + Send>>,
     tasks: Vec<Arc<Task>>,
     wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
@@ -71,7 +79,10 @@ impl Server {
             None => None,
         });
         let mut http = Builder::new();
-        http.keep_alive(true);
+        http.half_close(server.config.half_close);
+        http.keep_alive(server.config.keep_alive);
+        http.preserve_header_case(server.config.preserve_header_case);
+        http.max_buf_size(server.config.max_buf_size);
         let http = Arc::new(http);
         let server_run_handle = server.run.clone();
         spawn(async move {
@@ -82,7 +93,11 @@ impl Server {
         for task in server.tasks.iter().cloned() {
             let state = server.shared_state.clone();
             info!("Spawning Task {}", task.name());
-            background_tasks.spawn(async move { task.task_fn.run(state).await });
+            background_tasks.spawn(async move {
+                if let Err(e) = task.task_fn.run(state).await {
+                    error!("Error in background task: {e:?}");
+                }
+            });
         }
         while server.run.load(Ordering::Relaxed) {
             select!(
@@ -173,7 +188,7 @@ impl Server {
             Ok(response)
         } else {
             let mut handler = None;
-            for service in server.services.services.iter() {
+            for service in server.registry.services.iter() {
                 if service.handles(&request).await {
                     handler = Some(service.clone());
                     break;
@@ -181,7 +196,9 @@ impl Server {
             }
             match handler {
                 Some(service) => {
-                    request.extensions_mut().extend(server.shared_state.clone());
+                    request
+                        .extensions_mut()
+                        .extend(server.shared_state.as_ref().clone());
                     let mut service_data = ServiceData {
                         server: server.clone(),
                         request: ServiceRequest {
@@ -290,10 +307,10 @@ impl ServerBuilder {
     }
     pub fn build(self) -> Server {
         Server {
-            services: Arc::new(self.services),
+            registry: Arc::new(self.services),
             config: self.config,
             run: Arc::new(AtomicBool::new(true)),
-            shared_state: self.shared_state,
+            shared_state: Arc::new(self.shared_state),
             filters: self.filters,
             tasks: self.tasks,
             wrappers: self.wrappers,

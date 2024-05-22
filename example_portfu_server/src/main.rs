@@ -1,12 +1,12 @@
 use log::{info, LevelFilter};
-use portfu::endpoints::edit::EditHandler;
 use portfu::filters::method::*;
 use portfu::filters::{any, has_header};
-use portfu::macros::{get, interval, post, static_files, task, websocket};
+use portfu::macros::{files, get, interval, post, static_files, task, websocket};
 use portfu::pfcore::service::{IncomingRequest, ServiceGroup};
 use portfu::prelude::http::{HeaderName, Response};
 use portfu::prelude::*;
 use portfu::wrappers::sessions::SessionWrapper;
+use portfu_admin::PortfuAdmin;
 use simple_logger::SimpleLogger;
 use std::io::Error;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -15,7 +15,9 @@ use std::time::Duration;
 use tokio::select;
 use tokio::sync::RwLock;
 
-#[static_files("front_end_dist/")]
+#[files("/home/luna/Galactechs/workspace/portfu/example_portfu_server/front_end_dist/")]
+pub struct EditableFiles;
+#[static_files("front_end_static/")]
 pub struct StaticFiles;
 
 #[get("/")]
@@ -79,8 +81,9 @@ async fn main() -> Result<(), Error> {
             "Method Filters".to_string(),
             &[GET.clone(), POST.clone(), PUT.clone(), DELETE.clone()],
         ))
-        .register(EditHandler {})
         .register(StaticFiles) //Register Each Service directly with the server
+        .register(EditableFiles) //Register Each Service directly with the server
+        .register(PortfuAdmin::default()) //Register Each Service directly with the server
         .register(
             //Sub Groups are also services
             ServiceGroup::default() //Services can be grouped into ServiceGroups to make it easier to apply shared wrappers or filters.
