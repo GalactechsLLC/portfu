@@ -13,7 +13,7 @@ pub struct Task {
 #[async_trait]
 pub trait TaskFn {
     fn name(&self) -> &str;
-    async fn run(&self, state: Extensions) -> Result<(), Error>;
+    async fn run(&self, state: Arc<Extensions>) -> Result<(), Error>;
 }
 
 impl Debug for (dyn TaskFn + Send + Sync + 'static) {
@@ -28,7 +28,7 @@ impl TaskFn for Task {
         self.name.as_str()
     }
 
-    async fn run(&self, state: Extensions) -> Result<(), Error> {
+    async fn run(&self, state: Arc<Extensions>) -> Result<(), Error> {
         self.task_fn.run(state).await
     }
 }

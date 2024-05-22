@@ -57,7 +57,11 @@ impl ToTokens for Files {
                             .handler(std::sync::Arc::new(::portfu::pfcore::files::FileLoader {
                                 name,
                                 mime,
-                                path
+                                path,
+                                editable: true,
+                                cache_threshold: 65536,
+                                cache_status: std::sync::atomic::AtomicBool::default(),
+                                cached_value: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::with_capacity(0))),
                             })).build();
                         service_registry.register(__resource);
                     }

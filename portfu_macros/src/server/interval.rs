@@ -99,8 +99,8 @@ impl ToTokens for Interval {
                             dyn_vars.push(quote! {
                             let #ident_val: #ident_type = state.get::<Arc<#inner_type>>()
                                 .cloned()
-                                .map(::portfu::pfcore::State).ok_or(
-                                    ::std::io::Error::new(::std::io::ErrorKind::NotFound, "Failed to find State")
+                                .map(|data| ::portfu::pfcore::State(data)).ok_or(
+                                    ::std::io::Error::new(::std::io::ErrorKind::NotFound, format!("Failed to find State of type {}", stringify!(#inner_type)))
                                 )?;
                             });
                             additional_function_vars.push(quote! {
@@ -139,7 +139,7 @@ impl ToTokens for Interval {
                 }
                 async fn run(
                     &self,
-                    state: ::portfu::prelude::http::Extensions
+                    state: std::sync::Arc< ::portfu::prelude::http::Extensions >
                 ) -> Result<(), ::std::io::Error> {
                     #ast
                     let mut __interval_duration = ::tokio::time::interval(std::time::Duration::from_millis(#interval));

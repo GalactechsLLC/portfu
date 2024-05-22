@@ -114,7 +114,7 @@ impl ToTokens for Task {
                 }
                 async fn run(
                     &self,
-                    state: ::portfu::prelude::http::Extensions
+                    state: std::sync::Arc< ::portfu::prelude::http::Extensions >
                 ) -> Result<(), ::std::io::Error> {
                     ::tokio::spawn( async move {
                         select! {

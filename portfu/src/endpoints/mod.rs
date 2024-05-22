@@ -3,7 +3,6 @@ use hyper::body::Bytes;
 use pfcore::{IntoStreamBody, ServiceData};
 use std::io::Error;
 
-pub mod edit;
 pub mod oauth_login;
 
 pub fn send_internal_error(
