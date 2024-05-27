@@ -364,6 +364,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b42b6fa04a440b495c8b04d0e71b707c585f83cb9cb28cf8cd0d976c315e31b4"
 dependencies = [
  "powerfmt",
+ "serde",
 ]
 
 [[package]]
@@ -411,19 +412,6 @@ checksum = "a258e46cdc063eb8519c00b9fc845fc47bcfca4130e2f08e88665ceda8474245"
 dependencies = [
  "libc",
  "windows-sys 0.52.0",
-]
-
-[[package]]
-name = "example_portfu_server"
-version = "0.1.1"
-dependencies = [
- "log",
- "oauth2",
- "octocrab",
- "portfu",
- "portfu_admin",
- "simple_logger",
- "tokio",
 ]
 
 [[package]]
@@ -1396,8 +1384,12 @@ name = "portfu_admin"
 version = "1.2.0"
 dependencies = [
  "portfu",
+ "regex",
  "serde",
  "serde_json",
+ "struct-field-names-as-array",
+ "time",
+ "tokio",
 ]
 
 [[package]]
@@ -1442,6 +1434,19 @@ dependencies = [
  "syn",
  "tokio",
  "url",
+]
+
+[[package]]
+name = "portfu_runtime"
+version = "0.1.1"
+dependencies = [
+ "log",
+ "oauth2",
+ "octocrab",
+ "portfu",
+ "portfu_admin",
+ "simple_logger",
+ "tokio",
 ]
 
 [[package]]
@@ -2023,6 +2028,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "struct-field-names-as-array"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22ba4bae771f9cc992c4f403636c54d2ef13acde6367583e99d06bb336674dd9"
+dependencies = [
+ "struct-field-names-as-array-derive",
+]
+
+[[package]]
+name = "struct-field-names-as-array-derive"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2dbf8b57f3ce20e4bb171a11822b283bdfab6c4bb0fe64fa729f045f23a0938"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "subtle"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2443,6 +2468,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a183cf7feeba97b4dd1c0d46788634f6221d87fa961b305bed08c851829efcc0"
 dependencies = [
  "getrandom",
+ "serde",
 ]
 
 [[package]]

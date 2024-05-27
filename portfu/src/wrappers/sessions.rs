@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use cookie::Cookie;
 use dashmap::DashMap;
 use http::{header, Extensions, HeaderName, HeaderValue};
+use once_cell::sync::Lazy;
 use portfu_core::wrappers::{WrapperFn, WrapperResult};
 use portfu_core::ServiceData;
 use sha2::{Digest, Sha256};
@@ -12,19 +13,18 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 pub static SESSION_HEADER: &str = "session_id";
+pub static SESSIONS: Lazy<Arc<DashMap<String, Arc<Session>>>> = Lazy::new(Default::default);
 pub struct Session {
     pub data: Extensions,
     pub last_update: RwLock<Instant>,
 }
 
 pub struct SessionWrapper {
-    pub sessions: Arc<DashMap<String, Arc<Session>>>,
     pub session_duration: Duration,
 }
 impl Default for SessionWrapper {
     fn default() -> Self {
         Self {
-            sessions: Arc::new(Default::default()),
             session_duration: Duration::from_secs(60 * 30), //30 minutes
         }
     }
@@ -48,7 +48,7 @@ impl SessionWrapper {
             data: Extensions::new(),
             last_update: RwLock::new(Instant::now()),
         });
-        self.sessions.insert(server_session_id, session.clone());
+        SESSIONS.insert(server_session_id, session.clone());
         (cookie, session)
     }
     pub async fn get_session(&self, data: &ServiceData) -> Option<Arc<Session>> {
@@ -58,11 +58,7 @@ impl SessionWrapper {
         let mut hasher = Sha256::new();
         hasher.update([session_cookie.value().as_bytes(), salt.as_bytes()].concat());
         let server_session_id = hex::encode(hasher.finalize().as_slice());
-        if let Some(session) = self
-            .sessions
-            .get(&server_session_id)
-            .map(|v| v.value().clone())
-        {
+        if let Some(session) = SESSIONS.get(&server_session_id).map(|v| v.value().clone()) {
             let last_update = *session.last_update.read().await;
             if Instant::now().duration_since(last_update) >= self.session_duration {
                 None

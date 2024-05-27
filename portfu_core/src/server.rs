@@ -70,6 +70,7 @@ impl Server {
     pub async fn run(self) -> Result<(), Error> {
         let server = Arc::new(self);
         let socket_addr = Self::get_socket_addr(&server.config)?;
+        info!("Server Starting Up on {socket_addr}");
         let listener = TcpListener::bind(socket_addr).await?;
         let tls_acceptor = Arc::new(match server.config.ssl_config.as_ref() {
             Some(_) => {
@@ -140,6 +141,7 @@ impl Server {
                 _ = tokio::time::sleep(Duration::from_millis(100)) => {}
             )
         }
+        info!("Server Exiting");
         background_tasks.shutdown().await;
         Ok(())
     }
@@ -198,7 +200,7 @@ impl Server {
                 Some(service) => {
                     request
                         .extensions_mut()
-                        .extend(server.shared_state.as_ref().clone());
+                        .extend(service.shared_state.clone());
                     let mut service_data = ServiceData {
                         server: server.clone(),
                         request: ServiceRequest {
@@ -251,6 +253,7 @@ pub struct ServerBuilder {
     services: ServiceRegistry,
     config: ServerConfig,
     shared_state: Extensions,
+    run_handle: Arc<AtomicBool>,
     filters: Vec<Arc<dyn FilterFn + Sync + Send>>,
     tasks: Vec<Arc<Task>>,
     wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
@@ -261,6 +264,7 @@ impl ServerBuilder {
             services: ServiceRegistry { services: vec![] },
             config,
             shared_state: Extensions::default(),
+            run_handle: Arc::new(AtomicBool::new(true)),
             filters: vec![],
             tasks: vec![],
             wrappers: vec![],
@@ -283,7 +287,7 @@ impl ServerBuilder {
     }
     pub fn register<T: ServiceRegister>(self, service: T) -> Self {
         let mut s = self;
-        service.register(&mut s.services);
+        service.register(&mut s.services, s.shared_state.clone());
         s
     }
     pub fn filter(self, filter: Filter) -> Self {
@@ -300,6 +304,10 @@ impl ServerBuilder {
         self.tasks.push(Arc::new(task.into()));
         self
     }
+    pub fn run_handle(mut self, run_handle: Arc<AtomicBool>) -> Self {
+        self.run_handle = run_handle;
+        self
+    }
     pub fn shared_state<T: Send + Sync + 'static>(self, shared_state: T) -> Self {
         let mut s = self;
         s.shared_state.insert(Arc::new(shared_state));
@@ -309,7 +317,7 @@ impl ServerBuilder {
         Server {
             registry: Arc::new(self.services),
             config: self.config,
-            run: Arc::new(AtomicBool::new(true)),
+            run: self.run_handle,
             shared_state: Arc::new(self.shared_state),
             filters: self.filters,
             tasks: self.tasks,
@@ -323,6 +331,7 @@ impl Default for ServerBuilder {
             services: ServiceRegistry { services: vec![] },
             config: ServerConfig::default(),
             shared_state: Extensions::default(),
+            run_handle: Arc::new(AtomicBool::new(true)),
             filters: vec![],
             tasks: vec![],
             wrappers: vec![],

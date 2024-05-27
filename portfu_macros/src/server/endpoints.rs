@@ -3,7 +3,10 @@ use crate::{extract_method_filters, parse_path_variables};
 use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
 use quote::{quote, ToTokens};
 use std::collections::HashSet;
-use syn::{parse_quote, punctuated::Punctuated, FnArg, LitStr, Pat, Path, Token, Type};
+use syn::{
+    parse_quote, punctuated::Punctuated, FnArg, GenericParam, Generics, LitStr, Pat, Path, Token,
+    Type,
+};
 
 pub struct EndpointArgs {
     pub path: syn::LitStr,
@@ -52,6 +55,7 @@ impl syn::parse::Parse for EndpointArgs {
 pub struct Endpoint {
     /// Name of the handler function being annotated.
     name: Ident,
+    generics: Generics,
     /// Args passed to routing macro.
     args: Args,
     /// AST of the handler function being annotated.
@@ -62,6 +66,7 @@ pub struct Endpoint {
 impl Endpoint {
     pub fn new(args: EndpointArgs, ast: syn::ItemFn, method: Option<Method>) -> syn::Result<Self> {
         let name = ast.sig.ident.clone();
+        let generics = ast.sig.generics.clone();
 
         // Try and pull out the doc comments so that we can reapply them to the generated struct.
         // Note that multi line doc comments are converted to multiple doc attributes.
@@ -90,6 +95,7 @@ impl Endpoint {
 
         Ok(Self {
             name,
+            generics,
             args,
             ast,
             doc_attributes,
@@ -101,6 +107,7 @@ impl ToTokens for Endpoint {
     fn to_tokens(&self, output: &mut TokenStream2) {
         let Self {
             name,
+            generics,
             ast,
             args,
             doc_attributes,
@@ -117,6 +124,77 @@ impl ToTokens for Endpoint {
             .map_or_else(|| name.to_string(), LitStr::value);
         let filters_name = format!("{resource_name}_filters");
         let method_filters = extract_method_filters(methods);
+        let mut additional_function_vars = vec![];
+        let (mut dyn_vars, path_vars) = parse_path_variables(path);
+        let mut has_generics = false;
+        let generic_vals: Vec<Ident> = generics
+            .params
+            .iter()
+            .map(|p| match p {
+                GenericParam::Lifetime(l) => {
+                    has_generics = true;
+                    l.lifetime.ident.clone()
+                }
+                GenericParam::Type(t) => {
+                    has_generics = true;
+                    t.ident.clone()
+                }
+                GenericParam::Const(_) => {
+                    panic!("CONST Generics not Supported Yet");
+                }
+            })
+            .collect();
+        let generic_lables = if has_generics {
+            quote! {
+                <#(#generic_vals),*>
+            }
+        } else {
+            quote! {}
+        };
+        let struct_def = if has_generics {
+            quote! {
+                pub struct #name #generics {
+                    _phantom_data: std::marker::PhantomData #generic_lables
+                }
+            }
+        } else {
+            quote! {
+                pub struct #name;
+            }
+        };
+        let default_struct = if has_generics {
+            quote! {
+                impl #generics Default for #name #generic_lables {
+                    fn default() -> Self {
+                        Self {
+                            _phantom_data: Default::default()
+                        }
+                    }
+                }
+            }
+        } else {
+            quote! {
+                impl Default for #name {
+                    fn default() -> Self {
+                        Self {}
+                    }
+                }
+            }
+        };
+        let function_def = if has_generics {
+            let mut new_ast = ast.clone();
+            new_ast.sig.generics = parse_quote! {
+                #generics
+            };
+            quote! { #new_ast }
+        } else {
+            quote! { #ast }
+        };
+        let function_ext = if has_generics {
+            quote! { :: #generic_lables }
+        } else {
+            quote! {}
+        };
         let registrations = quote! {
             let __resource = ::portfu::pfcore::service::ServiceBuilder::new(#path)
                 .name(#resource_name)
@@ -134,8 +212,6 @@ impl ToTokens for Endpoint {
                 #(.wrap(#wrappers))*
                 .handler(std::sync::Arc::new(service)).build()
         };
-        let mut additional_function_vars = vec![];
-        let (mut dyn_vars, path_vars) = parse_path_variables(path);
         for arg in ast.sig.inputs.iter() {
             let (ident_type, ident_val): (Type, Ident) = match arg {
                 FnArg::Receiver(_) => {
@@ -215,19 +291,20 @@ impl ToTokens for Endpoint {
         let stream = quote! {
             #(#doc_attributes)*
             #[allow(non_camel_case_types, missing_docs)]
-            pub struct #name;
-            impl ::portfu::pfcore::ServiceRegister for #name {
-                fn register(self, service_registry: &mut portfu::prelude::ServiceRegistry) {
+            #struct_def
+            #default_struct
+            impl #generics ::portfu::pfcore::ServiceRegister for #name #generic_lables {
+                fn register(self, service_registry: &mut portfu::prelude::ServiceRegistry, _shared_state: portfu::prelude::http::Extensions) {
                     #registrations
                 }
             }
-            impl From<#name> for ::portfu::prelude::Service {
-                fn from(service: #name) -> Service {
+            impl #generics From<#name #generic_lables > for ::portfu::prelude::Service {
+                fn from(service: #name #generic_lables) -> ::portfu::prelude::Service {
                     #service_def
                 }
             }
             #[::portfu::prelude::async_trait::async_trait]
-            impl ::portfu::pfcore::ServiceHandler for #name {
+            impl #generics ::portfu::pfcore::ServiceHandler for #name #generic_lables {
                 fn name(&self) -> &str {
                     stringify!(#name)
                 }
@@ -236,9 +313,9 @@ impl ToTokens for Endpoint {
                     mut handle_data: ::portfu::prelude::ServiceData
                 ) -> Result<::portfu::prelude::ServiceData, (::portfu::prelude::ServiceData, ::std::io::Error)> {
                     use ::portfu::pfcore::IntoStreamBody;
-                    #ast
+                    #function_def
                     #(#dyn_vars)*
-                    match #name(#(#additional_function_vars)*).await {
+                    match #name #function_ext(#(#additional_function_vars)*).await {
                         Ok(t) => {
                             let bytes: ::portfu::prelude::hyper::body::Bytes = t.into();
                             *handle_data.response.body_mut() = bytes.stream_body();

@@ -13,6 +13,10 @@ repository = "https://github.com/GalactechsLLC/portfu/portfu_admin"
 portfu = {path = "../portfu", version = "1.2.0"}
 serde_json = "1.0.116"
 serde = { version = "1.0.200", features = ["derive"] }
+time = { version = "0.3.36", features = ["serde-well-known"] }
+tokio = {version = "1.37.0", features=["rt-multi-thread", "sync", "signal", "macros", "process", "time", "fs", "net"]}
+struct-field-names-as-array = "0.3.0"
+regex = "1.10.4"
 
 [features]
 default = []

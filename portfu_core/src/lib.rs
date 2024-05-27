@@ -14,7 +14,7 @@ use crate::editable::EditResult;
 use crate::server::Server;
 use crate::service::{BodyType, IncomingRequest, Service, ServiceRequest};
 use async_trait::async_trait;
-use http::Response;
+use http::{Extensions, Response};
 use http_body_util::Full;
 use http_body_util::{BodyExt, BodyStream, StreamBody};
 use hyper::body::Bytes;
@@ -172,7 +172,7 @@ impl ServiceData {
 }
 
 pub trait ServiceRegister {
-    fn register(self, service_registry: &mut ServiceRegistry);
+    fn register(self, service_registry: &mut ServiceRegistry, shared_state: Extensions);
 }
 
 pub static mut STATIC_REGISTRY: Lazy<ServiceRegistry> =

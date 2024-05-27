@@ -41,29 +41,38 @@ impl ToTokens for Files {
         let out = quote! {
             #[allow(non_camel_case_types, missing_docs)]
             pub struct #name;
-            impl ::portfu::pfcore::ServiceRegister for #name {
-                fn register(self, service_registry: &mut portfu::prelude::ServiceRegistry) {
+            impl From<#name> for ::portfu::prelude::ServiceGroup {
+                fn from(slf: #name) -> ::portfu::prelude::ServiceGroup {
                     let mut files = ::std::collections::HashMap::new();
                     let root_path = ::std::path::Path::new(#root_path);
                     ::portfu::prelude::log::info!("Searching for files at: {root_path:?}");
+                    if !root_path.exists() {
+                        if let Err(e) = std::fs::create_dir(root_path) {
+                            ::portfu::prelude::log::error!("Error Creating Root Directory: {e:?}");
+                        }
+                    }
                     if let Err(e) = ::portfu::pfcore::files::read_directory(root_path, root_path, &mut files) {
                         ::portfu::prelude::log::error!("Error Loading files: {e:?}");
                     }
-                    for (name, path) in files.into_iter() {
-                        let mime = ::portfu::pfcore::files::get_mime_type(&name);
-                        let __resource = ::portfu::pfcore::service::ServiceBuilder::new(&name)
-                            .name(&name)
-                            .filter(::portfu::filters::method::GET.clone())
-                            .handler(std::sync::Arc::new(::portfu::pfcore::files::FileLoader {
-                                name,
-                                mime,
-                                path,
-                                editable: true,
-                                cache_threshold: 65536,
-                                cache_status: std::sync::atomic::AtomicBool::default(),
-                                cached_value: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::with_capacity(0))),
-                            })).build();
-                        service_registry.register(__resource);
+                    ::portfu::prelude::ServiceGroup {
+                        filters: vec![],
+                        wrappers: vec![],
+                        services: files.into_iter().map(| (name, path) | {
+                            let mime = ::portfu::pfcore::files::get_mime_type(&name);
+                            ::portfu::pfcore::service::ServiceBuilder::new(&name)
+                                .name(&name)
+                                .filter(::portfu::filters::method::GET.clone())
+                                .handler(std::sync::Arc::new(::portfu::pfcore::files::FileLoader {
+                                    name,
+                                    mime,
+                                    path,
+                                    editable: true,
+                                    cache_threshold: 65536,
+                                    cache_status: std::sync::atomic::AtomicBool::default(),
+                                    cached_value: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::with_capacity(0))),
+                                })).build()
+                        }).collect(),
+                        shared_state: Default::default()
                     }
                 }
             }

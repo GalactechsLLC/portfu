@@ -2,8 +2,8 @@
 resolver = "2"
 
 members = [
-    "example_portfu_server",
-    "pf_admin",
+    "portfu_runtime",
+    "portfu_admin",
     "portfu",
     "portfu_core",
     "portfu_macros"

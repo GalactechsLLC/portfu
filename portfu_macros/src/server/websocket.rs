@@ -144,7 +144,7 @@ impl ToTokens for WebSocketRoute {
                 peers: ::portfu::prelude::Peers
             }
             impl ::portfu::pfcore::ServiceRegister for #name {
-                fn register(self, service_registry: &mut portfu::prelude::ServiceRegistry) {
+                fn register(self, service_registry: &mut portfu::prelude::ServiceRegistry, _shared_state: portfu::prelude::http::Extensions) {
                     let __resource = ::portfu::pfcore::service::ServiceBuilder::new(#path)
                         .name(#resource_name)
                         .filter(::portfu::filters::method::GET.clone())

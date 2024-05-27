@@ -88,7 +88,8 @@ impl ToTokens for StaticFiles {
                         ]
                     ))
                 ],
-                wrappers: vec![]
+                wrappers: vec![],
+                shared_state: Default::default()
             }
         };
         let out = quote! {
@@ -96,7 +97,7 @@ impl ToTokens for StaticFiles {
             pub struct #name;
             #(#static_file_defs)*
             impl ::portfu::pfcore::ServiceRegister for #name {
-                fn register(self, service_registry: &mut portfu::prelude::ServiceRegistry) {
+                fn register(self, service_registry: &mut portfu::prelude::ServiceRegistry, shared_state: portfu::prelude::http::Extensions) {
                     let group: ::portfu::prelude::ServiceGroup = self.into();
                     for service in group.services {
                         service_registry.register(service);

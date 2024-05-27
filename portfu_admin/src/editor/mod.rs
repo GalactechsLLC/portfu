@@ -1,7 +1,7 @@
 use portfu::macros::{get, put};
 use portfu::pfcore::editable::EditResult;
 use portfu::pfcore::{FromBody, Json, ServiceRegister};
-use portfu::prelude::http::StatusCode;
+use portfu::prelude::http::{Extensions, StatusCode};
 use portfu::prelude::*;
 use serde::Deserialize;
 use std::io::{Error, ErrorKind};
@@ -119,8 +119,8 @@ impl Default for ServiceEditor {
     }
 }
 impl ServiceRegister for ServiceEditor {
-    fn register(self, service_registry: &mut portfu::pfcore::ServiceRegistry) {
-        self.services.register(service_registry);
+    fn register(self, service_registry: &mut ServiceRegistry, shared_state: Extensions) {
+        self.services.register(service_registry, shared_state);
     }
 }
 impl From<ServiceEditor> for ServiceGroup {

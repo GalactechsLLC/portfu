@@ -1,2 +1,5 @@
 /target
 .idea
+Dockerfile
+.dockerignore
+portfu_runtime/helm_deploy

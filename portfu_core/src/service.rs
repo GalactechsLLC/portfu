@@ -22,6 +22,7 @@ use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
 pub struct ServiceBuilder {
     path: Route,
     name: Option<String>,
+    shared_state: Extensions,
     filters: Vec<Arc<dyn FilterFn + Sync + Send>>,
     wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
     handler: Option<Arc<dyn ServiceHandler + Send + Sync>>,
@@ -33,33 +34,35 @@ impl ServiceBuilder {
             name: None,
             filters: vec![],
             wrappers: vec![],
+            shared_state: Default::default(),
             handler: None,
         }
     }
-    pub fn name<S: AsRef<str>>(self, path: S) -> Self {
-        let mut s = self;
-        s.name = Some(path.as_ref().to_string());
-        s
+    pub fn name<S: AsRef<str>>(mut self, path: S) -> Self {
+        self.name = Some(path.as_ref().to_string());
+        self
     }
-    pub fn filter(self, filter: Arc<dyn FilterFn + Sync + Send>) -> Self {
-        let mut s = self;
-        s.filters.push(filter);
-        s
+    pub fn shared_state<T: Send + Sync + 'static>(mut self, shared_state: T) -> Self {
+        self.shared_state.insert(Arc::new(shared_state));
+        self
     }
-    pub fn wrap(self, wrappers: Arc<dyn WrapperFn + Sync + Send>) -> Self {
-        let mut s = self;
-        s.wrappers.push(wrappers);
-        s
+    pub fn filter(mut self, filter: Arc<dyn FilterFn + Sync + Send>) -> Self {
+        self.filters.push(filter);
+        self
     }
-    pub fn handler(self, service_handler: Arc<dyn ServiceHandler + Send + Sync>) -> Self {
-        let mut s = self;
-        s.handler = Some(service_handler);
-        s
+    pub fn wrap(mut self, wrappers: Arc<dyn WrapperFn + Sync + Send>) -> Self {
+        self.wrappers.push(wrappers);
+        self
+    }
+    pub fn handler(mut self, service_handler: Arc<dyn ServiceHandler + Send + Sync>) -> Self {
+        self.handler = Some(service_handler);
+        self
     }
     pub fn build(self) -> Service {
         Service {
             path: Arc::new(self.path),
             name: self.name.unwrap_or_default(),
+            shared_state: self.shared_state,
             filters: self.filters,
             wrappers: self.wrappers,
             handler: self.handler,
@@ -70,13 +73,14 @@ impl ServiceBuilder {
 #[derive(Default)]
 pub struct ServiceGroup {
     pub services: Vec<Service>,
+    pub shared_state: Extensions,
     pub filters: Vec<Arc<dyn FilterFn + Sync + Send>>,
     pub wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
 }
 impl ServiceRegister for ServiceGroup {
-    fn register(self, service_registry: &mut ServiceRegistry) {
+    fn register(self, service_registry: &mut ServiceRegistry, shared_state: Extensions) {
         for service in self.services {
-            service.register(service_registry);
+            service.register(service_registry, shared_state.clone());
         }
     }
 }
@@ -85,11 +89,17 @@ impl ServiceGroup {
         let mut service = service.into();
         service.filters.extend(self.filters.clone());
         service.wrappers.extend(self.wrappers.clone());
+        service.shared_state.extend(self.shared_state.clone());
         self.services.push(service);
+        self
+    }
+    pub fn shared_state<T: Send + Sync + 'static>(mut self, shared_state: T) -> Self {
+        self.shared_state.insert(Arc::new(shared_state));
         self
     }
     pub fn sub_group<T: Into<ServiceGroup>>(mut self, group: T) -> Self {
         let group = group.into();
+        self.shared_state.extend(group.shared_state.clone());
         for service in group.services {
             self = self.service(service);
         }
@@ -109,6 +119,7 @@ impl ServiceGroup {
 pub struct Service {
     pub path: Arc<Route>,
     pub name: String,
+    pub shared_state: Extensions,
     pub filters: Vec<Arc<dyn FilterFn + Sync + Send>>,
     pub wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
     pub handler: Option<Arc<dyn ServiceHandler + Send + Sync>>,
@@ -153,7 +164,8 @@ impl Service {
     }
 }
 impl ServiceRegister for Service {
-    fn register(self, service_registry: &mut ServiceRegistry) {
+    fn register(mut self, service_registry: &mut ServiceRegistry, shared_state: Extensions) {
+        self.shared_state.extend(shared_state);
         service_registry.register(self)
     }
 }
