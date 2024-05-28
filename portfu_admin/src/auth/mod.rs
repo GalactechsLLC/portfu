@@ -1,6 +1,6 @@
 use http::{header, HeaderValue, StatusCode};
 use hyper::body::Bytes;
-use pfcore::{IntoStreamBody, ServiceData};
+use portfu::pfcore::{IntoStreamBody, ServiceData};
 use std::io::Error;
 
 pub mod oauth_login;

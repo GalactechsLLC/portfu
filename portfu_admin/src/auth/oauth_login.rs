@@ -1,7 +1,7 @@
-use crate::endpoints::{redirect_to_url, send_internal_error};
-use crate::filters::method::GET;
-use crate::prelude::Body;
-use crate::wrappers::sessions::Session;
+use crate::auth::{redirect_to_url, send_internal_error};
+use portfu::filters::method::GET;
+use portfu::prelude::{async_trait, Body};
+use portfu::wrappers::sessions::Session;
 use http::HeaderValue;
 use hyper::{header, StatusCode};
 use oauth2::basic::BasicClient;
@@ -12,8 +12,8 @@ use oauth2::{
 };
 use octocrab::models::orgs::Organization;
 use octocrab::models::Author;
-use pfcore::service::{ServiceBuilder, ServiceGroup};
-use pfcore::{FromRequest, Json, ServiceData, ServiceHandler};
+use portfu::pfcore::service::{ServiceBuilder, ServiceGroup};
+use portfu::pfcore::{FromRequest, Json, ServiceData, ServiceHandler};
 use serde::Deserialize;
 use std::env;
 use std::io::{Error, ErrorKind};
@@ -62,7 +62,7 @@ impl ServiceHandler for OAuthLoginHandler {
     }
     async fn handle(
         &self,
-        mut data: crate::prelude::ServiceData,
+        mut data: portfu::prelude::ServiceData,
     ) -> Result<ServiceData, (ServiceData, Error)> {
         // Create a PKCE code verifier and SHA-256 encode it as a code challenge.
         let (pkce_code_challenge, _pkce_code_verifier) = PkceCodeChallenge::new_random_sha256();
@@ -93,7 +93,7 @@ impl ServiceHandler for OAuthAuthHandler {
     }
     async fn handle(
         &self,
-        mut data: crate::prelude::ServiceData,
+        mut data: portfu::prelude::ServiceData,
     ) -> Result<ServiceData, (ServiceData, Error)> {
         let mut user_data: UserData = if let Some(session) = data.request.get_mut::<Session>() {
             session.data.remove().unwrap_or(UserData {
