@@ -1,6 +1,7 @@
 pub mod memory;
 #[cfg(feature = "postgres")]
 pub mod postgres;
+mod cache;
 
 use std::io::Error;
 #[cfg(feature = "postgres")]
@@ -24,7 +25,7 @@ pub struct SearchParams {
     pub order_by: Option<String>
 }
 
-pub trait DataStoreEntry<T>: Default + Send + Sync + Clone + 'static {
+pub trait DataStoreEntry<T>: Default + Send + Sync + Eq + Clone + 'static {
     fn key_name() -> &'static str;
     fn key_value(&self) -> T;
     fn parameters() -> &'static [&'static str];

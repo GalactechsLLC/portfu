@@ -12,7 +12,7 @@ use crate::themes::{replace_tokens};
 use crate::themes::page::Page;
 use crate::themes::token::Token;
 
-#[derive(Clone, FieldNamesAsSlice)]
+#[derive(Clone, Eq, PartialEq, FieldNamesAsSlice)]
 pub struct Template {
     pub id: isize,
     pub uuid: Uuid,

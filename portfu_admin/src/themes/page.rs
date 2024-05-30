@@ -4,13 +4,13 @@ use struct_field_names_as_array::FieldNamesAsSlice;
 use crate::stores::DataStoreEntry;
 
 
-#[derive(Default, Clone, FieldNamesAsSlice)]
+#[derive(Default, Clone, Eq, PartialEq, FieldNamesAsSlice)]
 pub struct PageMetadata {
     pub title: String,
     pub tags: HashMap<String, String>,
 }
 
-#[derive(Default, Clone, FieldNamesAsSlice)]
+#[derive(Default, Clone, Eq, PartialEq, FieldNamesAsSlice)]
 pub struct Page {
     pub id: isize,
     pub uuid: Uuid,

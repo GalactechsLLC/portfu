@@ -1,4 +1,4 @@
-use crate::auth::{redirect_to_url, send_internal_error};
+use crate::services::{redirect_to_url, send_internal_error};
 use portfu::filters::method::GET;
 use portfu::prelude::{async_trait, Body};
 use portfu::wrappers::sessions::Session;
@@ -132,7 +132,7 @@ impl ServiceHandler for OAuthAuthHandler {
             .get("https://api.github.com/user")
             .header("Authorization", &token_val)
             .header("Accept", "application/vnd.github+json")
-            .header("User-Agent", "chia-proxy-login-service")
+            .header("User-Agent", "portfu-login-service")
             .header("X-GitHub-Api-Version", "2022-11-28")
             .send()
             .await
@@ -145,7 +145,7 @@ impl ServiceHandler for OAuthAuthHandler {
             .get("https://api.github.com/user/orgs")
             .header("Authorization", &token_val)
             .header("Accept", "application/vnd.github+json")
-            .header("User-Agent", "chia-proxy-login-service")
+            .header("User-Agent", "portfu-login-service")
             .header("X-GitHub-Api-Version", "2022-11-28")
             .send()
             .await
@@ -321,14 +321,14 @@ impl OAuthLoginBuilder {
             allowed_users: self.allowed_users,
             admin_users: self.admin_users,
         });
-        let login_service = ServiceBuilder::new("/")
+        let login_service = ServiceBuilder::new("/github/login")
             .name("index")
             .filter(GET.clone())
             .handler(Arc::new(OAuthLoginHandler {
                 config: config.clone(),
             }))
             .build();
-        let auth_service = ServiceBuilder::new("/")
+        let auth_service = ServiceBuilder::new("/github/auth")
             .name("index")
             .filter(GET.clone())
             .handler(Arc::new(OAuthAuthHandler {

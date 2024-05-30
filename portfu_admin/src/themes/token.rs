@@ -1,6 +1,6 @@
 use crate::stores::DataStoreEntry;
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Eq, PartialEq)]
 pub struct Token {
     pub key: String,
     pub value: String,

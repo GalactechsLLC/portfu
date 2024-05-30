@@ -9,7 +9,7 @@ use struct_field_names_as_array::FieldNamesAsSlice;
 use time::OffsetDateTime;
 use crate::stores::{DatabaseEntry, DataStoreEntry};
 
-#[derive(FieldNamesAsSlice, Clone, Serialize, Deserialize)]
+#[derive(FieldNamesAsSlice, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct User {
     pub id: i64,
     pub uuid: Uuid,
@@ -141,22 +141,22 @@ impl DatabaseEntry<PgRow, i64> for User {
             "state" => query.bind(&self.state),
             "country" => query.bind(&self.country),
             "notes" => query.bind(&self.notes),
-            "created" => query.bind(&self.created),
-            "updated" => query.bind(&self.updated),
+            "created" => query.bind(self.created),
+            "updated" => query.bind(self.updated),
             _ => query,
         };
         query
     }
 
     fn database() -> String {
-        todo!()
+        "PfAdmin".to_string()
     }
 
     fn table() -> String {
-        todo!()
+        "Users".to_string()
     }
 }
-#[derive(Default, Clone, Serialize, Deserialize, sqlx::Type)]
+#[derive(Default, Clone, Eq, PartialEq, Serialize, Deserialize, sqlx::Type)]
 #[repr(i64)]
 pub enum UserRole {
     #[default]

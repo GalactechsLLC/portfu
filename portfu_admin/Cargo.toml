@@ -10,6 +10,7 @@ repository = "https://github.com/GalactechsLLC/portfu/portfu_admin"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+dashmap = "5.5.3"
 http = "1.1.0"
 hyper = {version="1.2.0", features=["full"]}
 oauth2 = { version = "4.4.2", features = ["rustls-tls"] }
