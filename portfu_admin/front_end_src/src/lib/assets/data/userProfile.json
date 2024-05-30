@@ -1,0 +1,15 @@
+{
+  "name": "John Doe",
+  "email": "john@example.com",
+  "password": "",
+  "profilePicture": "",
+  "bio": "This is a short bio.",
+  "phoneNumber": "123-456-7890",
+  "address": "123 Main St, Anytown, USA",
+  "dateOfBirth": "1990-01-01",
+  "gender": "Male",
+  "preferences": {
+    "newsletter": true,
+    "notifications": true
+  }
+}
