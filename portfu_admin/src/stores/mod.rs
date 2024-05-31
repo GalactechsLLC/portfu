@@ -6,8 +6,11 @@ mod cache;
 use std::io::Error;
 #[cfg(feature = "postgres")]
 use sqlx::{FromRow, Row};
+#[cfg(feature = "postgres")]
 use sqlx::{Postgres};
+#[cfg(feature = "postgres")]
 use sqlx::database::HasArguments;
+#[cfg(feature = "postgres")]
 use sqlx::query::Query;
 use portfu::prelude::async_trait::async_trait;
 use crate::users::User;

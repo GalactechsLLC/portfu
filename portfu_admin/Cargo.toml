@@ -10,22 +10,24 @@ repository = "https://github.com/GalactechsLLC/portfu/portfu_admin"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-dashmap = "5.5.3"
-http = "1.1.0"
-hyper = {version="1.2.0", features=["full"]}
-oauth2 = { version = "4.4.2", features = ["rustls-tls"] }
-octocrab = {version = "0.38.0", features = ["rustls"]}
-portfu = {path = "../portfu", version = "1.2.0"}
-reqwest = {version="0.12.4", default-features = false, features = ["rustls-tls", "json", "stream"] }
-serde_json = "1.0.116"
-serde = { version = "1.0.200", features = ["derive"] }
-time = { version = "0.3.36", features = ["serde-well-known"] }
-tokio = {version = "1.37.0", features=["rt-multi-thread", "sync", "signal", "macros", "process", "time", "fs", "net"]}
+dashmap.workspace = true
+http.workspace = true
+hyper.workspace = true
+oauth2 = { version = "4.4.2", optional = true, features = ["rustls-tls"] }
+octocrab = {version = "0.38.0", optional = true, features = ["rustls"]}
+portfu.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
+serde.workspace = true
+time.workspace = true
+tokio.workspace = true
 sqlx = { version ="0.7.4", optional = true, features = ["time"]}
-struct-field-names-as-array = "0.3.0"
-regex = "1.10.4"
+struct-field-names-as-array.workspace = true
+regex.workspace = true
 
 [features]
-default = ["postgres"]
-postgres = ["sqlx/postgres"]
-mysql = ["sqlx/mysql"]
+default = []
+auth = ["oauth2"]
+github_auth = ["auth", "octocrab"]
+postgres = ["sqlx", "sqlx/postgres"]
+mysql = ["sqlx", "sqlx/mysql"]

@@ -10,7 +10,10 @@ export default {
       precompress: false,
       strict: true,
     }),
+    paths: {
+      base: '/pf-admin',
+      assets: ''
+    },
   },
-
   preprocess: [vitePreprocess({})],
 };

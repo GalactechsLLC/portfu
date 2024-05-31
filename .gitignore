@@ -3,4 +3,4 @@
 Dockerfile
 .dockerignore
 portfu_runtime/helm_deploy
-pf_admin/front_end_dist/*
+portfu_admin/front_end_dist/pf-admin

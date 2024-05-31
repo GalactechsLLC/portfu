@@ -6,17 +6,16 @@ authors = ["James Hoerr"]
 description = "Default Portfu Runtime"
 license = "Apache-2.0"
 homepage = "https://github.com/GalactechsLLC/portfu"
-repository = "https://github.com/GalactechsLLC/portfu/example_portfu_server"
+repository = "https://github.com/GalactechsLLC/portfu/portfu_runtime"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-log = "0.4.21"
-portfu = {path = "../portfu", version = "1.2.0"}
-portfu_admin = {path = "../portfu_admin", version = "1.2.0"}
-simple_logger = "4.3.3"
-sqlx = { version ="0.7.4", features = ["postgres"] }
-tokio = {version = "1.37.0", features=["rt-multi-thread", "sync", "signal", "macros", "process", "time", "fs", "net"]}
+log.workspace = true
+portfu.workspace = true
+portfu_admin.workspace = true
+simple_logger.workspace = true
+tokio.workspace = true
 
 [features]
 default = []

@@ -6,8 +6,10 @@ use portfu_admin::users::User;
 use portfu_admin::{PortfuAdmin};
 use simple_logger::SimpleLogger;
 use std::str::FromStr;
+#[cfg(feature = "postgres")]
 use sqlx::postgres::{PgPoolOptions};
 use portfu_admin::stores::memory::MemoryDataStore;
+#[cfg(feature = "postgres")]
 use portfu_admin::stores::postgres::PostgresDataStore;
 
 #[files("front_end_dist/")]
@@ -36,11 +38,21 @@ async fn main() -> Result<(), std::io::Error> {
         });
     let mut service_group = ServiceGroup::default().sub_group(EditableFiles);
     match std::env::var("DATABASE_URL").ok() {
-        Some(url) => {
-            let pg_pool = PgPoolOptions::new().max_connections(100).connect(&url).await.unwrap();
-            service_group = service_group.sub_group(PortfuAdmin::<PostgresDataStore<i64, User>> {
-                user_datastore: PostgresDataStore::new(pg_pool)
-            });
+        Some(_url) => {
+            #[cfg(feature = "postgres")]
+            {
+                let pg_pool = PgPoolOptions::new().max_connections(100).connect(&_url).await.unwrap();
+                service_group = service_group.sub_group(PortfuAdmin::<PostgresDataStore<i64, User>> {
+                    user_datastore: PostgresDataStore::new(pg_pool)
+                });
+            }
+            #[cfg(not(feature = "postgres"))]
+            {
+                warn!("Database URL Provided but no Database Feature Enabled");
+                service_group = service_group.sub_group(PortfuAdmin::<MemoryDataStore<i64, User>> {
+                    user_datastore: MemoryDataStore::<i64, User>::default()
+                });
+            }
         }
         None => {
             service_group = service_group.sub_group(PortfuAdmin::<MemoryDataStore<i64, User>> {

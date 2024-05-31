@@ -1,13 +1,19 @@
 use portfu::prelude::uuid::Uuid;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
+#[cfg(feature = "postgres")]
 use sqlx::{Error, FromRow, Postgres, Row};
+#[cfg(feature = "postgres")]
 use sqlx::database::{HasArguments};
+#[cfg(feature = "postgres")]
 use sqlx::postgres::{PgRow};
+#[cfg(feature = "postgres")]
 use sqlx::query::Query;
 use struct_field_names_as_array::FieldNamesAsSlice;
 use time::OffsetDateTime;
-use crate::stores::{DatabaseEntry, DataStoreEntry};
+#[cfg(feature = "postgres")]
+use crate::stores::{DatabaseEntry};
+use crate::stores::{DataStoreEntry};
 
 #[derive(FieldNamesAsSlice, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct User {
@@ -91,6 +97,7 @@ impl DataStoreEntry<i64> for User {
     }
 }
 
+#[cfg(feature = "postgres")]
 impl<'r> FromRow<'r, PgRow> for User {
     fn from_row(row: &'r PgRow) -> Result<Self, Error> {
         Ok(Self {
@@ -118,6 +125,7 @@ impl<'r> FromRow<'r, PgRow> for User {
     }
 }
 
+#[cfg(feature = "postgres")]
 impl DatabaseEntry<PgRow, i64> for User {
     fn bind<'q>(&'q self, mut query: Query<'q, Postgres, <Postgres as HasArguments>::Arguments>, field: &str) -> Query<'q, Postgres, <Postgres as HasArguments>::Arguments> {
         if !Self::FIELD_NAMES_AS_SLICE.contains(&field)
@@ -156,7 +164,9 @@ impl DatabaseEntry<PgRow, i64> for User {
         "Users".to_string()
     }
 }
-#[derive(Default, Clone, Eq, PartialEq, Serialize, Deserialize, sqlx::Type)]
+
+#[derive(Default, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "postgres", derive(sqlx::Type))]
 #[repr(i64)]
 pub enum UserRole {
     #[default]
