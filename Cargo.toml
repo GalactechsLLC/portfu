@@ -45,7 +45,7 @@ tokio = {version = "1.38.0", features=["rt-multi-thread", "sync", "signal", "mac
 tokio-rustls = "0.26.0"
 tokio-tungstenite = {version = "0.21.0", features = ["rustls-tls-webpki-roots", "rustls"] }
 tokio-util = "0.7.11"
-uuid = {version = "1.8.0", features = ["v4", "serde"]}
 url = "2.5.0"
+uuid = {version = "1.8.0", features = ["v4", "serde"]}
 x509-cert = "0.2.5"
 webpki-roots = "0.26.1"

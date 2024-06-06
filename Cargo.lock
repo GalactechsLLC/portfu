@@ -1607,6 +1607,7 @@ dependencies = [
  "portfu",
  "portfu_admin",
  "simple_logger",
+ "sqlx",
  "tokio",
 ]
 

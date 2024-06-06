@@ -13,8 +13,9 @@ repository = "https://github.com/GalactechsLLC/portfu/portfu_runtime"
 [dependencies]
 log.workspace = true
 portfu.workspace = true
-portfu_admin.workspace = true
+portfu_admin = {workspace = true, features = ["postgres", "mysql"]}
 simple_logger.workspace = true
+sqlx = { version ="0.7.4", features = ["time", "postgres", "mysql"]}
 tokio.workspace = true
 
 [features]

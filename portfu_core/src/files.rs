@@ -9,13 +9,53 @@ use hyper::body::Bytes;
 use mime_guess::from_path;
 use std::collections::HashMap;
 use std::io::Error;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::fs::{File, OpenOptions};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 use tokio_util::codec::BytesCodec;
+use crate::service::{ServiceBuilder, ServiceGroup};
+
+pub struct DynamicFiles {
+    pub root_directory: PathBuf,
+    pub editable: bool,
+}
+impl From<DynamicFiles> for ServiceGroup {
+    fn from(slf: DynamicFiles) -> ServiceGroup {
+        let mut files = HashMap::new();
+        let root_path = slf.root_directory.as_path();
+        log::info!("Searching for files at: {root_path:?}");
+        if !root_path.exists() {
+            if let Err(e) = std::fs::create_dir(root_path) {
+                log::error!("Error Creating Root Directory: {e:?}");
+            }
+        }
+        if let Err(e) = read_directory(root_path, root_path, &mut files) {
+            log::error!("Error Loading files: {e:?}");
+        }
+        ServiceGroup {
+            filters: vec![],
+            wrappers: vec![],
+            services: files.into_iter().map(| (name, path) | {
+                let mime = get_mime_type(&name);
+                ServiceBuilder::new(&name)
+                    .name(&name)
+                    .handler(Arc::new(FileLoader {
+                        name,
+                        mime,
+                        path,
+                        editable: slf.editable,
+                        cache_threshold: 65536,
+                        cache_status: AtomicBool::default(),
+                        cached_value: Arc::new(RwLock::new(Vec::with_capacity(0))),
+                    })).build()
+            }).collect(),
+            shared_state: Default::default()
+        }
+    }
+}
 
 pub struct FileLoader {
     pub name: String,
