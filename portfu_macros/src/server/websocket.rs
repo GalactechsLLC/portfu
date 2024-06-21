@@ -101,7 +101,7 @@ impl ToTokens for WebSocketRoute {
                                 None => {
                                     *response.status_mut() = ::portfu::prelude::http::StatusCode::INTERNAL_SERVER_ERROR;
                                     let bytes =::portfu::prelude::hyper::body::Bytes::from(format!("Failed to find {}", stringify!(#ident_type).replace(' ',"")));
-                                    *handle_data.response.body_mut() = bytes.stream_body();
+                                    handle_data.response.set_body(::portfu::pfcore::service::BodyType::Stream(bytes.stream_body()));
                                     return Err(ServiceResponse {
                                         request,
                                         response
@@ -128,7 +128,7 @@ impl ToTokens for WebSocketRoute {
                     None => {
                         *response.status_mut() = ::portfu::prelude::http::StatusCode::INTERNAL_SERVER_ERROR;
                         let bytes =::portfu::prelude::hyper::body::Bytes::from(format!("Failed to find {} for {}", stringify!(#ident_type).replace(' ',""), stringify!(#function_name)));
-                        *handle_data.response.body_mut() = bytes.stream_body();
+                        handle_data.response.set_body(::portfu::pfcore::service::BodyType::Stream(bytes.stream_body()));
                         return Err(ServiceResponse {
                             request,
                             response
@@ -182,7 +182,7 @@ impl ToTokens for WebSocketRoute {
                             Ok((response, websocket)) => (response, websocket),
                             Err(e) => {
                                 let bytes = ::portfu::prelude::hyper::body::Bytes::from("Failed to Upgrade Request");
-                                *handle_data.response.body_mut() = bytes.stream_body();
+                                handle_data.response.set_body(::portfu::pfcore::service::BodyType::Stream(bytes.stream_body()));
                                 return Ok::<::portfu::prelude::ServiceData, (::portfu::prelude::ServiceData, ::std::io::Error)>(handle_data);
                             }
                         };
@@ -220,13 +220,17 @@ impl ToTokens for WebSocketRoute {
                                 }
                             }
                         });
-                        log::info!("Sending Upgrade Response");
+                        log::trace!("Sending Upgrade Response");
                         let (parts, body) = response.into_parts();
-                        handle_data.response = Response::from_parts(parts, body.stream_body());
+                        handle_data.response.set_response(
+                            ::portfu::pfcore::service::OutgoingReponse::Stream(
+                                Response::from_parts(parts, body.stream_body())
+                            )
+                        );
                         Ok::<::portfu::prelude::ServiceData, (::portfu::prelude::ServiceData, ::std::io::Error)>(handle_data)
                     } else {
                         let bytes = ::portfu::prelude::hyper::body::Bytes::from("HTTP NOT SUPPORTED ON THIS ENDPOINT");
-                        *handle_data.response.body_mut() = bytes.stream_body();
+                        handle_data.response.set_body(::portfu::pfcore::service::BodyType::Stream(bytes.stream_body()));
                         Ok::<::portfu::prelude::ServiceData, (::portfu::prelude::ServiceData, ::std::io::Error)>(handle_data)
                     }
                 }

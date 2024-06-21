@@ -543,6 +543,9 @@ impl ServiceResponse {
             response: OutgoingResponse::Empty(Response::new(())),
         }
     }
+    pub fn set_response(&mut self, outgoing: OutgoingResponse) {
+        self.response = outgoing;
+    }
     pub fn set_body(&mut self, body: BodyType) {
         self.response.set_body(body)
     }
