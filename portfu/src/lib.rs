@@ -19,7 +19,7 @@ pub mod prelude {
     pub type Server = ::pfcore::server::Server;
     pub type ServerBuilder = ::pfcore::server::ServerBuilder;
     pub type SslConfig = ::pfcore::server::SslConfig;
-    pub type ServiceResponse = ::pfcore::ServiceResponse;
+    pub type ServiceResponse = ::pfcore::service::ServiceResponse;
     pub type ServiceGroup = ::pfcore::service::ServiceGroup;
     pub type ServiceRegistry = ::pfcore::ServiceRegistry;
     pub type ServiceData = ::pfcore::ServiceData;

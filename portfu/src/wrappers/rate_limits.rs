@@ -3,9 +3,9 @@ use http::StatusCode;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Body, Bytes};
 use log::{debug, warn};
-use pfcore::service::{ConsumedBodyType, IncomingRequest};
+use pfcore::service::{BodyType, IncomingRequest, MutBody};
 use pfcore::wrappers::{WrapperFn, WrapperResult};
-use pfcore::{IntoStreamBody, ServiceData};
+use pfcore::{ServiceData};
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::io::{Error, ErrorKind};
@@ -264,14 +264,14 @@ impl WrapperFn for RateLimiter {
 }
 
 fn create_error(data: &mut ServiceData, error: String, status: StatusCode) -> WrapperResult {
-    *data.response.body_mut() = Bytes::from(error).stream_body();
+    data.response.set_body(BodyType::Sized(Full::new(Bytes::from(error))));
     *data.response.status_mut() = status;
     WrapperResult::Return
 }
 
 #[inline]
 async fn handle_unsized(data: &mut ServiceData, limit: usize) -> Result<WrapperResult, Error> {
-    let mut body = data.request.consume()?;
+    let mut body = data.request.consume();
     let mut buffer = Vec::with_capacity(limit);
     while let Some(next) = body.frame().await {
         let frame = next.map_err(|e| {
@@ -293,7 +293,7 @@ async fn handle_unsized(data: &mut ServiceData, limit: usize) -> Result<WrapperR
         }
     }
     data.request
-        .set_body(ConsumedBodyType::Sized(Full::new(Bytes::from(buffer))))?;
+        .set_body(BodyType::Sized(Full::new(Bytes::from(buffer))));
     Ok(WrapperResult::Continue)
 }
 

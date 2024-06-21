@@ -1,13 +1,13 @@
 use crate::filters::{Filter, FilterFn, FilterResult};
-use crate::service::{IncomingRequest, ServiceRequest};
+use crate::service::{BodyType, IncomingRequest, ServiceRequest, ServiceResponse};
 use crate::signal::await_termination;
 use crate::ssl::load_ssl_certs;
 use crate::task::{Task, TaskFn};
 use crate::wrappers::{WrapperFn, WrapperResult};
-use crate::{IntoStreamBody, ServiceData, ServiceRegister, ServiceRegistry, ServiceResponse};
+use crate::{StreamingBody, ServiceData, ServiceRegister, ServiceRegistry, IntoStreamBody};
 use http::{Extensions, Request, Response, StatusCode};
-use http_body_util::{BodyExt, BodyStream, Empty, StreamBody};
-use hyper::body::Incoming;
+use http_body_util::{Full};
+use hyper::body::{Bytes, Incoming};
 use hyper::server::conn::http1::Builder;
 use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
@@ -168,11 +168,9 @@ impl Server {
         server: Arc<Self>,
         mut request: Request<Incoming>,
         address: SocketAddr,
-    ) -> Result<ServiceResponse, Error> {
+    ) -> Result<Response<StreamingBody>, Error> {
         request.extensions_mut().insert(address);
-        let mut response: ServiceResponse = Response::new(StreamBody::new(BodyStream::new(
-            Box::pin(Empty::new().map_err(|_| "Failed to Map Empty to Service Body")),
-        )));
+        let mut response: ServiceResponse = ServiceResponse::new();
         let handle = if !server.filters.is_empty() {
             let mut handle = true;
             for f in server.filters.iter() {
@@ -187,7 +185,7 @@ impl Server {
         };
         if !handle {
             *response.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
-            Ok(response)
+            Ok(response.into())
         } else {
             let mut handler = None;
             for service in server.registry.services.iter() {
@@ -204,7 +202,7 @@ impl Server {
                     let mut service_data = ServiceData {
                         server: server.clone(),
                         request: ServiceRequest {
-                            request: IncomingRequest::Stream(request),
+                            request: IncomingRequest::Stream(request.map(|b| b.stream_body())),
                             path: service.path.clone(),
                         },
                         response,
@@ -213,7 +211,7 @@ impl Server {
                         match func.before(&mut service_data).await {
                             WrapperResult::Continue => {}
                             WrapperResult::Return => {
-                                return Ok(service_data.response);
+                                return Ok(service_data.response.into());
                             }
                         }
                     }
@@ -227,22 +225,24 @@ impl Server {
                                     sd.request.request.uri()
                                 );
                                 *sd.response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                                *sd.response.body_mut() = format!("{:?}", e).stream_body();
+                                sd.response.set_body(BodyType::Sized(
+                                    Full::new(Bytes::from(format!("{:?}", e)))
+                                ));
                                 sd
                             });
                     for func in server.wrappers.iter() {
                         match func.after(&mut service_data).await {
                             WrapperResult::Continue => {}
                             WrapperResult::Return => {
-                                return Ok(service_data.response);
+                                return Ok(service_data.response.into());
                             }
                         }
                     }
-                    Ok(service_data.response)
+                    Ok(service_data.response.into())
                 }
                 None => {
                     *response.status_mut() = StatusCode::NOT_FOUND;
-                    Ok(response)
+                    Ok(response.into())
                 }
             }
         }

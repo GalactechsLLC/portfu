@@ -12,12 +12,12 @@ pub mod wrappers;
 
 use crate::editable::EditResult;
 use crate::server::Server;
-use crate::service::{BodyType, IncomingRequest, Service, ServiceRequest};
+use crate::service::{RefBodyType, IncomingRequest, Service, ServiceRequest, ServiceResponse, BodyType};
 use async_trait::async_trait;
-use http::{Extensions, Response};
+use http::{Extensions};
 use http_body_util::Full;
 use http_body_util::{BodyExt, BodyStream, StreamBody};
-use hyper::body::Bytes;
+use hyper::body::{Bytes, Incoming};
 use log::trace;
 use once_cell::sync::Lazy;
 use serde::Deserialize;
@@ -26,6 +26,8 @@ use std::io::{Error, ErrorKind};
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
+use futures_util::{Stream, TryStreamExt};
+use http_body::Frame;
 
 #[async_trait]
 pub trait ServiceHandler {
@@ -59,7 +61,7 @@ impl ServiceHandler for (&'static str, &'static str) {
     }
 
     async fn handle(&self, mut data: ServiceData) -> Result<ServiceData, (ServiceData, Error)> {
-        *data.response.body_mut() = Bytes::from_static(self.1.as_bytes()).stream_body();
+        data.response.set_body(BodyType::Sized(Full::new(Bytes::from_static(self.1.as_bytes()))));
         Ok(data)
     }
 }
@@ -71,7 +73,7 @@ impl ServiceHandler for (String, String) {
     }
 
     async fn handle(&self, mut data: ServiceData) -> Result<ServiceData, (ServiceData, Error)> {
-        *data.response.body_mut() = Bytes::from(self.1.clone()).stream_body();
+        data.response.set_body(BodyType::Sized(Full::new(Bytes::from(self.1.clone()))));
         Ok(data)
     }
 }
@@ -83,27 +85,27 @@ impl ServiceHandler for (&'static str, &'static [u8]) {
     }
 
     async fn handle(&self, mut data: ServiceData) -> Result<ServiceData, (ServiceData, Error)> {
-        *data.response.body_mut() = Bytes::from_static(self.1).stream_body();
+        data.response.set_body(BodyType::Sized(Full::new(Bytes::from_static(self.1))));
         Ok(data)
     }
 }
 pub type BoxedBody =
     Box<dyn hyper::body::Body<Data = Bytes, Error = IntoStreamError> + Send + Sync + 'static>;
-pub type ServiceBody = StreamBody<BodyStream<Pin<BoxedBody>>>;
-pub type ServiceResponse = Response<ServiceBody>;
+pub type PinnedBody = Pin<BoxedBody>;
+pub type StreamingBody = StreamBody<BodyStream<PinnedBody>>;
 
 type IntoStreamError = &'static str;
 
 pub trait IntoStreamBody {
     type Data;
     type Error;
-    fn stream_body(self) -> ServiceBody;
+    fn stream_body(self) -> StreamingBody;
 }
 
 impl IntoStreamBody for Bytes {
     type Data = Bytes;
     type Error = IntoStreamError;
-    fn stream_body(self) -> ServiceBody {
+    fn stream_body(self) -> StreamingBody {
         StreamBody::new(BodyStream::new(Box::pin(
             Full::new(self).map_err(|_| "Failed to Convert Bytes into ServiceBody"),
         )))
@@ -113,7 +115,7 @@ impl IntoStreamBody for Bytes {
 impl IntoStreamBody for String {
     type Data = Bytes;
     type Error = IntoStreamError;
-    fn stream_body(self) -> ServiceBody {
+    fn stream_body(self) -> StreamingBody {
         StreamBody::new(BodyStream::new(Box::pin(
             Full::new(Bytes::from(self)).map_err(|_| "Failed to Convert Bytes into ServiceBody"),
         )))
@@ -123,7 +125,7 @@ impl IntoStreamBody for String {
 impl<'a> IntoStreamBody for &'a str {
     type Data = Bytes;
     type Error = IntoStreamError;
-    fn stream_body(self) -> ServiceBody {
+    fn stream_body(self) -> StreamingBody {
         StreamBody::new(BodyStream::new(Box::pin(
             Full::new(Bytes::from(self.to_string()))
                 .map_err(|_| "Failed to Convert Bytes into ServiceBody"),
@@ -134,7 +136,7 @@ impl<'a> IntoStreamBody for &'a str {
 impl IntoStreamBody for Vec<u8> {
     type Data = Bytes;
     type Error = IntoStreamError;
-    fn stream_body(self) -> ServiceBody {
+    fn stream_body(self) -> StreamingBody {
         Bytes::from(self).stream_body()
     }
 }
@@ -143,11 +145,34 @@ impl IntoStreamBody for Full<Bytes> {
     type Data = Bytes;
     type Error = IntoStreamError;
 
-    fn stream_body(self) -> ServiceBody {
+    fn stream_body(self) -> StreamingBody {
         StreamBody::new(BodyStream::new(Box::pin(
             self.map_err(|_| "Failed to Convert Bytes into ServiceBody"),
         )))
     }
+}
+
+impl IntoStreamBody for Incoming {
+    type Data = Bytes;
+    type Error = IntoStreamError;
+
+    fn stream_body(self) -> StreamingBody {
+        StreamBody::new(BodyStream::new(Box::pin(
+            self.map_err(|_| "Failed to Convert Incoming into ServiceBody"),
+        )))
+    }
+}
+
+pub fn bytes_stream_to_body<
+    S: Stream<Item = Result<Bytes, reqwest::Error>> + Send + Sync + 'static,
+>(
+    bytes_stream: S,
+) -> StreamingBody {
+    let incoming = bytes_stream
+        .map_ok(Frame::data)
+        .map_err(|_| "Failed to Read Byte Stream");
+    let stream_body = StreamBody::new(incoming);
+    StreamBody::new(BodyStream::new(Box::pin(stream_body)))
 }
 
 pub struct ServiceData {
@@ -299,28 +324,28 @@ impl<'a, T: FromBody> FromRequest<'a> for Body<T> {
 
 #[async_trait::async_trait]
 pub trait FromBody {
-    async fn from_body(body: &mut BodyType) -> Result<Self, Error>
+    async fn from_body(body: &mut RefBodyType) -> Result<Self, Error>
     where
         Self: Sized;
 }
 
 #[async_trait::async_trait]
 impl FromBody for Bytes {
-    async fn from_body(body: &mut BodyType) -> Result<Self, Error> {
+    async fn from_body(body: &mut RefBodyType) -> Result<Self, Error> {
         body_to_bytes(body).await
     }
 }
 
 #[async_trait::async_trait]
 impl FromBody for Vec<u8> {
-    async fn from_body(body: &mut BodyType) -> Result<Self, Error> {
+    async fn from_body(body: &mut RefBodyType) -> Result<Self, Error> {
         body_to_bytes(body).await.map(|b| b.to_vec())
     }
 }
 
 #[async_trait::async_trait]
 impl FromBody for String {
-    async fn from_body(body: &mut BodyType) -> Result<Self, Error> {
+    async fn from_body(body: &mut RefBodyType) -> Result<Self, Error> {
         let bytes = body_to_bytes(body).await?;
         Ok(String::from_utf8_lossy(bytes.as_ref()).to_string())
     }
@@ -338,7 +363,7 @@ impl<T> FromBody for Json<T>
 where
     T: for<'a> Deserialize<'a>,
 {
-    async fn from_body(body: &mut BodyType) -> Result<Self, Error> {
+    async fn from_body(body: &mut RefBodyType) -> Result<Self, Error> {
         let bytes = body_to_bytes(body).await?;
         serde_json::from_slice(bytes.as_ref())
             .map_err(|e| {
@@ -355,7 +380,7 @@ macro_rules! from_body {
     ($int:ident) => {
         #[async_trait::async_trait]
         impl FromBody for $int {
-            async fn from_body(body: &mut BodyType) -> Result<Self, Error> {
+            async fn from_body(body: &mut RefBodyType) -> Result<Self, Error> {
                 let bytes = body_to_bytes(body).await?;
                 let as_str = String::from_utf8_lossy(bytes.as_ref());
                 as_str.parse().map_err(|e| {
@@ -380,20 +405,20 @@ from_body!(i32);
 from_body!(i64);
 from_body!(i128);
 
-async fn body_to_bytes(body: &mut BodyType<'_>) -> Result<Bytes, Error> {
+async fn body_to_bytes(body: &mut RefBodyType<'_>) -> Result<Bytes, Error> {
     match body {
-        BodyType::Sized(b) => b.collect().await.map(|v| v.to_bytes()).map_err(|e| {
+        RefBodyType::Sized(b) => b.collect().await.map(|v| v.to_bytes()).map_err(|e| {
             Error::new(
                 ErrorKind::InvalidInput,
                 format!("Failed to read body: {e:?}"),
             )
         }),
-        BodyType::Stream(b) => b.collect().await.map(|v| v.to_bytes()).map_err(|e| {
+        RefBodyType::Stream(b) => b.collect().await.map(|v| v.to_bytes()).map_err(|e| {
             Error::new(
                 ErrorKind::InvalidInput,
                 format!("Failed to read body: {e:?}"),
             )
         }),
-        BodyType::Empty => Ok(Bytes::new()),
+        RefBodyType::Empty => Ok(Bytes::new()),
     }
 }

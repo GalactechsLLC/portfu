@@ -279,7 +279,15 @@ impl ToTokens for Endpoint {
                     Ok(v) => v,
                     Err(e) => {
                         *handle_data.response.status_mut() = ::portfu::prelude::http::StatusCode::INTERNAL_SERVER_ERROR;
-                        *handle_data.response.body_mut() = ::portfu::prelude::hyper::body::Bytes::from(format!("Failed to extract {} as {}, {e:?}", stringify!(#ident_val), stringify!(#ident_type).replace(' ',""))).stream_body();
+                        handle_data.response.set_body(
+                            ::portfu::pfcore::service::BodyType::Stream(
+                                ::portfu::prelude::hyper::body::Bytes::from(
+                                    format!("Failed to extract {} as {}, {e:?}",
+                                        stringify!(#ident_val), stringify!(#ident_type).replace(' ',"")
+                                    )
+                                ).stream_body()
+                            )
+                        );
                         return Ok(handle_data);
                     }
                 };
@@ -318,13 +326,21 @@ impl ToTokens for Endpoint {
                     match #name #function_ext(#(#additional_function_vars)*).await {
                         Ok(t) => {
                             let bytes: ::portfu::prelude::hyper::body::Bytes = t.into();
-                            *handle_data.response.body_mut() = bytes.stream_body();
+                            handle_data.response.set_body(
+                                ::portfu::pfcore::service::BodyType::Stream(
+                                    bytes.stream_body()
+                                )
+                            );
                             Ok(handle_data)
                         }
                         Err(e) => {
                             let err = format!("{e:?}");
                             let bytes: ::portfu::prelude::hyper::body::Bytes = err.into();
-                            *handle_data.response.body_mut() = bytes.stream_body();
+                            handle_data.response.set_body(
+                                ::portfu::pfcore::service::BodyType::Stream(
+                                    bytes.stream_body()
+                                )
+                            );
                             Ok(handle_data)
                         }
                     }
