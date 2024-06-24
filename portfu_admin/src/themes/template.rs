@@ -1,16 +1,16 @@
+use crate::stores::DataStoreEntry;
+use crate::themes::page::Page;
+use crate::themes::replace_tokens;
+use crate::themes::token::Token;
+use portfu::pfcore::{IntoStreamBody, ServiceData};
+use portfu::prelude::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
+use portfu::prelude::http::HeaderValue;
 use portfu::prelude::uuid::Uuid;
 use std::collections::HashMap;
 use std::io::Error;
 use std::sync::Arc;
 use struct_field_names_as_array::FieldNamesAsSlice;
 use tokio::sync::RwLock;
-use portfu::pfcore::{IntoStreamBody, ServiceData};
-use portfu::prelude::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
-use portfu::prelude::http::HeaderValue;
-use crate::stores::DataStoreEntry;
-use crate::themes::{replace_tokens};
-use crate::themes::page::Page;
-use crate::themes::token::Token;
 
 #[derive(Clone, Eq, PartialEq, FieldNamesAsSlice)]
 pub struct Template {
@@ -76,9 +76,9 @@ impl Template {
                     value: page_html,
                 }],
             ]
-                .concat(),
+            .concat(),
         )
-            .await;
+        .await;
         data.response
             .headers_mut()
             .insert(CONTENT_TYPE, HeaderValue::from_static("text/html"));

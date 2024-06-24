@@ -1,10 +1,10 @@
+use crate::stores::{DataStore, DataStoreEntry, SearchParams};
+use portfu::prelude::async_trait::async_trait;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::io::Error;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use portfu::prelude::async_trait::async_trait;
-use crate::stores::{DataStore, DataStoreEntry, SearchParams};
 
 #[derive(Default)]
 pub struct MemoryDataStore<K: Eq + Hash + Send + Sync, T: DataStoreEntry<K>> {
@@ -26,7 +26,9 @@ impl<K: Eq + Hash + Send + Sync, T: DataStoreEntry<K>> MemoryDataStore<K, T> {
     }
 }
 #[async_trait]
-impl<K: Eq + Hash + Send + Sync, T: DataStoreEntry<K>> DataStore<K, T, Error> for MemoryDataStore<K, T> {
+impl<K: Eq + Hash + Send + Sync, T: DataStoreEntry<K>> DataStore<K, T, Error>
+    for MemoryDataStore<K, T>
+{
     async fn init(&self) -> Result<(), Error> {
         Ok(())
     }
@@ -50,7 +52,6 @@ impl<K: Eq + Hash + Send + Sync, T: DataStoreEntry<K>> DataStore<K, T, Error> fo
     async fn get(&self, key: &K) -> Result<Option<T>, Error> {
         Ok(self.data.read().await.get(key).cloned())
     }
-
 
     async fn get_all(&self) -> Result<Vec<T>, Error> {
         Ok(self.data.read().await.values().cloned().collect())

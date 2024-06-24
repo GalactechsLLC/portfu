@@ -1,12 +1,12 @@
-use crate::themes::{Theme};
 use crate::themes::page::Page;
 use crate::themes::template::Template;
+use crate::themes::Theme;
 use portfu::pfcore::routes::Route;
 use portfu::prelude::once_cell::sync::Lazy;
+use portfu::prelude::uuid::Uuid;
 use regex::Regex;
 use std::borrow::Cow;
 use std::sync::Arc;
-use portfu::prelude::uuid::Uuid;
 
 pub static DEFAULT_THEME: Lazy<Arc<Theme>> = Lazy::new(|| {
     Arc::new(Theme {

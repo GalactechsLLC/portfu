@@ -1,11 +1,11 @@
-use std::io::Error;
 use http::{header, HeaderValue, StatusCode};
 use hyper::body::Bytes;
 use portfu::pfcore::{IntoStreamBody, ServiceData};
+use std::io::Error;
 
-pub mod users;
 pub mod editor;
 pub mod themes;
+pub mod users;
 
 pub fn send_internal_error(
     mut data: ServiceData,

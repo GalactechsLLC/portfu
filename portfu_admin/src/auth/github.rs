@@ -1,7 +1,4 @@
 use crate::services::{redirect_to_url, send_internal_error};
-use portfu::filters::method::GET;
-use portfu::prelude::{async_trait, Body};
-use portfu::wrappers::sessions::Session;
 use http::HeaderValue;
 use hyper::{header, StatusCode};
 use oauth2::basic::BasicClient;
@@ -12,8 +9,11 @@ use oauth2::{
 };
 use octocrab::models::orgs::Organization;
 use octocrab::models::Author;
+use portfu::filters::method::GET;
 use portfu::pfcore::service::{ServiceBuilder, ServiceGroup};
 use portfu::pfcore::{FromRequest, Json, ServiceData, ServiceHandler};
+use portfu::prelude::{async_trait, Body};
+use portfu::wrappers::sessions::Session;
 use serde::Deserialize;
 use std::env;
 use std::io::{Error, ErrorKind};

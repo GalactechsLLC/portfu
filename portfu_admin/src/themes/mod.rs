@@ -1,19 +1,17 @@
 pub mod default;
-pub mod template;
 pub mod page;
+pub mod template;
 pub mod token;
 
-use portfu::pfcore::routes::Route;
-use portfu::pfcore::{
-    IntoStreamBody, ServiceData,
-};
-use portfu::prelude::http::{StatusCode};
-use std::io::Error;
-use std::sync::Arc;
-use tokio::sync::RwLock;
 use crate::themes::page::Page;
 use crate::themes::template::Template;
 use crate::themes::token::Token;
+use portfu::pfcore::routes::Route;
+use portfu::pfcore::{IntoStreamBody, ServiceData};
+use portfu::prelude::http::StatusCode;
+use std::io::Error;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 #[derive(Default, Clone)]
 pub struct ThemeMetadata {

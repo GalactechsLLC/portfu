@@ -7,11 +7,14 @@
     import DatabaseEditor from "../components/DatabaseEditor.svelte";
     import Home from "../components/Home.svelte";
     import UserManager from "../components/UserManager.svelte";
-
-    contentTab.set('HM');
+    // Initialize the contentTab store
+    import { onMount } from 'svelte';
+    onMount(() => {
+        contentTab.set('HM');
+    });
 </script>
 
-<content>
+<div class="content">
     {#if $contentTab === 'HM'}
         <Home />
     {:else if $contentTab === 'FE'}
@@ -29,10 +32,10 @@
     {:else}
         <div>Select a tab to display content.</div>
     {/if}
-</content>
+</div>
 
 <style>
-    content {
+    div.content {
         display: flex;
         min-height: 88.5vh;
         padding: 30px 10px;

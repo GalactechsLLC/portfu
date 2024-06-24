@@ -1,15 +1,15 @@
+use crate::themes::default::DEFAULT_THEME;
+use crate::themes::token::Token;
+use crate::themes::Theme;
+use portfu::pfcore::editable::EditResult;
+use portfu::pfcore::service::{Service, ServiceBuilder};
+use portfu::pfcore::{ServiceData, ServiceHandler, ServiceRegister, ServiceRegistry};
+use portfu::prelude::async_trait::async_trait;
+use portfu::prelude::http::Extensions;
 use std::collections::HashMap;
 use std::io::Error;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use portfu::pfcore::{ServiceData, ServiceHandler, ServiceRegister, ServiceRegistry};
-use portfu::pfcore::editable::EditResult;
-use portfu::pfcore::service::{Service, ServiceBuilder};
-use portfu::prelude::async_trait::async_trait;
-use portfu::prelude::http::Extensions;
-use crate::themes::default::DEFAULT_THEME;
-use crate::themes::Theme;
-use crate::themes::token::Token;
 
 #[derive(Clone)]
 pub struct ThemeSelector {

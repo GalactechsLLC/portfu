@@ -27,6 +27,12 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 
+pub enum ServiceType {
+    File,
+    Folder,
+    API
+}
+
 #[async_trait]
 pub trait ServiceHandler {
     fn name(&self) -> &str;
@@ -34,6 +40,7 @@ pub trait ServiceHandler {
     fn is_editable(&self) -> bool {
         false
     }
+    fn service_type(&self) -> ServiceType;
     async fn current_value(&self) -> EditResult {
         EditResult::NotEditable
     }
@@ -62,6 +69,10 @@ impl ServiceHandler for (&'static str, &'static str) {
         *data.response.body_mut() = Bytes::from_static(self.1.as_bytes()).stream_body();
         Ok(data)
     }
+
+    fn service_type(&self) -> ServiceType {
+        ServiceType::File
+    }
 }
 
 #[async_trait]
@@ -74,6 +85,10 @@ impl ServiceHandler for (String, String) {
         *data.response.body_mut() = Bytes::from(self.1.clone()).stream_body();
         Ok(data)
     }
+
+    fn service_type(&self) -> ServiceType {
+        ServiceType::File
+    }
 }
 
 #[async_trait]
@@ -85,6 +100,10 @@ impl ServiceHandler for (&'static str, &'static [u8]) {
     async fn handle(&self, mut data: ServiceData) -> Result<ServiceData, (ServiceData, Error)> {
         *data.response.body_mut() = Bytes::from_static(self.1).stream_body();
         Ok(data)
+    }
+
+    fn service_type(&self) -> ServiceType {
+        ServiceType::File
     }
 }
 pub type BoxedBody =

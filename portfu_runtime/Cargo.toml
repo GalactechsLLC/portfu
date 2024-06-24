@@ -17,6 +17,8 @@ portfu_admin = {workspace = true, features = ["postgres", "mysql"]}
 simple_logger.workspace = true
 sqlx = { version ="0.7.4", features = ["time", "postgres", "mysql"]}
 tokio.workspace = true
+serde = { version = "1.0.203", features = ["derive"] }
+serde_yaml = "0.9.33"
 
 [features]
 default = []

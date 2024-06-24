@@ -1,19 +1,18 @@
-use portfu::macros::static_files;
-use portfu::prelude::ServiceGroup;
-use portfu::wrappers::sessions::SessionWrapper;
-use std::sync::Arc;
 use crate::services::editor::ServiceEditor;
 use crate::services::themes::ThemeSelector;
 use crate::services::users::UserManager;
 use crate::stores::UserStore;
+use portfu::macros::static_files;
+use portfu::prelude::ServiceGroup;
+use portfu::wrappers::sessions::SessionWrapper;
+use std::sync::Arc;
 
+pub mod auth;
+pub mod services;
+pub mod stores;
 pub mod themes;
 pub mod users;
-pub mod stores;
-pub mod services;
-pub mod auth;
 pub mod utils;
-
 
 #[static_files("front_end_dist/")]
 pub struct StaticFiles;

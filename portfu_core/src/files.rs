@@ -1,5 +1,6 @@
 use crate::editable::EditResult;
-use crate::{IntoStreamBody, ServiceBody, ServiceData, ServiceHandler};
+use crate::service::{ServiceBuilder, ServiceGroup};
+use crate::{IntoStreamBody, ServiceBody, ServiceData, ServiceHandler, ServiceType};
 use futures_util::TryStreamExt;
 use http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use http::{HeaderValue, StatusCode};
@@ -16,7 +17,6 @@ use tokio::fs::{File, OpenOptions};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 use tokio_util::codec::BytesCodec;
-use crate::service::{ServiceBuilder, ServiceGroup};
 
 pub struct DynamicFiles {
     pub root_directory: PathBuf,
@@ -25,34 +25,37 @@ pub struct DynamicFiles {
 impl From<DynamicFiles> for ServiceGroup {
     fn from(slf: DynamicFiles) -> ServiceGroup {
         let mut files = HashMap::new();
-        let root_path = slf.root_directory.as_path();
-        log::info!("Searching for files at: {root_path:?}");
-        if !root_path.exists() {
-            if let Err(e) = std::fs::create_dir(root_path) {
+        log::info!("Searching for files at: {:?}", &slf.root_directory);
+        if !slf.root_directory.exists() {
+            if let Err(e) = std::fs::create_dir(&slf.root_directory) {
                 log::error!("Error Creating Root Directory: {e:?}");
             }
         }
-        if let Err(e) = read_directory(root_path, root_path, &mut files) {
+        if let Err(e) = read_directory(&slf.root_directory, slf.root_directory.clone(), &mut files) {
             log::error!("Error Loading files: {e:?}");
         }
         ServiceGroup {
             filters: vec![],
             wrappers: vec![],
-            services: files.into_iter().map(| (name, path) | {
-                let mime = get_mime_type(&name);
-                ServiceBuilder::new(&name)
-                    .name(&name)
-                    .handler(Arc::new(FileLoader {
-                        name,
-                        mime,
-                        path,
-                        editable: slf.editable,
-                        cache_threshold: 65536,
-                        cache_status: AtomicBool::default(),
-                        cached_value: Arc::new(RwLock::new(Vec::with_capacity(0))),
-                    })).build()
-            }).collect(),
-            shared_state: Default::default()
+            services: files
+                .into_iter()
+                .map(|(name, path)| {
+                    let mime = get_mime_type(&name);
+                    ServiceBuilder::new(&name)
+                        .name(&name)
+                        .handler(Arc::new(FileLoader {
+                            name,
+                            mime,
+                            path,
+                            editable: slf.editable,
+                            cache_threshold: 65536,
+                            cache_status: AtomicBool::default(),
+                            cached_value: Arc::new(RwLock::new(Vec::with_capacity(0))),
+                        }))
+                        .build()
+                })
+                .collect(),
+            shared_state: Default::default(),
         }
     }
 }
@@ -60,7 +63,7 @@ impl From<DynamicFiles> for ServiceGroup {
 pub struct FileLoader {
     pub name: String,
     pub mime: String,
-    pub path: String,
+    pub path: PathBuf,
     pub editable: bool,
     pub cache_threshold: u64,
     pub cache_status: AtomicBool,
@@ -153,6 +156,16 @@ impl ServiceHandler for FileLoader {
         true
     }
 
+    fn service_type(&self) -> ServiceType {
+        if self.path.is_dir() {
+            ServiceType::Folder
+        } else if self.path.is_file() {
+            ServiceType::File
+        } else {
+            ServiceType::API
+        }
+    }
+
     async fn current_value(&self) -> EditResult {
         match load_from_disk(&self.path).await {
             Ok(bytes) => EditResult::Success(bytes),
@@ -195,11 +208,11 @@ impl ServiceHandler for FileLoader {
     }
 }
 
-async fn load_from_disk(path: &str) -> Result<Vec<u8>, Error> {
+async fn load_from_disk<P: AsRef<Path>>(path: P) -> Result<Vec<u8>, Error> {
     tokio::fs::read(path).await
 }
 
-async fn stream_from_disk(path: &str) -> Result<ServiceBody, Error> {
+async fn stream_from_disk<P: AsRef<Path>>(path: P) -> Result<ServiceBody, Error> {
     let file = File::open(path).await?;
     let buffer = tokio_util::codec::FramedRead::new(file, BytesCodec::new())
         .map_ok(|b| Frame::data(Bytes::from(b.to_vec())))
@@ -226,6 +239,10 @@ impl ServiceHandler for StaticFile {
         *data.response.body_mut() = bytes.stream_body();
         Ok(data)
     }
+
+    fn service_type(&self) -> ServiceType {
+        ServiceType::File
+    }
 }
 
 pub fn get_mime_type<P: AsRef<Path>>(path: P) -> String {
@@ -235,17 +252,17 @@ pub fn get_mime_type<P: AsRef<Path>>(path: P) -> String {
 }
 pub fn read_directory(
     root: &Path,
-    file_path: &Path,
-    file_map: &mut HashMap<String, String>,
+    file_path: PathBuf,
+    file_map: &mut HashMap<String, PathBuf>,
 ) -> Result<(), Error> {
     for results in file_path.read_dir()? {
         match results {
             Ok(entry) => {
                 let entry_path = entry.path();
-                if entry.path().is_dir() {
-                    read_directory(root, entry_path.as_path(), file_map)?;
+                if entry_path.is_dir() {
+                    read_directory(root, entry_path, file_map)?;
                 } else {
-                    read_file(root, entry_path.as_path(), file_map)?;
+                    read_file(root, entry_path, file_map)?;
                 }
             }
             Err(e) => {
@@ -253,12 +270,22 @@ pub fn read_directory(
             }
         }
     }
+    let mut new_root = std::path::PathBuf::from("/");
+    let path = file_path.canonicalize()?;
+    let path = path
+        .strip_prefix(root)
+        .map_err(|e| Error::new(::std::io::ErrorKind::InvalidInput, format!("{e:?}")))?;
+    new_root.extend(path);
+    file_map.insert(
+        new_root.to_string_lossy().to_string(),
+        file_path,
+    );
     Ok(())
 }
 pub fn read_file(
     root: &'_ Path,
-    starting_path: &'_ Path,
-    file_map: &'_ mut HashMap<String, String>,
+    starting_path: PathBuf,
+    file_map: &'_ mut HashMap<String, PathBuf>,
 ) -> Result<(), Error> {
     let mut new_root = std::path::PathBuf::from("/");
     let path = starting_path.canonicalize()?;
@@ -268,7 +295,7 @@ pub fn read_file(
     new_root.extend(path);
     file_map.insert(
         new_root.to_string_lossy().to_string(),
-        starting_path.to_string_lossy().to_string(),
+        starting_path,
     );
     Ok(())
 }

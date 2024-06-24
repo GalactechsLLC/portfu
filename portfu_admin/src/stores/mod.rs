@@ -1,20 +1,19 @@
+mod cache;
 pub mod memory;
 #[cfg(feature = "postgres")]
 pub mod postgres;
-mod cache;
 
-use std::io::Error;
-#[cfg(feature = "postgres")]
-use sqlx::{FromRow, Row};
-#[cfg(feature = "postgres")]
-use sqlx::{Postgres};
+use crate::users::User;
+use portfu::prelude::async_trait::async_trait;
 #[cfg(feature = "postgres")]
 use sqlx::database::HasArguments;
 #[cfg(feature = "postgres")]
 use sqlx::query::Query;
-use portfu::prelude::async_trait::async_trait;
-use crate::users::User;
-
+#[cfg(feature = "postgres")]
+use sqlx::Postgres;
+#[cfg(feature = "postgres")]
+use sqlx::{FromRow, Row};
+use std::io::Error;
 
 pub trait UserStore: DataStore<i64, User, Error> + Send + Sync + 'static {}
 
@@ -25,7 +24,7 @@ pub struct SearchParams {
     pub limit: isize,
     pub page: isize,
     pub page_size: isize,
-    pub order_by: Option<String>
+    pub order_by: Option<String>,
 }
 
 pub trait DataStoreEntry<T>: Default + Send + Sync + Eq + Clone + 'static {
@@ -36,16 +35,17 @@ pub trait DataStoreEntry<T>: Default + Send + Sync + Eq + Clone + 'static {
     fn filter_invalid_params(params: &mut SearchParams) {
         params
             .fields
-            .retain(|(k, _)| {
-                Self::parameters().contains(&k.as_str())
-            });
+            .retain(|(k, _)| Self::parameters().contains(&k.as_str()));
     }
 }
 
 #[cfg(feature = "postgres")]
-pub trait DatabaseEntry<R: Row, P>: for<'r>  FromRow<'r, R> {
-    fn bind<'q>(&'q self, query: Query<'q, Postgres, <Postgres as HasArguments>::Arguments>, field: &str)
-        -> Query<'q, Postgres, <Postgres as HasArguments>::Arguments>;
+pub trait DatabaseEntry<R: Row, P>: for<'r> FromRow<'r, R> {
+    fn bind<'q>(
+        &'q self,
+        query: Query<'q, Postgres, <Postgres as HasArguments>::Arguments>,
+        field: &str,
+    ) -> Query<'q, Postgres, <Postgres as HasArguments>::Arguments>;
     fn database() -> String;
     fn table() -> String;
 }
