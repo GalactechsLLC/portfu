@@ -28,6 +28,7 @@ portfu = {path = "./portfu", version = "1.2.0", default-features = false}
 portfu_admin = {path = "./portfu_admin", version = "1.2.0", default-features = false}
 portfu_core = {path = "./portfu_core", version = "1.2.0", default-features = false}
 portfu_macros = {path = "./portfu_macros", version = "1.2.0", default-features = false}
+prometheus = "0.13.4"
 proc-macro2 = "1.0.84"
 quote = "1.0.36"
 regex = "1.10.4"

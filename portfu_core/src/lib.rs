@@ -21,7 +21,7 @@ use hyper::body::{Bytes, Incoming};
 use log::trace;
 use once_cell::sync::Lazy;
 use serde::Deserialize;
-use std::fmt::{Debug, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::io::{Error, ErrorKind};
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -275,6 +275,11 @@ pub struct Path(String);
 impl Path {
     pub fn inner(self) -> String {
         self.0
+    }
+}
+impl Display for Path {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
     }
 }
 #[async_trait]
