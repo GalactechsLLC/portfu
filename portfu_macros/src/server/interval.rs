@@ -97,7 +97,7 @@ impl ToTokens for Interval {
                         let state_ident: Ident = Ident::new("State", segment.ident.span());
                         if state_ident == segment.ident {
                             dyn_vars.push(quote! {
-                            let #ident_val: #ident_type = state.get::<Arc<#inner_type>>()
+                            let #ident_val: #ident_type = state.get::<::std::sync::Arc<#inner_type>>()
                                 .cloned()
                                 .map(|data| ::portfu::pfcore::State(data)).ok_or(
                                     ::std::io::Error::new(::std::io::ErrorKind::NotFound, format!("Failed to find State of type {}", stringify!(#inner_type)))
@@ -128,7 +128,7 @@ impl ToTokens for Interval {
                     use ::portfu::pfcore::task::TaskFn;
                     ::portfu::pfcore::task::Task {
                         name: interval.name().to_string(),
-                        task_fn: Arc::new(interval)
+                        task_fn: ::std::sync::Arc::new(interval)
                     }
                 }
             }
@@ -139,7 +139,7 @@ impl ToTokens for Interval {
                 }
                 async fn run(
                     &self,
-                    state: std::sync::Arc< ::portfu::prelude::http::Extensions >
+                    state: ::std::sync::Arc< ::portfu::prelude::http::Extensions >
                 ) -> Result<(), ::std::io::Error> {
                     #ast
                     let mut __interval_duration = ::tokio::time::interval(std::time::Duration::from_millis(#interval));

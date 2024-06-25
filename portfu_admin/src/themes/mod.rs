@@ -12,6 +12,7 @@ use portfu::prelude::http::StatusCode;
 use std::io::Error;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use portfu::pfcore::service::BodyType;
 
 #[derive(Default, Clone)]
 pub struct ThemeMetadata {
@@ -51,7 +52,7 @@ impl Theme {
             }
         }
         *data.response.status_mut() = StatusCode::NOT_FOUND;
-        *data.response.body_mut() = format!("{path} Not Found").stream_body();
+        data.response.set_body(BodyType::Stream(format!("{path} Not Found").stream_body()));
         Ok(data)
     }
 }

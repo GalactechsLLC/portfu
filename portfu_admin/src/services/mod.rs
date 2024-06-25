@@ -1,6 +1,7 @@
 use http::{header, HeaderValue, StatusCode};
 use hyper::body::Bytes;
 use portfu::pfcore::{IntoStreamBody, ServiceData};
+use portfu::pfcore::service::BodyType;
 use std::io::Error;
 
 pub mod editor;
@@ -12,7 +13,7 @@ pub fn send_internal_error(
     error: String,
 ) -> Result<ServiceData, (ServiceData, Error)> {
     *data.response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-    *data.response.body_mut() = Bytes::from(error).stream_body();
+    data.response.set_body(BodyType::Stream(Bytes::from(error).stream_body()));
     Ok(data)
 }
 

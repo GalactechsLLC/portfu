@@ -24,6 +24,7 @@ log.workspace = true
 once_cell.workspace = true
 portfu_core.workspace = true
 portfu_macros.workspace = true
+prometheus.workspace = true
 rustls.workspace = true
 rustls-pemfile.workspace = true
 serde.workspace = true

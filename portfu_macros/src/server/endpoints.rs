@@ -13,6 +13,29 @@ pub struct EndpointArgs {
     pub options: Punctuated<syn::MetaNameValue, Token![,]>,
 }
 
+pub enum OutputType {
+    Json,
+    Bytes,
+    None
+}
+impl OutputType {
+    fn parse(output: &str) -> Result<Self, String> {
+        match output.to_ascii_lowercase().as_str() {
+            "json" => Ok(Self::Json),
+            "bytes" => Ok(Self::Bytes),
+            "none" => Ok(Self::None),
+            _ => Err(format!("Invalid Output Format: `{}`", output)),
+        }
+    }
+}
+impl TryFrom<&syn::LitStr> for OutputType {
+    type Error = syn::Error;
+    fn try_from(value: &syn::LitStr) -> Result<Self, Self::Error> {
+        Self::parse(value.value().as_str())
+            .map_err(|message| syn::Error::new_spanned(value, message))
+    }
+}
+
 impl syn::parse::Parse for EndpointArgs {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
         let path = input.parse::<syn::LitStr>().map_err(|mut err| {
@@ -104,7 +127,7 @@ impl Endpoint {
 }
 
 impl ToTokens for Endpoint {
-    fn to_tokens(&self, output: &mut TokenStream2) {
+    fn to_tokens(&self, token_out: &mut TokenStream2) {
         let Self {
             name,
             generics,
@@ -118,6 +141,7 @@ impl ToTokens for Endpoint {
             filters,
             wrappers,
             methods,
+            output
         } = args;
         let resource_name = resource_name
             .as_ref()
@@ -279,7 +303,15 @@ impl ToTokens for Endpoint {
                     Ok(v) => v,
                     Err(e) => {
                         *handle_data.response.status_mut() = ::portfu::prelude::http::StatusCode::INTERNAL_SERVER_ERROR;
-                        *handle_data.response.body_mut() = ::portfu::prelude::hyper::body::Bytes::from(format!("Failed to extract {} as {}, {e:?}", stringify!(#ident_val), stringify!(#ident_type).replace(' ',""))).stream_body();
+                        handle_data.response.set_body(
+                            ::portfu::pfcore::service::BodyType::Stream(
+                                ::portfu::prelude::hyper::body::Bytes::from(
+                                    format!("Failed to extract {} as {}, {e:?}",
+                                        stringify!(#ident_val), stringify!(#ident_type).replace(' ',"")
+                                    )
+                                ).stream_body()
+                            )
+                        );
                         return Ok(handle_data);
                     }
                 };
@@ -288,6 +320,41 @@ impl ToTokens for Endpoint {
                 #ident_val,
             });
         }
+        let output_statement = match output {
+            OutputType::Json => {
+                quote! {
+                    match ::portfu::prelude::serde_json::to_vec(&t) {
+                        Ok(v) => {
+                            handle_data.response.set_body(
+                                ::portfu::pfcore::service::BodyType::Stream(
+                                    v.stream_body()
+                                )
+                            );
+                        }
+                        Err(e) => {
+                            let err = format!("{e:?}");
+                            let bytes: ::portfu::prelude::hyper::body::Bytes = err.into();
+                            handle_data.response.set_body(
+                                ::portfu::pfcore::service::BodyType::Stream(
+                                    bytes.stream_body()
+                                )
+                            );
+                        }
+                    }
+                }
+            }
+            OutputType::Bytes => {
+                quote! {
+                    let bytes: ::portfu::prelude::hyper::body::Bytes = t.into();
+                    handle_data.response.set_body(
+                        ::portfu::pfcore::service::BodyType::Stream(
+                            bytes.stream_body()
+                        )
+                    );
+                }
+            }
+            OutputType::None => { quote!{} }
+        };
         let stream = quote! {
             #(#doc_attributes)*
             #[allow(non_camel_case_types, missing_docs)]
@@ -317,21 +384,27 @@ impl ToTokens for Endpoint {
                     #(#dyn_vars)*
                     match #name #function_ext(#(#additional_function_vars)*).await {
                         Ok(t) => {
-                            let bytes: ::portfu::prelude::hyper::body::Bytes = t.into();
-                            *handle_data.response.body_mut() = bytes.stream_body();
+                            #output_statement
                             Ok(handle_data)
                         }
                         Err(e) => {
                             let err = format!("{e:?}");
                             let bytes: ::portfu::prelude::hyper::body::Bytes = err.into();
-                            *handle_data.response.body_mut() = bytes.stream_body();
+                            handle_data.response.set_body(
+                                ::portfu::pfcore::service::BodyType::Stream(
+                                    bytes.stream_body()
+                                )
+                            );
                             Ok(handle_data)
                         }
                     }
                 }
+                fn service_type(&self) -> ::portfu::prelude::ServiceType {
+                    ::portfu::prelude::ServiceType::API
+                }
             }
         };
-        output.extend(stream);
+        token_out.extend(stream);
     }
 }
 
@@ -341,6 +414,7 @@ struct Args {
     filters: Vec<Path>,
     wrappers: Vec<syn::Expr>,
     methods: HashSet<Method>,
+    output: OutputType,
 }
 
 impl Args {
@@ -349,12 +423,10 @@ impl Args {
         let mut filters = Vec::new();
         let mut wrappers = Vec::new();
         let mut methods = HashSet::new();
-
-        let is_route_macro = method.is_none();
+        let mut output = OutputType::Bytes;
         if let Some(method) = method {
             methods.insert(method);
         }
-
         for nv in args.options {
             if nv.path.is_ident("name") {
                 if let syn::Expr::Lit(syn::ExprLit {
@@ -363,6 +435,19 @@ impl Args {
                 }) = nv.value
                 {
                     resource_name = Some(lit);
+                } else {
+                    return Err(syn::Error::new_spanned(
+                        nv.value,
+                        "Attribute name expects literal string",
+                    ));
+                }
+            } else if nv.path.is_ident("output") {
+                if let syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(lit),
+                    ..
+                }) = nv.value
+                {
+                    output = OutputType::try_from(&lit)?
                 } else {
                     return Err(syn::Error::new_spanned(
                         nv.value,
@@ -396,12 +481,7 @@ impl Args {
                     ));
                 }
             } else if nv.path.is_ident("method") {
-                if !is_route_macro {
-                    return Err(syn::Error::new_spanned(
-                        &nv,
-                        "HTTP method forbidden here; to handle multiple methods, use `route` instead",
-                    ));
-                } else if let syn::Expr::Lit(syn::ExprLit {
+                if let syn::Expr::Lit(syn::ExprLit {
                     lit: syn::Lit::Str(lit),
                     ..
                 }) = nv.value.clone()
@@ -432,6 +512,7 @@ impl Args {
             filters,
             wrappers,
             methods,
+            output
         })
     }
 }

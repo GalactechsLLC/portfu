@@ -166,7 +166,8 @@ impl Default for ServiceEditor {
     fn default() -> Self {
         Self {
             services: ServiceGroup::default()
-                .service(list_editable)
+                .service(list_editable_files)
+                .service(list_editable_folders)
                 .service(get_service_value)
                 .service(update_service_value),
         }

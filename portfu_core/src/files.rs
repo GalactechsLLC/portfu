@@ -1,6 +1,5 @@
 use crate::editable::EditResult;
-use crate::service::{ServiceBuilder, ServiceGroup};
-use crate::{IntoStreamBody, ServiceBody, ServiceData, ServiceHandler, ServiceType};
+use crate::{IntoStreamBody, ServiceData, ServiceHandler, ServiceType, StreamingBody};
 use futures_util::TryStreamExt;
 use http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use http::{HeaderValue, StatusCode};
@@ -17,6 +16,7 @@ use tokio::fs::{File, OpenOptions};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 use tokio_util::codec::BytesCodec;
+use crate::service::{BodyType, ServiceBuilder, ServiceGroup};
 
 pub struct DynamicFiles {
     pub root_directory: PathBuf,
@@ -84,7 +84,7 @@ impl ServiceHandler for FileLoader {
             data.response
                 .headers_mut()
                 .insert(CONTENT_LENGTH, HeaderValue::from(cached.len()));
-            *data.response.body_mut() = cached.stream_body();
+            data.response.set_body(BodyType::Stream(cached.stream_body()));
             Ok(data)
         } else {
             let mut stream = true;
@@ -106,7 +106,7 @@ impl ServiceHandler for FileLoader {
                                     let err = format!("{e:?}");
                                     let bytes: Bytes = err.into();
                                     *data.response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                                    *data.response.body_mut() = bytes.stream_body();
+                                    data.response.set_body(BodyType::Stream(bytes.stream_body()));
                                     return Ok(data);
                                 }
                             }
@@ -117,7 +117,7 @@ impl ServiceHandler for FileLoader {
                     let err = format!("{e:?}");
                     let bytes: Bytes = err.into();
                     *data.response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                    *data.response.body_mut() = bytes.stream_body();
+                    data.response.set_body(BodyType::Stream(bytes.stream_body()));
                     return Ok(data);
                 }
             }
@@ -127,14 +127,14 @@ impl ServiceHandler for FileLoader {
                         if let Ok(val) = HeaderValue::from_str(&self.mime) {
                             data.response.headers_mut().insert(CONTENT_TYPE, val);
                         }
-                        *data.response.body_mut() = stream;
+                        data.response.set_body(BodyType::Stream(stream));
                         Ok(data)
                     }
                     Err(e) => {
                         let err = format!("{e:?}");
                         let bytes: Bytes = err.into();
                         *data.response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                        *data.response.body_mut() = bytes.stream_body();
+                        data.response.set_body(BodyType::Stream(bytes.stream_body()));
                         return Ok(data);
                     }
                 }
@@ -146,7 +146,7 @@ impl ServiceHandler for FileLoader {
                 data.response
                     .headers_mut()
                     .insert(CONTENT_LENGTH, HeaderValue::from(cached.len()));
-                *data.response.body_mut() = cached.stream_body();
+                data.response.set_body(BodyType::Stream(cached.stream_body()));
                 Ok(data)
             }
         }
@@ -212,7 +212,7 @@ async fn load_from_disk<P: AsRef<Path>>(path: P) -> Result<Vec<u8>, Error> {
     tokio::fs::read(path).await
 }
 
-async fn stream_from_disk<P: AsRef<Path>>(path: P) -> Result<ServiceBody, Error> {
+async fn stream_from_disk<P: AsRef<Path>>(path: P) -> Result<StreamingBody, Error> {
     let file = File::open(path).await?;
     let buffer = tokio_util::codec::FramedRead::new(file, BytesCodec::new())
         .map_ok(|b| Frame::data(Bytes::from(b.to_vec())))
@@ -236,7 +236,7 @@ impl ServiceHandler for StaticFile {
         if let Ok(val) = HeaderValue::from_str(&self.mime) {
             data.response.headers_mut().insert(CONTENT_TYPE, val);
         }
-        *data.response.body_mut() = bytes.stream_body();
+        data.response.set_body(BodyType::Stream(bytes.stream_body()));
         Ok(data)
     }
 
