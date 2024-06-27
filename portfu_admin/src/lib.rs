@@ -14,7 +14,6 @@ pub mod services;
 pub mod auth;
 pub mod utils;
 
-
 #[static_files("front_end_dist/")]
 pub struct StaticFiles;
 

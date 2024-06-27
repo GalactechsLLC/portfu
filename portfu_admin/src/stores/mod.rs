@@ -42,6 +42,8 @@ pub trait DataStoreEntry<T>: Default + Send + Sync + Eq + Clone + 'static {
     }
 }
 
+
+
 #[cfg(feature = "postgres")]
 pub trait DatabaseEntry<R: Row, P>: for<'r>  FromRow<'r, R> {
     fn bind<'q>(&'q self, query: Query<'q, Postgres, <Postgres as HasArguments>::Arguments>, field: &str)

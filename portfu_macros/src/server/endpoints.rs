@@ -3,10 +3,7 @@ use crate::{extract_method_filters, parse_path_variables};
 use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
 use quote::{quote, ToTokens};
 use std::collections::HashSet;
-use syn::{
-    parse_quote, punctuated::Punctuated, FnArg, GenericParam, Generics, LitStr, Pat, Path, Token,
-    Type,
-};
+use syn::{parse_quote, punctuated::Punctuated, FnArg, GenericParam, Generics, LitStr, Pat, Path, Token, Type, PathArguments, GenericArgument};
 
 pub struct EndpointArgs {
     pub path: syn::LitStr,
@@ -222,6 +219,7 @@ impl ToTokens for Endpoint {
         let registrations = quote! {
             let __resource = ::portfu::pfcore::service::ServiceBuilder::new(#path)
                 .name(#resource_name)
+                .extend_state(shared_state.clone())
                 #method_filters
                 #(.filter(::portfu::pfcore::filters::all(#filters_name, #filters)))*
                 #(.wrap(#wrappers))*
@@ -263,7 +261,37 @@ impl ToTokens for Endpoint {
                 if let Some(segment) = path.path.segments.first() {
                     let response: Ident = Ident::new("Response", segment.ident.span());
                     let service_data: Ident = Ident::new("ServiceData", segment.ident.span());
-                    if response == segment.ident {
+                    let state_ident: Ident = Ident::new("State", segment.ident.span());
+                    if state_ident == segment.ident {
+                        if let Some(inner_type) = match &segment.arguments {
+                            PathArguments::None => panic!("State Inner Object Cannot be None"),
+                            PathArguments::AngleBracketed(args) => {
+                                if let Some(GenericArgument::Type(ty)) = args.args.first() {
+                                    Some(ty)
+                                } else {
+                                    continue;
+                                }
+                            }
+                            PathArguments::Parenthesized(args) => args.inputs.first(),
+                        } {
+                            dyn_vars.push(quote! {
+                                let #ident_val: #ident_type = match handle_data.request.get::<::std::sync::Arc<#inner_type>>()
+                                    .cloned()
+                                    .map(|data| ::portfu::pfcore::State(data)).ok_or(
+                                        ::std::io::Error::new(::std::io::ErrorKind::NotFound, format!("Failed to find State of type {}", stringify!(#inner_type)))
+                                    ) {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        return Err((handle_data, e));
+                                    }
+                                };
+                            });
+                            additional_function_vars.push(quote! {
+                                #ident_val,
+                            });
+                        }
+                        continue;
+                    }else if response == segment.ident {
                         dyn_vars.push(quote! {
                             let #ident_val: &mut Response<Full<Bytes>> = &mut handle_data.response;
                         });
@@ -325,6 +353,10 @@ impl ToTokens for Endpoint {
                 quote! {
                     match ::portfu::prelude::serde_json::to_vec(&t) {
                         Ok(v) => {
+                            handle_data.response.headers_mut().insert(
+                                ::portfu::prelude::hyper::header::CONTENT_TYPE,
+                                ::portfu::prelude::hyper::header::HeaderValue::from_static("application/json")
+                            );
                             handle_data.response.set_body(
                                 ::portfu::pfcore::service::BodyType::Stream(
                                     v.stream_body()
@@ -361,7 +393,7 @@ impl ToTokens for Endpoint {
             #struct_def
             #default_struct
             impl #generics ::portfu::pfcore::ServiceRegister for #name #generic_lables {
-                fn register(self, service_registry: &mut portfu::prelude::ServiceRegistry, _shared_state: portfu::prelude::http::Extensions) {
+                fn register(self, service_registry: &mut portfu::prelude::ServiceRegistry, shared_state: portfu::prelude::http::Extensions) {
                     #registrations
                 }
             }

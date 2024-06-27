@@ -51,7 +51,6 @@ impl<K: Eq + Hash + Send + Sync, T: DataStoreEntry<K>> DataStore<K, T, Error> fo
         Ok(self.data.read().await.get(key).cloned())
     }
 
-
     async fn get_all(&self) -> Result<Vec<T>, Error> {
         Ok(self.data.read().await.values().cloned().collect())
     }

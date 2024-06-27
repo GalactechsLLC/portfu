@@ -134,7 +134,7 @@ impl ServiceRegister for MetricsEndpoint {
     fn register(self, service_registry: &mut ServiceRegistry, shared_state: Extensions) {
         let __resource = ServiceBuilder::new("/metrics")
             .name("metrics_endpoint")
-            .shared_state(shared_state)
+            .extend_state(shared_state.clone())
             .filter(GET.clone())
             .handler(Arc::new(self))
             .build();
