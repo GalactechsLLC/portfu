@@ -2,20 +2,21 @@ use http::{Method, Request, Response, Uri};
 use http_body_util::{BodyStream, Empty, Full, StreamBody};
 use hyper::body::{Body, Bytes, Frame, Incoming, SizeHint};
 use log::error;
-use pfcore::service::ConsumedBodyType;
+use pfcore::service::BodyType;
 use rustls::client::ClientConfig;
 use rustls::pki_types::ServerName;
 use rustls::RootCertStore;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use pfcore::PinnedBody;
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 
 pub enum SupportedBody {
     Empty(Empty<Bytes>),
     Full(Full<Bytes>),
-    Incoming(StreamBody<BodyStream<Incoming>>),
+    Stream(StreamBody<BodyStream<PinnedBody>>),
 }
 
 impl Body for SupportedBody {
@@ -33,7 +34,7 @@ impl Body for SupportedBody {
             SupportedBody::Full(b) => Pin::new(b)
                 .poll_frame(cx)
                 .map_err(|_| "Failed to Poll Full"),
-            SupportedBody::Incoming(b) => Pin::new(b)
+            SupportedBody::Stream(b) => Pin::new(b)
                 .poll_frame(cx)
                 .map_err(|_| "Failed to Poll Incoming"),
         }
@@ -43,7 +44,7 @@ impl Body for SupportedBody {
         match self {
             SupportedBody::Empty(b) => Pin::new(b).is_end_stream(),
             SupportedBody::Full(b) => Pin::new(b).is_end_stream(),
-            SupportedBody::Incoming(b) => Pin::new(b).is_end_stream(),
+            SupportedBody::Stream(b) => Pin::new(b).is_end_stream(),
         }
     }
 
@@ -51,7 +52,7 @@ impl Body for SupportedBody {
         match self {
             SupportedBody::Empty(b) => Pin::new(b).size_hint(),
             SupportedBody::Full(b) => Pin::new(b).size_hint(),
-            SupportedBody::Incoming(b) => Body::size_hint(b),
+            SupportedBody::Stream(b) => Body::size_hint(b),
         }
     }
 }
@@ -65,21 +66,19 @@ impl From<Full<Bytes>> for SupportedBody {
         SupportedBody::Full(value)
     }
 }
-impl From<StreamBody<BodyStream<Incoming>>> for SupportedBody {
-    fn from(value: StreamBody<BodyStream<Incoming>>) -> Self {
-        SupportedBody::Incoming(value)
+impl From<StreamBody<BodyStream<PinnedBody>>> for SupportedBody {
+    fn from(value: StreamBody<BodyStream<PinnedBody>>) -> Self {
+        SupportedBody::Stream(value)
     }
 }
-impl From<ConsumedBodyType> for SupportedBody {
-    fn from(value: ConsumedBodyType) -> Self {
+impl From<BodyType> for SupportedBody {
+    fn from(value: BodyType) -> Self {
         match value {
-            ConsumedBodyType::Stream(value) => {
-                let body_stream = BodyStream::new(value);
-                let body = StreamBody::new(body_stream);
-                SupportedBody::Incoming(body)
+            BodyType::Stream(value) => {
+                SupportedBody::Stream(value)
             }
-            ConsumedBodyType::Sized(value) => SupportedBody::Full(value),
-            ConsumedBodyType::Empty => SupportedBody::Empty(Empty::default()),
+            BodyType::Sized(value) => SupportedBody::Full(value),
+            BodyType::Empty => SupportedBody::Empty(Empty::default()),
         }
     }
 }

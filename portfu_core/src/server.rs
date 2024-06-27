@@ -1,13 +1,13 @@
 use crate::filters::{Filter, FilterFn, FilterResult};
-use crate::service::{IncomingRequest, ServiceRequest};
+use crate::service::{BodyType, IncomingRequest, ServiceRequest, ServiceResponse};
 use crate::signal::await_termination;
 use crate::ssl::load_ssl_certs;
 use crate::task::{Task, TaskFn};
 use crate::wrappers::{WrapperFn, WrapperResult};
-use crate::{IntoStreamBody, ServiceData, ServiceRegister, ServiceRegistry, ServiceResponse};
+use crate::{StreamingBody, ServiceData, ServiceRegister, ServiceRegistry, IntoStreamBody};
 use http::{Extensions, Request, Response, StatusCode};
-use http_body_util::{BodyExt, BodyStream, Empty, StreamBody};
-use hyper::body::Incoming;
+use http_body_util::{Full};
+use hyper::body::{Bytes, Incoming};
 use hyper::server::conn::http1::Builder;
 use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
@@ -70,6 +70,7 @@ impl Server {
     pub async fn run(self) -> Result<(), Error> {
         let server = Arc::new(self);
         let socket_addr = Self::get_socket_addr(&server.config)?;
+        info!("Server Starting Up on {socket_addr}");
         let listener = TcpListener::bind(socket_addr).await?;
         let tls_acceptor = Arc::new(match server.config.ssl_config.as_ref() {
             Some(_) => {
@@ -140,6 +141,7 @@ impl Server {
                 _ = tokio::time::sleep(Duration::from_millis(100)) => {}
             )
         }
+        info!("Server Exiting");
         background_tasks.shutdown().await;
         Ok(())
     }
@@ -166,11 +168,9 @@ impl Server {
         server: Arc<Self>,
         mut request: Request<Incoming>,
         address: SocketAddr,
-    ) -> Result<ServiceResponse, Error> {
+    ) -> Result<Response<StreamingBody>, Error> {
         request.extensions_mut().insert(address);
-        let mut response: ServiceResponse = Response::new(StreamBody::new(BodyStream::new(
-            Box::pin(Empty::new().map_err(|_| "Failed to Map Empty to Service Body")),
-        )));
+        let mut response: ServiceResponse = ServiceResponse::new();
         let handle = if !server.filters.is_empty() {
             let mut handle = true;
             for f in server.filters.iter() {
@@ -185,7 +185,7 @@ impl Server {
         };
         if !handle {
             *response.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
-            Ok(response)
+            Ok(response.into())
         } else {
             let mut handler = None;
             for service in server.registry.services.iter() {
@@ -198,11 +198,11 @@ impl Server {
                 Some(service) => {
                     request
                         .extensions_mut()
-                        .extend(server.shared_state.as_ref().clone());
+                        .extend(service.shared_state.clone());
                     let mut service_data = ServiceData {
                         server: server.clone(),
                         request: ServiceRequest {
-                            request: IncomingRequest::Stream(request),
+                            request: IncomingRequest::Stream(request.map(|b| b.stream_body())),
                             path: service.path.clone(),
                         },
                         response,
@@ -211,7 +211,7 @@ impl Server {
                         match func.before(&mut service_data).await {
                             WrapperResult::Continue => {}
                             WrapperResult::Return => {
-                                return Ok(service_data.response);
+                                return Ok(service_data.response.into());
                             }
                         }
                     }
@@ -225,22 +225,24 @@ impl Server {
                                     sd.request.request.uri()
                                 );
                                 *sd.response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                                *sd.response.body_mut() = format!("{:?}", e).stream_body();
+                                sd.response.set_body(BodyType::Sized(
+                                    Full::new(Bytes::from(format!("{:?}", e)))
+                                ));
                                 sd
                             });
                     for func in server.wrappers.iter() {
                         match func.after(&mut service_data).await {
                             WrapperResult::Continue => {}
                             WrapperResult::Return => {
-                                return Ok(service_data.response);
+                                return Ok(service_data.response.into());
                             }
                         }
                     }
-                    Ok(service_data.response)
+                    Ok(service_data.response.into())
                 }
                 None => {
                     *response.status_mut() = StatusCode::NOT_FOUND;
-                    Ok(response)
+                    Ok(response.into())
                 }
             }
         }
@@ -251,6 +253,7 @@ pub struct ServerBuilder {
     services: ServiceRegistry,
     config: ServerConfig,
     shared_state: Extensions,
+    run_handle: Arc<AtomicBool>,
     filters: Vec<Arc<dyn FilterFn + Sync + Send>>,
     tasks: Vec<Arc<Task>>,
     wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
@@ -261,6 +264,7 @@ impl ServerBuilder {
             services: ServiceRegistry { services: vec![] },
             config,
             shared_state: Extensions::default(),
+            run_handle: Arc::new(AtomicBool::new(true)),
             filters: vec![],
             tasks: vec![],
             wrappers: vec![],
@@ -283,7 +287,7 @@ impl ServerBuilder {
     }
     pub fn register<T: ServiceRegister>(self, service: T) -> Self {
         let mut s = self;
-        service.register(&mut s.services);
+        service.register(&mut s.services, s.shared_state.clone());
         s
     }
     pub fn filter(self, filter: Filter) -> Self {
@@ -300,6 +304,10 @@ impl ServerBuilder {
         self.tasks.push(Arc::new(task.into()));
         self
     }
+    pub fn run_handle(mut self, run_handle: Arc<AtomicBool>) -> Self {
+        self.run_handle = run_handle;
+        self
+    }
     pub fn shared_state<T: Send + Sync + 'static>(self, shared_state: T) -> Self {
         let mut s = self;
         s.shared_state.insert(Arc::new(shared_state));
@@ -309,7 +317,7 @@ impl ServerBuilder {
         Server {
             registry: Arc::new(self.services),
             config: self.config,
-            run: Arc::new(AtomicBool::new(true)),
+            run: self.run_handle,
             shared_state: Arc::new(self.shared_state),
             filters: self.filters,
             tasks: self.tasks,
@@ -323,6 +331,7 @@ impl Default for ServerBuilder {
             services: ServiceRegistry { services: vec![] },
             config: ServerConfig::default(),
             shared_state: Extensions::default(),
+            run_handle: Arc::new(AtomicBool::new(true)),
             filters: vec![],
             tasks: vec![],
             wrappers: vec![],

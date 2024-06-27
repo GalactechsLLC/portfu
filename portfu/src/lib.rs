@@ -1,5 +1,4 @@
 pub mod client;
-pub mod endpoints;
 pub mod filters;
 pub mod wrappers;
 
@@ -13,6 +12,7 @@ pub mod prelude {
     pub extern crate hyper;
     pub extern crate hyper_util;
     pub extern crate log;
+    pub extern crate serde_json;
     pub extern crate once_cell;
     pub extern crate tokio_tungstenite;
     pub extern crate uuid;
@@ -20,7 +20,7 @@ pub mod prelude {
     pub type Server = ::pfcore::server::Server;
     pub type ServerBuilder = ::pfcore::server::ServerBuilder;
     pub type SslConfig = ::pfcore::server::SslConfig;
-    pub type ServiceResponse = ::pfcore::ServiceResponse;
+    pub type ServiceResponse = ::pfcore::service::ServiceResponse;
     pub type ServiceGroup = ::pfcore::service::ServiceGroup;
     pub type ServiceRegistry = ::pfcore::ServiceRegistry;
     pub type ServiceData = ::pfcore::ServiceData;

@@ -1,2 +1,6 @@
 /target
 .idea
+Dockerfile
+.dockerignore
+portfu_runtime/helm_deploy
+portfu_admin/front_end_dist/pf-admin

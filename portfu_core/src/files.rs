@@ -1,5 +1,5 @@
 use crate::editable::EditResult;
-use crate::{IntoStreamBody, ServiceBody, ServiceData, ServiceHandler};
+use crate::{IntoStreamBody, StreamingBody, ServiceData, ServiceHandler};
 use futures_util::TryStreamExt;
 use http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use http::{HeaderValue, StatusCode};
@@ -9,13 +9,53 @@ use hyper::body::Bytes;
 use mime_guess::from_path;
 use std::collections::HashMap;
 use std::io::Error;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::fs::{File, OpenOptions};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 use tokio_util::codec::BytesCodec;
+use crate::service::{BodyType, ServiceBuilder, ServiceGroup};
+
+pub struct DynamicFiles {
+    pub root_directory: PathBuf,
+    pub editable: bool,
+}
+impl From<DynamicFiles> for ServiceGroup {
+    fn from(slf: DynamicFiles) -> ServiceGroup {
+        let mut files = HashMap::new();
+        let root_path = slf.root_directory.as_path();
+        log::info!("Searching for files at: {root_path:?}");
+        if !root_path.exists() {
+            if let Err(e) = std::fs::create_dir(root_path) {
+                log::error!("Error Creating Root Directory: {e:?}");
+            }
+        }
+        if let Err(e) = read_directory(root_path, root_path, &mut files) {
+            log::error!("Error Loading files: {e:?}");
+        }
+        ServiceGroup {
+            filters: vec![],
+            wrappers: vec![],
+            services: files.into_iter().map(| (name, path) | {
+                let mime = get_mime_type(&name);
+                ServiceBuilder::new(&name)
+                    .name(&name)
+                    .handler(Arc::new(FileLoader {
+                        name,
+                        mime,
+                        path,
+                        editable: slf.editable,
+                        cache_threshold: 65536,
+                        cache_status: AtomicBool::default(),
+                        cached_value: Arc::new(RwLock::new(Vec::with_capacity(0))),
+                    })).build()
+            }).collect(),
+            shared_state: Default::default()
+        }
+    }
+}
 
 pub struct FileLoader {
     pub name: String,
@@ -41,7 +81,7 @@ impl ServiceHandler for FileLoader {
             data.response
                 .headers_mut()
                 .insert(CONTENT_LENGTH, HeaderValue::from(cached.len()));
-            *data.response.body_mut() = cached.stream_body();
+            data.response.set_body(BodyType::Stream(cached.stream_body()));
             Ok(data)
         } else {
             let mut stream = true;
@@ -63,7 +103,7 @@ impl ServiceHandler for FileLoader {
                                     let err = format!("{e:?}");
                                     let bytes: Bytes = err.into();
                                     *data.response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                                    *data.response.body_mut() = bytes.stream_body();
+                                    data.response.set_body(BodyType::Stream(bytes.stream_body()));
                                     return Ok(data);
                                 }
                             }
@@ -74,7 +114,7 @@ impl ServiceHandler for FileLoader {
                     let err = format!("{e:?}");
                     let bytes: Bytes = err.into();
                     *data.response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                    *data.response.body_mut() = bytes.stream_body();
+                    data.response.set_body(BodyType::Stream(bytes.stream_body()));
                     return Ok(data);
                 }
             }
@@ -84,14 +124,14 @@ impl ServiceHandler for FileLoader {
                         if let Ok(val) = HeaderValue::from_str(&self.mime) {
                             data.response.headers_mut().insert(CONTENT_TYPE, val);
                         }
-                        *data.response.body_mut() = stream;
+                        data.response.set_body(BodyType::Stream(stream));
                         Ok(data)
                     }
                     Err(e) => {
                         let err = format!("{e:?}");
                         let bytes: Bytes = err.into();
                         *data.response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                        *data.response.body_mut() = bytes.stream_body();
+                        data.response.set_body(BodyType::Stream(bytes.stream_body()));
                         return Ok(data);
                     }
                 }
@@ -103,7 +143,7 @@ impl ServiceHandler for FileLoader {
                 data.response
                     .headers_mut()
                     .insert(CONTENT_LENGTH, HeaderValue::from(cached.len()));
-                *data.response.body_mut() = cached.stream_body();
+                data.response.set_body(BodyType::Stream(cached.stream_body()));
                 Ok(data)
             }
         }
@@ -159,7 +199,7 @@ async fn load_from_disk(path: &str) -> Result<Vec<u8>, Error> {
     tokio::fs::read(path).await
 }
 
-async fn stream_from_disk(path: &str) -> Result<ServiceBody, Error> {
+async fn stream_from_disk(path: &str) -> Result<StreamingBody, Error> {
     let file = File::open(path).await?;
     let buffer = tokio_util::codec::FramedRead::new(file, BytesCodec::new())
         .map_ok(|b| Frame::data(Bytes::from(b.to_vec())))
@@ -183,7 +223,7 @@ impl ServiceHandler for StaticFile {
         if let Ok(val) = HeaderValue::from_str(&self.mime) {
             data.response.headers_mut().insert(CONTENT_TYPE, val);
         }
-        *data.response.body_mut() = bytes.stream_body();
+        data.response.set_body(BodyType::Stream(bytes.stream_body()));
         Ok(data)
     }
 }

@@ -1,0 +1,140 @@
+/* Write your global styles here, in PostCSS syntax */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+    html {
+        overflow-x: hidden;
+    }
+    .material-symbols-outlined {
+        font-variation-settings:
+                'FILL' 0,
+                'wght' 400,
+                'GRAD' 0,
+                'opsz' 24
+    }
+
+    /*theme based styles*/
+    .bg {
+        @apply bg-light-primary;
+    }
+    .text {
+        @apply text-light-primary;
+    }
+    .dark .bg {
+        @apply bg-dark-background;
+    }
+    .dark .text {
+        @apply text-dark-text;
+    }
+    .ocean .bg {
+        @apply bg-ocean-background;
+    }
+    .ocean .text {
+        @apply text-ocean-text;
+    }
+
+    theme_selector_list a {
+        @apply py-2 bg-neutral-200 block;
+    }
+
+    theme_selector_list a:hover {
+        @apply bg-opacity-75;
+    }
+
+    .dark theme_selector_list a {
+        @apply py-2 bg-neutral-600 block;
+    }
+
+    .b3 theme_selector_list a {
+        @apply py-2 bg-neutral-200 block;
+    }
+}
+
+@layer components {
+    .page_container {
+        @apply sm:max-w-screen-sm md:max-w-screen-md lg:max-w-screen-lg xl:max-w-screen-lg;
+        margin: 0 auto;
+        padding: 20px;
+        display: block;
+    }
+
+    .tab_container {
+        position: relative;
+        overflow-x: hidden;
+    }
+
+    .show {
+        display: block !important;
+    }
+
+    .small-caps {
+        font-variant: small-caps;
+    }
+
+    .sub_page_header {
+        @apply text-2xl md:text-3xl leading-tight mb-4 text-gray-800 dark:text-dark-text;
+    }
+
+    val {
+        @apply text-3xl block;
+    }
+
+    lab {
+        @apply small-caps font-bold pb-2 block;
+    }
+
+    payments_wrapper lab {
+        @apply pb-0;
+    }
+
+    sub_text {
+        @apply text-sm pt-2;
+    }
+
+    third {
+        @apply flex-1 bg-gray-50 dark:bg-gray-800 p-6 rounded-xl;
+    }
+
+    third > * {
+        @apply block;
+    }
+
+    three_col {
+        @apply flex justify-center;
+    }
+
+    section_third {
+        @apply flex-1 bg-gray-50 dark:bg-gray-800 py-6 px-8 border-r border-gray-200 dark:border-gray-700;
+    }
+
+    section_third:first-child {
+        @apply rounded-l-xl border-r border-gray-200 dark:border-gray-700;
+    }
+
+    section_third:last-child {
+        @apply rounded-r-xl border-r-0;
+    }
+
+    section {
+        @apply flex justify-center;
+    }
+
+    section_divider {
+        @apply h-6 block;
+    }
+
+    two_col {
+        @apply flex justify-between;
+    }
+
+    three_col_divider {
+        @apply w-4;
+    }
+
+    [type="text"], [type="email"], [type="url"], [type="password"], [type="number"], [type="date"], [type="datetime-local"], [type="month"], [type="search"], [type="tel"], [type="time"], [type="week"], [multiple], textarea, select {
+        background-color: #333;
+    }
+
+}
