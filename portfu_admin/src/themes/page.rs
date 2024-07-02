@@ -1,8 +1,7 @@
+use crate::stores::DataStoreEntry;
 use portfu::prelude::uuid::Uuid;
 use std::collections::HashMap;
 use struct_field_names_as_array::FieldNamesAsSlice;
-use crate::stores::DataStoreEntry;
-
 
 #[derive(Default, Clone, Eq, PartialEq, FieldNamesAsSlice)]
 pub struct PageMetadata {

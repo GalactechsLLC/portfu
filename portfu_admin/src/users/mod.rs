@@ -1,19 +1,19 @@
+use crate::stores::DataStoreEntry;
+#[cfg(feature = "postgres")]
+use crate::stores::DatabaseEntry;
 use portfu::prelude::uuid::Uuid;
 use serde::{Deserialize, Serialize};
-use std::fmt::{Display, Formatter};
 #[cfg(feature = "postgres")]
-use sqlx::{Error, FromRow, Postgres, Row};
+use sqlx::database::HasArguments;
 #[cfg(feature = "postgres")]
-use sqlx::database::{HasArguments};
-#[cfg(feature = "postgres")]
-use sqlx::postgres::{PgRow};
+use sqlx::postgres::PgRow;
 #[cfg(feature = "postgres")]
 use sqlx::query::Query;
+#[cfg(feature = "postgres")]
+use sqlx::{Error, FromRow, Postgres, Row};
+use std::fmt::{Display, Formatter};
 use struct_field_names_as_array::FieldNamesAsSlice;
 use time::OffsetDateTime;
-#[cfg(feature = "postgres")]
-use crate::stores::{DatabaseEntry};
-use crate::stores::{DataStoreEntry};
 
 #[derive(FieldNamesAsSlice, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct User {
@@ -102,9 +102,7 @@ impl<'r> FromRow<'r, PgRow> for User {
     fn from_row(row: &'r PgRow) -> Result<Self, Error> {
         Ok(Self {
             id: row.try_get("id")?,
-            uuid: Uuid::parse_str(row.try_get("uuid")?).map_err(|e| {
-                Error::Decode(e.into())
-            })?,
+            uuid: Uuid::parse_str(row.try_get("uuid")?).map_err(|e| Error::Decode(e.into()))?,
             username: row.try_get("username")?,
             email: row.try_get("email")?,
             role: row.try_get("role")?,
@@ -113,7 +111,7 @@ impl<'r> FromRow<'r, PgRow> for User {
             home_phone: row.try_get("home_phone")?,
             work_phone: row.try_get("work_phone")?,
             cell_phone: row.try_get("cell_phone")?,
-            address:  row.try_get("address")?,
+            address: row.try_get("address")?,
             address2: row.try_get("address2")?,
             city: row.try_get("city")?,
             state: row.try_get("state")?,
@@ -127,14 +125,17 @@ impl<'r> FromRow<'r, PgRow> for User {
 
 #[cfg(feature = "postgres")]
 impl DatabaseEntry<PgRow, i64> for User {
-    fn bind<'q>(&'q self, mut query: Query<'q, Postgres, <Postgres as HasArguments>::Arguments>, field: &str) -> Query<'q, Postgres, <Postgres as HasArguments>::Arguments> {
-        if !Self::FIELD_NAMES_AS_SLICE.contains(&field)
-        {
+    fn bind<'q>(
+        &'q self,
+        mut query: Query<'q, Postgres, <Postgres as HasArguments>::Arguments>,
+        field: &str,
+    ) -> Query<'q, Postgres, <Postgres as HasArguments>::Arguments> {
+        if !Self::FIELD_NAMES_AS_SLICE.contains(&field) {
             return query;
         }
         query = match field {
             "id" => query.bind(self.id),
-            "uuid" =>query.bind(self.uuid.to_string()),
+            "uuid" => query.bind(self.uuid.to_string()),
             "username" => query.bind(&self.username),
             "email" => query.bind(&self.email),
             "role" => query.bind(self.role.to_string()),
@@ -165,11 +166,12 @@ impl DatabaseEntry<PgRow, i64> for User {
     }
 }
 
-#[derive(Default, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, Eq, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[cfg_attr(feature = "postgres", derive(sqlx::Type))]
 #[repr(i64)]
 pub enum UserRole {
     #[default]
+    None = -1,
     User = 0,
     Viewer = 10,
     Contributor = 20,
@@ -181,6 +183,7 @@ pub enum UserRole {
 impl Display for UserRole {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            UserRole::None => f.write_str("None"),
             UserRole::User => f.write_str("User"),
             UserRole::Viewer => f.write_str("Viewer"),
             UserRole::Contributor => f.write_str("Contributor"),

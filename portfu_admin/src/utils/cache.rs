@@ -1,4 +1,3 @@
-
 use dashmap::DashMap;
 use std::collections::VecDeque;
 use std::hash::Hash;
@@ -19,10 +18,10 @@ pub struct CacheItem<T> {
     value: T,
     stale_timeout: Option<Duration>,
     lifetime: Option<Instant>,
-    last_access: Instant
+    last_access: Instant,
 }
 impl<T> CacheItem<T> {
-    pub fn new(value: T, stale_timeout: Option<Duration> , lifetime: Option<Duration>) -> Self {
+    pub fn new(value: T, stale_timeout: Option<Duration>, lifetime: Option<Duration>) -> Self {
         Self {
             value,
             stale_timeout,
@@ -65,8 +64,10 @@ impl<'r, K: Hash + PartialEq + Eq + Clone, T> CacheMap<K, T> {
 
     pub async fn add(&self, key: K, value: T) {
         self.update_recent(&key).await;
-        self.entries
-            .insert(key, Arc::new(CacheItem::new(value, self.stale_timeout, self.lifetime)));
+        self.entries.insert(
+            key,
+            Arc::new(CacheItem::new(value, self.stale_timeout, self.lifetime)),
+        );
         self.trim_recent().await;
     }
 

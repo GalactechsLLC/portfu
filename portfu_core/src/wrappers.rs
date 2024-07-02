@@ -22,8 +22,8 @@ impl Debug for (dyn WrapperFn + Send + Sync + 'static) {
 
 #[derive(Clone, Debug)]
 pub struct Wrapper {
-    name: String,
-    wrapper_functions: Vec<Arc<dyn WrapperFn + Sync + Send>>,
+    pub name: String,
+    pub wrapper_functions: Vec<Arc<dyn WrapperFn + Sync + Send>>,
 }
 #[async_trait]
 impl WrapperFn for Wrapper {

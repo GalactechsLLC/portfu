@@ -1,7 +1,6 @@
+use crate::auth::Claims;
 use crate::services::{redirect_to_url, send_internal_error};
-use portfu::filters::method::GET;
-use portfu::prelude::{async_trait, Body};
-use portfu::wrappers::sessions::Session;
+use crate::users::UserRole;
 use http::HeaderValue;
 use hyper::{header, StatusCode};
 use oauth2::basic::BasicClient;
@@ -12,12 +11,17 @@ use oauth2::{
 };
 use octocrab::models::orgs::Organization;
 use octocrab::models::Author;
+use portfu::filters::method::GET;
 use portfu::pfcore::service::{ServiceBuilder, ServiceGroup};
-use portfu::pfcore::{FromRequest, Json, ServiceData, ServiceHandler};
+use portfu::pfcore::{FromRequest, Json, Query, ServiceData, ServiceHandler};
+use portfu::prelude::{async_trait, Body};
+use portfu::wrappers::sessions::Session;
 use serde::Deserialize;
 use std::env;
 use std::io::{Error, ErrorKind};
 use std::sync::Arc;
+use time::OffsetDateTime;
+use tokio::sync::RwLock;
 
 pub struct OAuthConfig {
     pub client: BasicClient,
@@ -27,23 +31,19 @@ pub struct OAuthConfig {
     pub auth_url: AuthUrl,
     pub token_url: TokenUrl,
     pub api_base_url: String,
+    pub on_success_redirect: String,
+    pub on_failure_redirect: String,
     pub allowed_organizations: Vec<u64>,
     pub allowed_users: Vec<u64>,
     pub admin_users: Vec<u64>,
 }
 
 #[derive(Default, Clone, Deserialize)]
-pub enum UserLevel {
-    User,
-    #[default]
-    Admin,
-}
-
-#[derive(Default, Clone, Deserialize)]
 pub struct UserData {
-    pub user_id: Vec<u64>,
-    pub org_id: Vec<u64>,
-    pub user_level: UserLevel,
+    pub user_id: u64,
+    pub email: String,
+    pub org_ids: Vec<u64>,
+    pub user_role: UserRole,
 }
 
 #[derive(Default, Clone, Deserialize)]
@@ -95,25 +95,41 @@ impl ServiceHandler for OAuthAuthHandler {
         &self,
         mut data: portfu::prelude::ServiceData,
     ) -> Result<ServiceData, (ServiceData, Error)> {
-        let mut user_data: UserData = if let Some(session) = data.request.get_mut::<Session>() {
-            session.data.remove().unwrap_or(UserData {
-                user_id: vec![],
-                org_id: vec![],
-                user_level: UserLevel::User,
-            })
+        let body: Option<AuthRequest> = match Body::from_request(&mut data.request, "").await {
+            Ok(v) => {
+                let json: Json<AuthRequest> = v.inner();
+                Some(json.inner())
+            }
+            Err(_) => None,
+        };
+        let body: AuthRequest = match body {
+            None => match Query::<AuthRequest>::from_request(&mut data.request, "").await {
+                Ok(v) => v.inner(),
+                Err(e) => {
+                    return send_internal_error(
+                        data,
+                        format!("Failed to extract Query as AuthRequest, {e:?}"),
+                    );
+                }
+            },
+            Some(v) => v,
+        };
+        let session = if let Some(session) = data.request.get_mut::<Arc<RwLock<Session>>>() {
+            session
         } else {
             return send_internal_error(data, "Failed to Find Session to Auth".to_string());
         };
-        let body: Json<AuthRequest> = match Body::from_request(&mut data.request, "").await {
-            Ok(v) => v.inner(),
-            Err(e) => {
-                return send_internal_error(
-                    data,
-                    format!("Failed to extract Body as AuthRequest, {e:?}"),
-                );
-            }
-        };
-        let body: AuthRequest = body.inner();
+        let mut claims: Claims = session.read().await.data.get().cloned().unwrap_or(Claims {
+            aud: "localhost".to_string(),
+            exp: 30 * 60, //30 Minutes
+            iat: OffsetDateTime::now_utc().unix_timestamp() as usize,
+            iss: "localhost".to_string(),
+            nbf: OffsetDateTime::now_utc().unix_timestamp() as usize,
+            sub: "".to_string(),
+            eml: "".to_string(),
+            rol: UserRole::None,
+            org: vec![],
+        });
         let code = AuthorizationCode::new(body.code.clone());
         let _token_state = CsrfToken::new(body.state.clone());
         let client = &self.config.client;
@@ -124,7 +140,7 @@ impl ServiceHandler for OAuthAuthHandler {
         {
             token
         } else {
-            return redirect_to_url(data, "/".to_string());
+            return redirect_to_url(data, self.config.on_failure_redirect.as_str());
         };
         let token_val = format!("Bearer {}", token.access_token().secret());
         let client = reqwest::Client::builder().build().unwrap();
@@ -139,7 +155,7 @@ impl ServiceHandler for OAuthAuthHandler {
         {
             user_info.json().await.ok()
         } else {
-            return redirect_to_url(data, "/".to_string());
+            return redirect_to_url(data, self.config.on_failure_redirect.as_str());
         };
         let org_info: Option<Vec<Organization>> = if let Ok(org_info) = client
             .get("https://api.github.com/user/orgs")
@@ -153,25 +169,27 @@ impl ServiceHandler for OAuthAuthHandler {
             let text = org_info.text().await.unwrap_or_default();
             serde_json::from_str(&text).ok()
         } else {
-            return redirect_to_url(data, "/".to_string());
+            return redirect_to_url(data, self.config.on_failure_redirect.as_str());
         };
         if let Some(org_list) = &org_info {
             for org in org_list {
+                claims.org.push(org.id.0);
                 if self.config.allowed_organizations.contains(&org.id.0) {
-                    user_data.user_level = UserLevel::User;
-                    break;
+                    claims.rol = UserRole::User;
                 }
             }
         }
-        if let Some(user_info) = &user_info {
+        if let Some(user_info) = user_info {
             if self.config.admin_users.contains(&user_info.id.0) {
-                user_data.user_level = UserLevel::Admin;
+                claims.rol = UserRole::Admin;
             } else if self.config.allowed_users.contains(&user_info.id.0) {
-                user_data.user_level = UserLevel::User;
+                claims.rol = UserRole::User;
             }
+            claims.sub = user_info.id.to_string();
+            claims.eml = user_info.email.unwrap_or_default();
         }
-        data.request.insert(user_data);
-        redirect_to_url(data, "/admin".to_string())
+        session.write().await.data.insert(claims);
+        redirect_to_url(data, self.config.on_success_redirect.as_str())
     }
 }
 
@@ -183,6 +201,8 @@ pub struct OAuthLoginBuilder {
     pub auth_url: Option<AuthUrl>,
     pub token_url: Option<TokenUrl>,
     pub api_base_url: Option<String>,
+    pub on_success_redirect: Option<String>,
+    pub on_failure_redirect: Option<String>,
     pub redirect_url: Option<RedirectUrl>,
     pub allowed_organizations: Vec<u64>,
     pub allowed_users: Vec<u64>,
@@ -207,6 +227,12 @@ impl OAuthLoginBuilder {
             .auth_url(
                 AuthUrl::new(format!("https://{}/oauth/authorize", oauthserver))
                     .expect("Invalid authorization endpoint URL"),
+            )
+            .on_success_redirect(
+                env::var("OAUTH_SUCCESS_URL").unwrap_or_else(|_| String::from("/")),
+            )
+            .on_failure_redirect(
+                env::var("OAUTH_SUCCESS_URL").unwrap_or_else(|_| String::from("/")),
             )
             .token_url(
                 TokenUrl::new(format!("https://{}/oauth/access_token", oauthserver))
@@ -242,6 +268,16 @@ impl OAuthLoginBuilder {
     pub fn auth_url(self, auth_url: AuthUrl) -> Self {
         let mut s = self;
         s.auth_url = Some(auth_url);
+        s
+    }
+    pub fn on_success_redirect(self, on_success_redirect: String) -> Self {
+        let mut s = self;
+        s.on_success_redirect = Some(on_success_redirect);
+        s
+    }
+    pub fn on_failure_redirect(self, on_failure_redirect: String) -> Self {
+        let mut s = self;
+        s.on_failure_redirect = Some(on_failure_redirect);
         s
     }
     pub fn token_url(self, token_url: TokenUrl) -> Self {
@@ -318,6 +354,12 @@ impl OAuthLoginBuilder {
             token_url,
             api_base_url,
             allowed_organizations: self.allowed_organizations,
+            on_success_redirect: self
+                .on_success_redirect
+                .unwrap_or_else(|| String::from("/")),
+            on_failure_redirect: self
+                .on_failure_redirect
+                .unwrap_or_else(|| String::from("/")),
             allowed_users: self.allowed_users,
             admin_users: self.admin_users,
         });

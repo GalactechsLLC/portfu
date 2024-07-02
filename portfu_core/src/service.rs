@@ -1,9 +1,14 @@
 use crate::filters::{FilterFn, FilterResult};
 use crate::routes::Route;
 use crate::wrappers::{WrapperFn, WrapperResult};
-use crate::{IntoStreamBody, StreamingBody, ServiceData, ServiceHandler, ServiceRegister, ServiceRegistry};
+use crate::{
+    IntoStreamBody, ServiceData, ServiceHandler, ServiceRegister, ServiceRegistry, StreamingBody,
+};
 use futures_util::TryStreamExt;
-use http::{Extensions, HeaderMap, HeaderValue, Method, Request, request, Response, response, StatusCode, Uri};
+use http::{
+    request, response, Extensions, HeaderMap, HeaderValue, Method, Request, Response, StatusCode,
+    Uri,
+};
 use http_body::Frame;
 use http_body_util::{BodyExt, BodyStream, Empty, Full, StreamBody};
 use hyper::body::{Body, Bytes, Incoming, SizeHint};
@@ -259,14 +264,9 @@ impl IncomingRequest {
             }
             IncomingRequest::Stream(r) => {
                 let (parts, body) = r.into_parts();
-                Ok((
-                    IncomingRequest::Consumed(parts),
-                    BodyType::Stream(body),
-                ))
+                Ok((IncomingRequest::Consumed(parts), BodyType::Stream(body)))
             }
-            IncomingRequest::Consumed(parts) => {
-                Ok((Self::Consumed(parts), BodyType::Empty))
-            }
+            IncomingRequest::Consumed(parts) => Ok((Self::Consumed(parts), BodyType::Empty)),
             IncomingRequest::Empty => Ok((Self::Empty, BodyType::Empty)),
         }
     }
@@ -376,46 +376,39 @@ impl IncomingRequest {
 }
 
 impl OutgoingResponse {
-
-    pub fn headers_mut(&mut self) -> &mut HeaderMap{
+    pub fn headers_mut(&mut self) -> &mut HeaderMap {
         match self {
             OutgoingResponse::Stream(r) => r.headers_mut(),
             OutgoingResponse::Sized(r) => r.headers_mut(),
             OutgoingResponse::Consumed(r) => &mut r.headers,
-            OutgoingResponse::Empty(r) => r.headers_mut()
+            OutgoingResponse::Empty(r) => r.headers_mut(),
         }
     }
 
-    pub fn status_mut(&mut self) -> &mut StatusCode{
+    pub fn status_mut(&mut self) -> &mut StatusCode {
         match self {
             OutgoingResponse::Stream(r) => r.status_mut(),
             OutgoingResponse::Sized(r) => r.status_mut(),
             OutgoingResponse::Consumed(r) => &mut r.status,
-            OutgoingResponse::Empty(r) => r.status_mut()
+            OutgoingResponse::Empty(r) => r.status_mut(),
         }
     }
 
-    pub fn status(&self) -> StatusCode{
+    pub fn status(&self) -> StatusCode {
         match self {
             OutgoingResponse::Stream(r) => r.status(),
             OutgoingResponse::Sized(r) => r.status(),
             OutgoingResponse::Consumed(r) => r.status,
-            OutgoingResponse::Empty(r) => r.status()
+            OutgoingResponse::Empty(r) => r.status(),
         }
     }
 
     pub fn set_body(&mut self, body: BodyType) {
         fn handle_body(parts: response::Parts, body_type: BodyType) -> OutgoingResponse {
             match body_type {
-                BodyType::Stream(b) => {
-                    OutgoingResponse::Stream(Response::from_parts(parts, b))
-                }
-                BodyType::Sized(b) => {
-                    OutgoingResponse::Sized(Response::from_parts(parts, b))
-                }
-                BodyType::Empty => {
-                    OutgoingResponse::Empty(Response::from_parts(parts, ()))
-                }
+                BodyType::Stream(b) => OutgoingResponse::Stream(Response::from_parts(parts, b)),
+                BodyType::Sized(b) => OutgoingResponse::Sized(Response::from_parts(parts, b)),
+                BodyType::Empty => OutgoingResponse::Empty(Response::from_parts(parts, ())),
             }
         }
         match replace(self, OutgoingResponse::Empty(Response::new(()))) {
@@ -430,7 +423,7 @@ impl OutgoingResponse {
             OutgoingResponse::Consumed(parts) => {
                 let _ = replace(self, handle_body(parts, body));
             }
-            OutgoingResponse::Empty(r)=> {
+            OutgoingResponse::Empty(r) => {
                 let (parts, _) = r.into_parts();
                 let _ = replace(self, handle_body(parts, body));
             }
@@ -445,15 +438,10 @@ impl OutgoingResponse {
             }
             OutgoingResponse::Stream(r) => {
                 let (parts, body) = r.into_parts();
-                (
-                    OutgoingResponse::Consumed(parts),
-                    BodyType::Stream(body),
-                )
+                (OutgoingResponse::Consumed(parts), BodyType::Stream(body))
             }
-            OutgoingResponse::Consumed(parts) => {
-                (Self::Consumed(parts), BodyType::Empty)
-            }
-            OutgoingResponse::Empty(r) => (Self::Empty(r), BodyType::Empty)
+            OutgoingResponse::Consumed(parts) => (Self::Consumed(parts), BodyType::Empty),
+            OutgoingResponse::Empty(r) => (Self::Empty(r), BodyType::Empty),
         }
     }
 }
@@ -512,7 +500,6 @@ impl ServiceRequest {
     }
 }
 
-
 pub struct ServiceResponse {
     response: OutgoingResponse,
 }
@@ -522,18 +509,18 @@ impl From<ServiceResponse> for Response<StreamingBody> {
             OutgoingResponse::Stream(r) => {
                 let (parts, body) = r.into_parts();
                 Response::from_parts(parts, body)
-            },
+            }
             OutgoingResponse::Sized(r) => {
                 let (parts, body) = r.into_parts();
                 Response::from_parts(parts, body.stream_body())
-            },
+            }
             OutgoingResponse::Consumed(parts) => {
                 Response::from_parts(parts, Full::new(Bytes::new()).stream_body())
-            },
+            }
             OutgoingResponse::Empty(r) => {
                 let (parts, _) = r.into_parts();
                 Response::from_parts(parts, Full::new(Bytes::new()).stream_body())
-            },
+            }
         }
     }
 }
@@ -559,7 +546,11 @@ impl ServiceResponse {
         self.response.status()
     }
 }
-
+impl Default for ServiceResponse {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 pub trait MutBody {
     fn consume(&mut self) -> BodyType;
     fn set_body(&mut self, body: BodyType);
@@ -623,7 +614,10 @@ impl MutBody for ServiceRequest {
 
 impl MutBody for ServiceResponse {
     fn consume(&mut self) -> BodyType {
-        match replace(&mut self.response, OutgoingResponse::Empty(Response::new(()))) {
+        match replace(
+            &mut self.response,
+            OutgoingResponse::Empty(Response::new(())),
+        ) {
             OutgoingResponse::Sized(r) => {
                 let (parts, body) = r.into_parts();
                 let _ = replace(&mut self.response, OutgoingResponse::Consumed(parts));
@@ -646,7 +640,10 @@ impl MutBody for ServiceResponse {
         }
     }
     fn set_body(&mut self, body: BodyType) {
-        let (parts, _) = match replace(&mut self.response, OutgoingResponse::Empty(Response::new(()))) {
+        let (parts, _) = match replace(
+            &mut self.response,
+            OutgoingResponse::Empty(Response::new(())),
+        ) {
             OutgoingResponse::Sized(r) => {
                 let (parts, body) = r.into_parts();
                 (parts, BodyType::Sized(body))

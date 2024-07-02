@@ -12,8 +12,8 @@ pub mod prelude {
     pub extern crate hyper;
     pub extern crate hyper_util;
     pub extern crate log;
-    pub extern crate serde_json;
     pub extern crate once_cell;
+    pub extern crate serde_json;
     pub extern crate tokio_tungstenite;
     pub extern crate uuid;
     pub type Service = ::pfcore::service::Service;

@@ -1522,6 +1522,7 @@ dependencies = [
  "once_cell",
  "portfu_core",
  "portfu_macros",
+ "prometheus",
  "rustls 0.23.8",
  "rustls-pemfile 2.1.2",
  "serde",
@@ -1542,6 +1543,7 @@ dependencies = [
  "dashmap",
  "http 1.1.0",
  "hyper 1.3.1",
+ "jsonwebtoken",
  "oauth2",
  "octocrab",
  "portfu",
@@ -1566,6 +1568,7 @@ dependencies = [
  "http-body-util",
  "hyper 1.3.1",
  "hyper-util",
+ "jsonwebtoken",
  "log",
  "mime_guess",
  "once_cell",
@@ -1575,6 +1578,7 @@ dependencies = [
  "rustls-pemfile 2.1.2",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "tokio",
  "tokio-rustls 0.26.0",
  "tokio-tungstenite",
@@ -1641,6 +1645,27 @@ checksum = "ec96c6a92621310b51366f1e28d05ef11489516e93be030060e5fc12024a49d6"
 dependencies = [
  "unicode-ident",
 ]
+
+[[package]]
+name = "prometheus"
+version = "0.13.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d33c28a30771f7f96db69893f78b857f7450d7e0237e9c8fc6427a81bae7ed1"
+dependencies = [
+ "cfg-if",
+ "fnv",
+ "lazy_static",
+ "memchr",
+ "parking_lot",
+ "protobuf",
+ "thiserror",
+]
+
+[[package]]
+name = "protobuf"
+version = "2.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "106dd99e98437432fed6519dedecfade6a06a73bb7b2a1e019fdd2bee5778d94"
 
 [[package]]
 name = "quote"

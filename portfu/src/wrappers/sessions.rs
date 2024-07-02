@@ -13,10 +13,10 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 pub static SESSION_HEADER: &str = "session_id";
-pub static SESSIONS: Lazy<Arc<DashMap<String, Arc<Session>>>> = Lazy::new(Default::default);
+pub static SESSIONS: Lazy<Arc<DashMap<String, Arc<RwLock<Session>>>>> = Lazy::new(Default::default);
 pub struct Session {
     pub data: Extensions,
-    pub last_update: RwLock<Instant>,
+    pub last_update: Instant,
 }
 
 pub struct SessionWrapper {
@@ -31,39 +31,43 @@ impl Default for SessionWrapper {
 }
 
 impl SessionWrapper {
-    async fn create_session_cookie(&self, data: &ServiceData) -> (Cookie, Arc<Session>) {
+    async fn create_session_cookie(&self, data: &ServiceData) -> (Cookie, Arc<RwLock<Session>>) {
         let address: &SocketAddr = data.request.get().unwrap();
         let salt = data.get_best_guess_public_ip(address);
         let client_session_id = Uuid::new_v4();
         let mut hasher = Sha256::new();
-        hasher.update([client_session_id.as_bytes(), salt.as_bytes()].concat());
+        hasher.update([client_session_id.to_string().as_bytes(), salt.as_bytes()].concat());
         let server_session_id = hex::encode(hasher.finalize().as_slice());
         let cookie = Cookie::build((SESSION_HEADER, client_session_id.to_string()))
             .path("/")
-            .secure(true)
+            // .secure(true)
             .http_only(true)
             .same_site(cookie::SameSite::Lax)
             .build();
-        let session = Arc::new(Session {
+        let session = Arc::new(RwLock::new(Session {
             data: Extensions::new(),
-            last_update: RwLock::new(Instant::now()),
-        });
+            last_update: Instant::now(),
+        }));
         SESSIONS.insert(server_session_id, session.clone());
         (cookie, session)
     }
-    pub async fn get_session(&self, data: &ServiceData) -> Option<Arc<Session>> {
+    pub async fn get_session(
+        &self,
+        data: &ServiceData,
+        session_cookie: Cookie<'_>,
+    ) -> Option<Arc<RwLock<Session>>> {
         let address: &SocketAddr = data.request.get().unwrap();
-        let session_cookie = get_session_cookie_from_request(data)?;
         let salt = data.get_best_guess_public_ip(address);
         let mut hasher = Sha256::new();
-        hasher.update([session_cookie.value().as_bytes(), salt.as_bytes()].concat());
+        hasher.update([session_cookie.value_trimmed().as_bytes(), salt.as_bytes()].concat());
         let server_session_id = hex::encode(hasher.finalize().as_slice());
         if let Some(session) = SESSIONS.get(&server_session_id).map(|v| v.value().clone()) {
-            let last_update = *session.last_update.read().await;
-            if Instant::now().duration_since(last_update) >= self.session_duration {
+            if Instant::now().duration_since(session.read().await.last_update)
+                >= self.session_duration
+            {
                 None
             } else {
-                *session.last_update.write().await = Instant::now();
+                session.write().await.last_update = Instant::now();
                 Some(session)
             }
         } else {
@@ -111,9 +115,9 @@ impl WrapperFn for SessionWrapper {
                 }
                 session
             }
-            Some(_) => {
-                if let Some(sessiopn) = self.get_session(data).await {
-                    sessiopn
+            Some(cookie) => {
+                if let Some(session) = self.get_session(data, cookie).await {
+                    session
                 } else {
                     let (cookie, session) = self.create_session_cookie(data).await;
                     if let Ok(value) = HeaderValue::from_str(&cookie.to_string()) {
@@ -128,9 +132,7 @@ impl WrapperFn for SessionWrapper {
                 }
             }
         };
-        if let Some(ext) = data.request.request.extensions_mut() {
-            ext.insert(session);
-        }
+        data.request.insert(session);
         WrapperResult::Continue
     }
 

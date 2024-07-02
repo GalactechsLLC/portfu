@@ -3,7 +3,10 @@ use crate::{extract_method_filters, parse_path_variables};
 use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
 use quote::{quote, ToTokens};
 use std::collections::HashSet;
-use syn::{parse_quote, punctuated::Punctuated, FnArg, GenericParam, Generics, LitStr, Pat, Path, Token, Type, PathArguments, GenericArgument};
+use syn::{
+    parse_quote, punctuated::Punctuated, FnArg, GenericArgument, GenericParam, Generics, LitStr,
+    Pat, Path, PathArguments, Token, Type,
+};
 
 pub struct EndpointArgs {
     pub path: syn::LitStr,
@@ -13,7 +16,7 @@ pub struct EndpointArgs {
 pub enum OutputType {
     Json,
     Bytes,
-    None
+    None,
 }
 impl OutputType {
     fn parse(output: &str) -> Result<Self, String> {
@@ -138,7 +141,7 @@ impl ToTokens for Endpoint {
             filters,
             wrappers,
             methods,
-            output
+            output,
         } = args;
         let resource_name = resource_name
             .as_ref()
@@ -291,7 +294,7 @@ impl ToTokens for Endpoint {
                             });
                         }
                         continue;
-                    }else if response == segment.ident {
+                    } else if response == segment.ident {
                         dyn_vars.push(quote! {
                             let #ident_val: &mut Response<Full<Bytes>> = &mut handle_data.response;
                         });
@@ -385,7 +388,9 @@ impl ToTokens for Endpoint {
                     );
                 }
             }
-            OutputType::None => { quote!{} }
+            OutputType::None => {
+                quote! {}
+            }
         };
         let stream = quote! {
             #(#doc_attributes)*
@@ -541,7 +546,7 @@ impl Args {
             filters,
             wrappers,
             methods,
-            output
+            output,
         })
     }
 }

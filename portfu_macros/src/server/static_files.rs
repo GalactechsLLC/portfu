@@ -59,16 +59,39 @@ impl ToTokens for StaticFiles {
                 static_file_defs.push(quote! {
                     static #static_bytes_name: &'static [u8; #file_len] = include_bytes!(#value);
                 });
-                quote! {
-                    ::portfu::pfcore::service::ServiceBuilder::new(#key)
-                    .name(stringify!(#name))
-                    .handler(::std::sync::Arc::new(
-                        ::portfu::pfcore::files::StaticFile {
-                            name: #key,
-                            mime: ::portfu::pfcore::files::get_mime_type(#key),
-                            file_contents: #static_bytes_name.as_ref()
-                        }
-                    )).build()
+                if let Some(suffix) = key.strip_suffix("index.html") {
+                    quote! {
+                        ::portfu::pfcore::service::ServiceBuilder::new(#suffix)
+                        .name(stringify!(#name))
+                        .handler(::std::sync::Arc::new(
+                            ::portfu::pfcore::files::StaticFile {
+                                name: #key,
+                                mime: ::portfu::pfcore::files::get_mime_type(#key),
+                                file_contents: #static_bytes_name.as_ref()
+                            }
+                        )).build(),
+                        ::portfu::pfcore::service::ServiceBuilder::new(#key)
+                        .name(stringify!(#name))
+                        .handler(::std::sync::Arc::new(
+                            ::portfu::pfcore::files::StaticFile {
+                                name: #key,
+                                mime: ::portfu::pfcore::files::get_mime_type(#key),
+                                file_contents: #static_bytes_name.as_ref()
+                            }
+                        )).build()
+                    }
+                } else {
+                    quote! {
+                        ::portfu::pfcore::service::ServiceBuilder::new(#key)
+                        .name(stringify!(#name))
+                        .handler(::std::sync::Arc::new(
+                            ::portfu::pfcore::files::StaticFile {
+                                name: #key,
+                                mime: ::portfu::pfcore::files::get_mime_type(#key),
+                                file_contents: #static_bytes_name.as_ref()
+                            }
+                        )).build()
+                    }
                 }
             })
             .collect();

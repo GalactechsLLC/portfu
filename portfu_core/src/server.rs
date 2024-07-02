@@ -4,9 +4,9 @@ use crate::signal::await_termination;
 use crate::ssl::load_ssl_certs;
 use crate::task::{Task, TaskFn};
 use crate::wrappers::{WrapperFn, WrapperResult};
-use crate::{StreamingBody, ServiceData, ServiceRegister, ServiceRegistry, IntoStreamBody};
+use crate::{IntoStreamBody, ServiceData, ServiceRegister, ServiceRegistry, StreamingBody};
 use http::{Extensions, Request, Response, StatusCode};
-use http_body_util::{Full};
+use http_body_util::Full;
 use hyper::body::{Bytes, Incoming};
 use hyper::server::conn::http1::Builder;
 use hyper::service::service_fn;
@@ -225,9 +225,9 @@ impl Server {
                                     sd.request.request.uri()
                                 );
                                 *sd.response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                                sd.response.set_body(BodyType::Sized(
-                                    Full::new(Bytes::from(format!("{:?}", e)))
-                                ));
+                                sd.response.set_body(BodyType::Sized(Full::new(Bytes::from(
+                                    format!("{:?}", e),
+                                ))));
                                 sd
                             });
                     for func in server.wrappers.iter() {

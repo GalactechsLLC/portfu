@@ -12,9 +12,13 @@ pub mod wrappers;
 
 use crate::editable::EditResult;
 use crate::server::Server;
-use crate::service::{RefBodyType, IncomingRequest, Service, ServiceRequest, ServiceResponse, BodyType};
+use crate::service::{
+    BodyType, IncomingRequest, RefBodyType, Service, ServiceRequest, ServiceResponse,
+};
 use async_trait::async_trait;
-use http::{Extensions};
+use futures_util::{Stream, TryStreamExt};
+use http::Extensions;
+use http_body::Frame;
 use http_body_util::Full;
 use http_body_util::{BodyExt, BodyStream, StreamBody};
 use hyper::body::{Bytes, Incoming};
@@ -26,8 +30,6 @@ use std::io::{Error, ErrorKind};
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
-use futures_util::{Stream, TryStreamExt};
-use http_body::Frame;
 
 #[async_trait]
 pub trait ServiceHandler {
@@ -61,7 +63,10 @@ impl ServiceHandler for (&'static str, &'static str) {
     }
 
     async fn handle(&self, mut data: ServiceData) -> Result<ServiceData, (ServiceData, Error)> {
-        data.response.set_body(BodyType::Sized(Full::new(Bytes::from_static(self.1.as_bytes()))));
+        data.response
+            .set_body(BodyType::Sized(Full::new(Bytes::from_static(
+                self.1.as_bytes(),
+            ))));
         Ok(data)
     }
 }
@@ -73,7 +78,8 @@ impl ServiceHandler for (String, String) {
     }
 
     async fn handle(&self, mut data: ServiceData) -> Result<ServiceData, (ServiceData, Error)> {
-        data.response.set_body(BodyType::Sized(Full::new(Bytes::from(self.1.clone()))));
+        data.response
+            .set_body(BodyType::Sized(Full::new(Bytes::from(self.1.clone()))));
         Ok(data)
     }
 }
@@ -85,7 +91,8 @@ impl ServiceHandler for (&'static str, &'static [u8]) {
     }
 
     async fn handle(&self, mut data: ServiceData) -> Result<ServiceData, (ServiceData, Error)> {
-        data.response.set_body(BodyType::Sized(Full::new(Bytes::from_static(self.1))));
+        data.response
+            .set_body(BodyType::Sized(Full::new(Bytes::from_static(self.1))));
         Ok(data)
     }
 }
@@ -188,10 +195,10 @@ impl ServiceData {
             } else if let Some(forwards) = headers.get("x-forwarded-for") {
                 format!("{:?}", forwards)
             } else {
-                address.to_string()
+                address.ip().to_string()
             }
         } else {
-            address.to_string()
+            address.ip().to_string()
         }
     }
 }
@@ -378,6 +385,33 @@ where
                 )
             })
             .map(Json)
+    }
+}
+
+pub struct Query<T: for<'a> Deserialize<'a>>(T);
+impl<T: for<'a> Deserialize<'a>> Query<T> {
+    pub fn inner(self) -> T {
+        self.0
+    }
+}
+#[async_trait::async_trait]
+impl<'r, T: for<'a> Deserialize<'a>> FromRequest<'r> for Query<T> {
+    async fn from_request(request: &'r mut ServiceRequest, _: &'r str) -> Result<Self, Error> {
+        if let Some(query) = request.request.uri().query() {
+            serde_urlencoded::from_str(query)
+                .map_err(|e| {
+                    Error::new(
+                        ErrorKind::InvalidInput,
+                        format!("Failed to parse query string: {e:?}"),
+                    )
+                })
+                .map(Query)
+        } else {
+            Err(Error::new(
+                ErrorKind::InvalidInput,
+                "No Query String Provided",
+            ))
+        }
     }
 }
 

@@ -1,5 +1,6 @@
+use crate::stores::DataStore;
 use crate::users::User;
-use crate::{UserStore};
+use crate::UserStore;
 use portfu::macros::get;
 use portfu::pfcore::ServiceRegister;
 use portfu::prelude::http::Extensions;
@@ -8,7 +9,6 @@ use portfu::prelude::{ServiceData, ServiceGroup, ServiceRegistry};
 use std::io::{Error, ErrorKind};
 use std::marker::PhantomData;
 use std::sync::Arc;
-use crate::stores::DataStore;
 
 #[get("/pf_admin/users")]
 pub async fn list_users<D: DataStore<i64, User, Error> + Send + Sync + 'static>(
