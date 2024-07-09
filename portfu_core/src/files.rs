@@ -51,8 +51,8 @@ impl From<DynamicFiles> for ServiceGroup {
                             editable: slf.editable,
                             cache_threshold: 65536,
                             cache_status: AtomicBool::default(),
-                            cached_value: Arc::new(RwLock::new(Vec::with_capacity(0))),
-                        }))
+                            cached_value: Arc::new(RwLock::new(Vec::with_capacity(0))),}))
+
                         .build()
                 })
                 .collect(),
@@ -85,7 +85,8 @@ impl ServiceHandler for FileLoader {
             data.response
                 .headers_mut()
                 .insert(CONTENT_LENGTH, HeaderValue::from(cached.len()));
-            data.response.set_body(BodyType::Stream(cached.stream_body()));
+            data.response
+                .set_body(BodyType::Stream(cached.stream_body()));
             Ok(data)
         } else {
             let mut stream = true;
@@ -107,7 +108,8 @@ impl ServiceHandler for FileLoader {
                                     let err = format!("{e:?}");
                                     let bytes: Bytes = err.into();
                                     *data.response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                                    data.response.set_body(BodyType::Stream(bytes.stream_body()));
+                                    data.response
+                                        .set_body(BodyType::Stream(bytes.stream_body()));
                                     return Ok(data);
                                 }
                             }
@@ -118,7 +120,8 @@ impl ServiceHandler for FileLoader {
                     let err = format!("{e:?}");
                     let bytes: Bytes = err.into();
                     *data.response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                    data.response.set_body(BodyType::Stream(bytes.stream_body()));
+                    data.response
+                        .set_body(BodyType::Stream(bytes.stream_body()));
                     return Ok(data);
                 }
             }
@@ -135,7 +138,8 @@ impl ServiceHandler for FileLoader {
                         let err = format!("{e:?}");
                         let bytes: Bytes = err.into();
                         *data.response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                        data.response.set_body(BodyType::Stream(bytes.stream_body()));
+                        data.response
+                            .set_body(BodyType::Stream(bytes.stream_body()));
                         return Ok(data);
                     }
                 }
@@ -147,7 +151,8 @@ impl ServiceHandler for FileLoader {
                 data.response
                     .headers_mut()
                     .insert(CONTENT_LENGTH, HeaderValue::from(cached.len()));
-                data.response.set_body(BodyType::Stream(cached.stream_body()));
+                data.response
+                    .set_body(BodyType::Stream(cached.stream_body()));
                 Ok(data)
             }
         }
@@ -237,7 +242,8 @@ impl ServiceHandler for StaticFile {
         if let Ok(val) = HeaderValue::from_str(&self.mime) {
             data.response.headers_mut().insert(CONTENT_TYPE, val);
         }
-        data.response.set_body(BodyType::Stream(bytes.stream_body()));
+        data.response
+            .set_body(BodyType::Stream(bytes.stream_body()));
         Ok(data)
     }
 

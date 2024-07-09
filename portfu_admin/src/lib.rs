@@ -1,10 +1,8 @@
 use std::env;
 use std::path::PathBuf;
 use crate::services::editor::ServiceEditor;
-use crate::services::themes::ThemeSelector;
 use crate::services::users::UserManager;
 use crate::stores::UserStore;
-use portfu::macros::static_files;
 use portfu::prelude::ServiceGroup;
 use portfu::wrappers::sessions::SessionWrapper;
 use std::sync::Arc;

@@ -3,13 +3,13 @@ use http_body_util::{BodyStream, Empty, Full, StreamBody};
 use hyper::body::{Body, Bytes, Frame, Incoming, SizeHint};
 use log::error;
 use pfcore::service::BodyType;
+use pfcore::PinnedBody;
 use rustls::client::ClientConfig;
 use rustls::pki_types::ServerName;
 use rustls::RootCertStore;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use pfcore::PinnedBody;
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 
@@ -74,9 +74,7 @@ impl From<StreamBody<BodyStream<PinnedBody>>> for SupportedBody {
 impl From<BodyType> for SupportedBody {
     fn from(value: BodyType) -> Self {
         match value {
-            BodyType::Stream(value) => {
-                SupportedBody::Stream(value)
-            }
+            BodyType::Stream(value) => SupportedBody::Stream(value),
             BodyType::Sized(value) => SupportedBody::Full(value),
             BodyType::Empty => SupportedBody::Empty(Empty::default()),
         }

@@ -13,6 +13,7 @@ repository = "https://github.com/GalactechsLLC/portfu/portfu_admin"
 dashmap.workspace = true
 http.workspace = true
 hyper.workspace = true
+jsonwebtoken.workspace = true
 oauth2 = { version = "4.4.2", optional = true, features = ["rustls-tls"] }
 octocrab = {version = "0.38.0", optional = true, features = ["rustls"]}
 portfu.workspace = true

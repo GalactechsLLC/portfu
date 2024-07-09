@@ -167,11 +167,12 @@ impl DatabaseEntry<PgRow, i64> for User {
     }
 }
 
-#[derive(Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, Eq, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[cfg_attr(feature = "postgres", derive(sqlx::Type))]
 #[repr(i64)]
 pub enum UserRole {
     #[default]
+    None = -1,
     User = 0,
     Viewer = 10,
     Contributor = 20,
@@ -183,6 +184,7 @@ pub enum UserRole {
 impl Display for UserRole {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            UserRole::None => f.write_str("None"),
             UserRole::User => f.write_str("User"),
             UserRole::Viewer => f.write_str("Viewer"),
             UserRole::Contributor => f.write_str("Contributor"),

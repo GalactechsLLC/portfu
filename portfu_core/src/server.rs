@@ -4,9 +4,9 @@ use crate::signal::await_termination;
 use crate::ssl::load_ssl_certs;
 use crate::task::{Task, TaskFn};
 use crate::wrappers::{WrapperFn, WrapperResult};
-use crate::{StreamingBody, ServiceData, ServiceRegister, ServiceRegistry, IntoStreamBody};
+use crate::{IntoStreamBody, ServiceData, ServiceRegister, ServiceRegistry, StreamingBody};
 use http::{Extensions, Request, Response, StatusCode};
-use http_body_util::{Full};
+use http_body_util::Full;
 use hyper::body::{Bytes, Incoming};
 use hyper::server::conn::http1::Builder;
 use hyper::service::service_fn;
@@ -64,6 +64,7 @@ pub struct Server {
     pub run: Arc<AtomicBool>,
     pub shared_state: Arc<RwLock<Extensions>>,
     filters: Vec<Arc<dyn FilterFn + Sync + Send>>,
+    tasks: Vec<Arc<Task>>,
     wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
 }
 impl Server {
@@ -243,13 +244,13 @@ pub async fn handle_service(mut request: Request<Incoming>, service: Arc<Service
             .await
             .unwrap_or_else(|(mut sd, e)| {
                 error!(
-                                    "Service Error when Handling {} - {e:?}",
-                                    sd.request.request.uri()
-                                );
+                    "Service Error when Handling {} - {e:?}",
+                    sd.request.request.uri()
+                );
                 *sd.response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
                 sd.response.set_body(BodyType::Sized(
-                    Full::new(Bytes::from(format!("{:?}", e)))
-                ));
+                    Full::new(Bytes::from(format!("{:?}", e),
+                ))));
                 sd
             });
     for func in server.wrappers.iter() {
@@ -269,6 +270,7 @@ pub struct ServerBuilder {
     shared_state: Extensions,
     run_handle: Arc<AtomicBool>,
     filters: Vec<Arc<dyn FilterFn + Sync + Send>>,
+    tasks: Vec<Arc<Task>>,
     wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
 }
 impl ServerBuilder {
@@ -279,6 +281,7 @@ impl ServerBuilder {
             shared_state: Extensions::default(),
             run_handle: Arc::new(AtomicBool::new(true)),
             filters: vec![],
+            tasks: vec![],
             wrappers: vec![],
         }
     }
@@ -337,6 +340,7 @@ impl ServerBuilder {
             run: self.run_handle,
             shared_state: Arc::new(RwLock::new(self.shared_state)),
             filters: self.filters,
+            tasks: self.tasks,
             wrappers: self.wrappers,
         }
     }
@@ -349,6 +353,7 @@ impl Default for ServerBuilder {
             shared_state: Extensions::default(),
             run_handle: Arc::new(AtomicBool::new(true)),
             filters: vec![],
+            tasks: vec![],
             wrappers: vec![],
         }
     }

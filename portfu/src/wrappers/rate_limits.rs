@@ -5,7 +5,7 @@ use hyper::body::{Body, Bytes};
 use log::{debug, warn};
 use pfcore::service::{BodyType, IncomingRequest, MutBody};
 use pfcore::wrappers::{WrapperFn, WrapperResult};
-use pfcore::{ServiceData};
+use pfcore::ServiceData;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::io::{Error, ErrorKind};
@@ -264,7 +264,8 @@ impl WrapperFn for RateLimiter {
 }
 
 fn create_error(data: &mut ServiceData, error: String, status: StatusCode) -> WrapperResult {
-    data.response.set_body(BodyType::Sized(Full::new(Bytes::from(error))));
+    data.response
+        .set_body(BodyType::Sized(Full::new(Bytes::from(error))));
     *data.response.status_mut() = status;
     WrapperResult::Return
 }

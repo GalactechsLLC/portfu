@@ -2,6 +2,7 @@ use portfu::pfcore::{IntoStreamBody, ServiceData};
 use portfu::pfcore::service::BodyType;
 use portfu::prelude::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use portfu::prelude::http::HeaderValue;
+use crate::themes::replace_tokens;
 use portfu::prelude::uuid::Uuid;
 use std::collections::HashMap;
 use std::io::Error;
@@ -9,7 +10,6 @@ use std::sync::Arc;
 use struct_field_names_as_array::FieldNamesAsSlice;
 use tokio::sync::RwLock;
 use crate::stores::DataStoreEntry;
-use crate::themes::{replace_tokens};
 use crate::themes::page::Page;
 use crate::themes::token::Token;
 
@@ -86,7 +86,8 @@ impl Template {
         data.response
             .headers_mut()
             .insert(CONTENT_LENGTH, HeaderValue::from(template_html.len()));
-        data.response.set_body(BodyType::Stream(template_html.stream_body()));
+        data.response
+            .set_body(BodyType::Stream(template_html.stream_body()));
         Ok(data)
     }
     pub async fn render_css(

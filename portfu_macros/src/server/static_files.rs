@@ -65,7 +65,7 @@ impl ToTokens for StaticFiles {
                         .name(stringify!(#name))
                         .handler(::std::sync::Arc::new(
                             ::portfu::pfcore::files::StaticFile {
-                                name: #suffix,
+                                name: #key,
                                 mime: ::portfu::pfcore::files::get_mime_type(#key),
                                 file_contents: #static_bytes_name.as_ref()
                             }
@@ -82,16 +82,16 @@ impl ToTokens for StaticFiles {
                     }
                 } else {
                     quote! {
-                    ::portfu::pfcore::service::ServiceBuilder::new(#key)
-                    .name(stringify!(#name))
-                    .handler(::std::sync::Arc::new(
-                        ::portfu::pfcore::files::StaticFile {
-                            name: #key,
-                            mime: ::portfu::pfcore::files::get_mime_type(#key),
-                            file_contents: #static_bytes_name.as_ref()
-                        }
-                    )).build()
-                }
+                        ::portfu::pfcore::service::ServiceBuilder::new(#key)
+                        .name(stringify!(#name))
+                        .handler(::std::sync::Arc::new(
+                            ::portfu::pfcore::files::StaticFile {
+                                name: #key,
+                                mime: ::portfu::pfcore::files::get_mime_type(#key),
+                                file_contents: #static_bytes_name.as_ref()
+                            }
+                        )).build()
+                    }
                 }
             })
             .collect();

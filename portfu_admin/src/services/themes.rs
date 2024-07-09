@@ -3,7 +3,7 @@ use crate::themes::token::Token;
 use crate::themes::Theme;
 use portfu::pfcore::editable::EditResult;
 use portfu::pfcore::service::{Service, ServiceBuilder};
-use portfu::pfcore::{ServiceData, ServiceHandler, ServiceRegister, ServiceRegistry, ServiceType};
+use portfu::pfcore::{ServiceData, ServiceHandler, ServiceRegister, ServiceRegistry};
 use portfu::prelude::async_trait::async_trait;
 use portfu::prelude::http::Extensions;
 use std::collections::HashMap;
