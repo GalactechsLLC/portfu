@@ -16,6 +16,8 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio_tungstenite::tungstenite::error::ProtocolError;
 use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
+use uuid::Uuid;
+use crate::task::{Task, TaskFn};
 
 #[derive(Debug)]
 pub struct ServiceBuilder {
@@ -24,6 +26,7 @@ pub struct ServiceBuilder {
     shared_state: Extensions,
     filters: Vec<Arc<dyn FilterFn + Sync + Send>>,
     wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
+    tasks: Vec<Arc<dyn TaskFn + Send + Sync>>,
     handler: Option<Arc<dyn ServiceHandler + Send + Sync>>,
 }
 impl ServiceBuilder {
@@ -33,6 +36,7 @@ impl ServiceBuilder {
             name: None,
             filters: vec![],
             wrappers: vec![],
+            tasks: vec![],
             shared_state: Default::default(),
             handler: None,
         }
@@ -53,6 +57,10 @@ impl ServiceBuilder {
         self.filters.push(filter);
         self
     }
+    pub fn task(mut self, task: Arc<dyn TaskFn + Sync + Send>) -> Self {
+        self.tasks.push(task);
+        self
+    }
     pub fn wrap(mut self, wrappers: Arc<dyn WrapperFn + Sync + Send>) -> Self {
         self.wrappers.push(wrappers);
         self
@@ -65,6 +73,7 @@ impl ServiceBuilder {
         Service {
             path: Arc::new(self.path),
             name: self.name.unwrap_or_default(),
+            uuid: Uuid::new_v4(),
             shared_state: self.shared_state,
             filters: self.filters,
             wrappers: self.wrappers,
@@ -79,11 +88,18 @@ pub struct ServiceGroup {
     pub shared_state: Extensions,
     pub filters: Vec<Arc<dyn FilterFn + Sync + Send>>,
     pub wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
+    pub tasks: Vec<Arc<dyn TaskFn + Sync + Send>>,
 }
 impl ServiceRegister for ServiceGroup {
     fn register(self, service_registry: &mut ServiceRegistry, shared_state: Extensions) {
         for service in self.services {
             service.register(service_registry, shared_state.clone());
+        }
+        for task in self.tasks {
+            service_registry.tasks.push(Arc::new(Task {
+                name: task.name().to_string(),
+                task_fn: task,
+            }));
         }
     }
 }
@@ -106,6 +122,9 @@ impl ServiceGroup {
         for service in group.services {
             self = self.service(service);
         }
+        for task in group.tasks {
+            self = self.task(task);
+        }
         self
     }
     pub fn filter(mut self, filter: Arc<dyn FilterFn + Sync + Send>) -> Self {
@@ -116,12 +135,17 @@ impl ServiceGroup {
         self.wrappers.push(wrappers);
         self
     }
+    pub fn task(mut self, task: Arc<dyn TaskFn + Sync + Send>) -> Self {
+        self.tasks.push(task);
+        self
+    }
 }
 
 #[derive(Debug)]
 pub struct Service {
     pub path: Arc<Route>,
     pub name: String,
+    pub uuid: Uuid,
     pub shared_state: Extensions,
     pub filters: Vec<Arc<dyn FilterFn + Sync + Send>>,
     pub wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
@@ -164,6 +188,9 @@ impl Service {
     }
     pub fn name(&self) -> &str {
         self.name.as_str()
+    }
+    pub fn uuid(&self) -> &Uuid {
+        &self.uuid
     }
 }
 impl ServiceRegister for Service {

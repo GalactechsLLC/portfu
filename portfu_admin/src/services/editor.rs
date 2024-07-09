@@ -5,11 +5,13 @@ use portfu::prelude::http::{Extensions, StatusCode};
 use portfu::prelude::*;
 use serde::Deserialize;
 use std::io::{Error, ErrorKind};
+use std::sync::Arc;
 
 #[get("/pf_admin/editor/files")]
 pub async fn list_editable_files(data: &mut ServiceData) -> Result<Vec<u8>, Error> {
     let mut editable = vec![];
-    for service in &data.server.registry.services {
+    let services: Vec<Arc<Service>> = data.server.registry.read().await.services.to_vec();
+    for service in &services {
         if let Some(handle) = &service.handler {
             if handle.is_editable() {
                 editable.push(service.name());
@@ -27,7 +29,8 @@ pub async fn list_editable_files(data: &mut ServiceData) -> Result<Vec<u8>, Erro
 #[get("/pf_admin/editor/folders")]
 pub async fn list_editable_folders(data: &mut ServiceData) -> Result<Vec<u8>, Error> {
     let mut editable = vec![];
-    for service in &data.server.registry.services {
+    let services: Vec<Arc<Service>> = data.server.registry.read().await.services.to_vec();
+    for service in &services {
         if let Some(handle) = &service.handler {
             if handle.is_editable() {
                 editable.push(service.name());
@@ -52,7 +55,8 @@ pub async fn get_service_value(data: &mut ServiceData) -> Result<Vec<u8>, Error>
     let load_request: LoadRequest = Json::from_body(&mut data.request.request.body())
         .await?
         .inner();
-    for service in &data.server.registry.services {
+    let services: Vec<Arc<Service>> = data.server.registry.read().await.services.to_vec();
+    for service in &services {
         if service.name == load_request.service_name {
             if let Some(handle) = service.handler.clone() {
                 if handle.is_editable() {
@@ -92,7 +96,8 @@ pub async fn create_service(data: &mut ServiceData) -> Result<Vec<u8>, Error> {
     let edit_request: EditRequest = Json::from_body(&mut data.request.request.body())
         .await?
         .inner();
-    for service in &data.server.registry.services {
+    let services: Vec<Arc<Service>> = data.server.registry.read().await.services.to_vec();
+    for service in &services {
         if service.name == edit_request.service_name {
             if let Some(handle) = service.handler.clone() {
                 if handle.is_editable() {
@@ -128,7 +133,8 @@ pub async fn update_service_value(data: &mut ServiceData) -> Result<Vec<u8>, Err
     let edit_request: EditRequest = Json::from_body(&mut data.request.request.body())
         .await?
         .inner();
-    for service in &data.server.registry.services {
+    let services: Vec<Arc<Service>> = data.server.registry.read().await.services.to_vec();
+    for service in &services {
         if service.name == edit_request.service_name {
             if let Some(handle) = service.handler.clone() {
                 if handle.is_editable() {

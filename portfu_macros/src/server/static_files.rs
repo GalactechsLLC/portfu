@@ -112,6 +112,7 @@ impl ToTokens for StaticFiles {
                     ))
                 ],
                 wrappers: vec![],
+                tasks: vec![],
                 shared_state: Default::default()
             }
         };

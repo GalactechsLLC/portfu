@@ -23,6 +23,7 @@ hyper = {version="1.3.1", features=["full"]}
 hyper-util = {version="0.1.5", features=["full"]}
 log = "0.4.21"
 mime_guess = "2.0.4"
+notify = "6.1.1"
 once_cell = "1.19.0"
 portfu = {path = "./portfu", version = "1.2.0", default-features = false}
 portfu_admin = {path = "./portfu_admin", version = "1.2.0", default-features = false}

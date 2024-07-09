@@ -9,6 +9,7 @@ pub mod sockets;
 mod ssl;
 pub mod task;
 pub mod wrappers;
+pub mod svelte_spa;
 
 use crate::editable::EditResult;
 use crate::server::Server;
@@ -28,6 +29,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use futures_util::{Stream, TryStreamExt};
 use http_body::Frame;
+use crate::task::Task;
 
 pub enum ServiceType {
     File,
@@ -220,11 +222,13 @@ pub trait ServiceRegister {
 }
 
 pub static mut STATIC_REGISTRY: Lazy<ServiceRegistry> =
-    Lazy::new(|| ServiceRegistry { services: vec![] });
+    Lazy::new(|| ServiceRegistry { services: vec![], tasks: vec![], default_service: None });
 
 #[derive(Clone, Debug, Default)]
 pub struct ServiceRegistry {
     pub services: Vec<Arc<Service>>,
+    pub default_service: Option<Arc<Service>>,
+    pub tasks: Vec<Arc<Task>>,
 }
 impl ServiceRegistry {
     pub fn register(&mut self, service: Service) {

@@ -1,5 +1,5 @@
 use crate::filters::{Filter, FilterFn, FilterResult};
-use crate::service::{BodyType, IncomingRequest, ServiceRequest, ServiceResponse};
+use crate::service::{BodyType, IncomingRequest, Service, ServiceRequest, ServiceResponse};
 use crate::signal::await_termination;
 use crate::ssl::load_ssl_certs;
 use crate::task::{Task, TaskFn};
@@ -22,6 +22,7 @@ use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 use tokio::{select, spawn};
+use tokio::sync::RwLock;
 use tokio_rustls::TlsAcceptor;
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,17 +59,20 @@ impl Default for ServerConfig {
 
 #[derive(Debug)]
 pub struct Server {
-    pub registry: Arc<ServiceRegistry>,
+    pub registry: Arc<RwLock<ServiceRegistry>>,
     pub config: ServerConfig,
     pub run: Arc<AtomicBool>,
-    pub shared_state: Arc<Extensions>,
+    pub shared_state: Arc<RwLock<Extensions>>,
     filters: Vec<Arc<dyn FilterFn + Sync + Send>>,
-    tasks: Vec<Arc<Task>>,
     wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
 }
 impl Server {
     pub async fn run(self) -> Result<(), Error> {
         let server = Arc::new(self);
+        {
+            let slf = server.clone();
+            server.shared_state.write().await.insert(slf);
+        }
         let socket_addr = Self::get_socket_addr(&server.config)?;
         info!("Server Starting Up on {socket_addr}");
         let listener = TcpListener::bind(socket_addr).await?;
@@ -91,11 +95,11 @@ impl Server {
             server_run_handle.store(false, Ordering::Relaxed);
         });
         let mut background_tasks = JoinSet::new();
-        for task in server.tasks.iter().cloned() {
+        for task in server.registry.read().await.tasks.iter().cloned() {
             let state = server.shared_state.clone();
             info!("Spawning Task {}", task.name());
             background_tasks.spawn(async move {
-                if let Err(e) = task.task_fn.run(state).await {
+                if let Err(e) = task.task_fn.run(state.clone()).await {
                     error!("Error in background task: {e:?}");
                 }
             });
@@ -170,6 +174,7 @@ impl Server {
         address: SocketAddr,
     ) -> Result<Response<StreamingBody>, Error> {
         request.extensions_mut().insert(address);
+        request.extensions_mut().insert(server.shared_state.clone()); //Put the Server Shared State in the Request Extensions
         let mut response: ServiceResponse = ServiceResponse::new();
         let handle = if !server.filters.is_empty() {
             let mut handle = true;
@@ -188,7 +193,8 @@ impl Server {
             Ok(response.into())
         } else {
             let mut handler = None;
-            for service in server.registry.services.iter() {
+            let services: Vec<Arc<Service>> = server.registry.read().await.services.iter().cloned().collect();
+            for service in services {
                 if service.handles(&request).await {
                     handler = Some(service.clone());
                     break;
@@ -196,57 +202,65 @@ impl Server {
             }
             match handler {
                 Some(service) => {
-                    request
-                        .extensions_mut()
-                        .extend(service.shared_state.clone());
-                    let mut service_data = ServiceData {
-                        server: server.clone(),
-                        request: ServiceRequest {
-                            request: IncomingRequest::Stream(request.map(|b| b.stream_body())),
-                            path: service.path.clone(),
-                        },
-                        response,
-                    };
-                    for func in server.wrappers.iter() {
-                        match func.before(&mut service_data).await {
-                            WrapperResult::Continue => {}
-                            WrapperResult::Return => {
-                                return Ok(service_data.response.into());
-                            }
-                        }
-                    }
-                    service_data =
-                        service
-                            .handle(service_data)
-                            .await
-                            .unwrap_or_else(|(mut sd, e)| {
-                                error!(
-                                    "Service Error when Handling {} - {e:?}",
-                                    sd.request.request.uri()
-                                );
-                                *sd.response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                                sd.response.set_body(BodyType::Sized(
-                                    Full::new(Bytes::from(format!("{:?}", e)))
-                                ));
-                                sd
-                            });
-                    for func in server.wrappers.iter() {
-                        match func.after(&mut service_data).await {
-                            WrapperResult::Continue => {}
-                            WrapperResult::Return => {
-                                return Ok(service_data.response.into());
-                            }
-                        }
-                    }
-                    Ok(service_data.response.into())
+                    handle_service(request, service, server.clone(), response).await
                 }
                 None => {
-                    *response.status_mut() = StatusCode::NOT_FOUND;
-                    Ok(response.into())
+                    if let Some(service) = server.registry.read().await.default_service.clone() {
+                        handle_service(request, service, server.clone(), response).await
+                    } else {
+                        *response.status_mut() = StatusCode::NOT_FOUND;
+                        Ok(response.into())
+                    }
                 }
             }
         }
     }
+}
+
+pub async fn handle_service(mut request: Request<Incoming>, service: Arc<Service>, server: Arc<Server>, response: ServiceResponse) -> Result<Response<StreamingBody>, Error> {
+    request
+        .extensions_mut()
+        .extend(service.shared_state.clone());
+    let mut service_data = ServiceData {
+        server: server.clone(),
+        request: ServiceRequest {
+            request: IncomingRequest::Stream(request.map(|b| b.stream_body())),
+            path: service.path.clone(),
+        },
+        response,
+    };
+    for func in server.wrappers.iter() {
+        match func.before(&mut service_data).await {
+            WrapperResult::Continue => {}
+            WrapperResult::Return => {
+                return Ok(service_data.response.into());
+            }
+        }
+    }
+    service_data =
+        service
+            .handle(service_data)
+            .await
+            .unwrap_or_else(|(mut sd, e)| {
+                error!(
+                                    "Service Error when Handling {} - {e:?}",
+                                    sd.request.request.uri()
+                                );
+                *sd.response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+                sd.response.set_body(BodyType::Sized(
+                    Full::new(Bytes::from(format!("{:?}", e)))
+                ));
+                sd
+            });
+    for func in server.wrappers.iter() {
+        match func.after(&mut service_data).await {
+            WrapperResult::Continue => {}
+            WrapperResult::Return => {
+                return Ok(service_data.response.into());
+            }
+        }
+    }
+    Ok(service_data.response.into())
 }
 
 pub struct ServerBuilder {
@@ -255,18 +269,16 @@ pub struct ServerBuilder {
     shared_state: Extensions,
     run_handle: Arc<AtomicBool>,
     filters: Vec<Arc<dyn FilterFn + Sync + Send>>,
-    tasks: Vec<Arc<Task>>,
     wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
 }
 impl ServerBuilder {
     pub fn from_config(config: ServerConfig) -> Self {
         Self {
-            services: ServiceRegistry { services: vec![] },
+            services: ServiceRegistry { services: vec![], tasks: vec![], default_service: None },
             config,
             shared_state: Extensions::default(),
             run_handle: Arc::new(AtomicBool::new(true)),
             filters: vec![],
-            tasks: vec![],
             wrappers: vec![],
         }
     }
@@ -290,6 +302,11 @@ impl ServerBuilder {
         service.register(&mut s.services, s.shared_state.clone());
         s
     }
+    pub fn default_service(self, service: Service) -> Self {
+        let mut s = self;
+        s.services.default_service = Some(Arc::new(service));
+        s
+    }
     pub fn filter(self, filter: Filter) -> Self {
         let mut s = self;
         s.filters.push(Arc::new(filter));
@@ -301,7 +318,7 @@ impl ServerBuilder {
         s
     }
     pub fn task<T: Into<Task>>(mut self, task: T) -> Self {
-        self.tasks.push(Arc::new(task.into()));
+        self.services.tasks.push(Arc::new(task.into()));
         self
     }
     pub fn run_handle(mut self, run_handle: Arc<AtomicBool>) -> Self {
@@ -315,12 +332,11 @@ impl ServerBuilder {
     }
     pub fn build(self) -> Server {
         Server {
-            registry: Arc::new(self.services),
+            registry: Arc::new(RwLock::new(self.services)),
             config: self.config,
             run: self.run_handle,
-            shared_state: Arc::new(self.shared_state),
+            shared_state: Arc::new(RwLock::new(self.shared_state)),
             filters: self.filters,
-            tasks: self.tasks,
             wrappers: self.wrappers,
         }
     }
@@ -328,12 +344,11 @@ impl ServerBuilder {
 impl Default for ServerBuilder {
     fn default() -> Self {
         Self {
-            services: ServiceRegistry { services: vec![] },
+            services: ServiceRegistry { services: vec![] , tasks: vec![], default_service: None},
             config: ServerConfig::default(),
             shared_state: Extensions::default(),
             run_handle: Arc::new(AtomicBool::new(true)),
             filters: vec![],
-            tasks: vec![],
             wrappers: vec![],
         }
     }

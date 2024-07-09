@@ -37,6 +37,7 @@ impl From<DynamicFiles> for ServiceGroup {
         ServiceGroup {
             filters: vec![],
             wrappers: vec![],
+            tasks: vec![],
             services: files
                 .into_iter()
                 .map(|(name, path)| {
@@ -232,7 +233,7 @@ impl ServiceHandler for StaticFile {
         self.name
     }
     async fn handle(&self, mut data: ServiceData) -> Result<ServiceData, (ServiceData, Error)> {
-        let bytes: hyper::body::Bytes = self.file_contents.into();
+        let bytes: Bytes = self.file_contents.into();
         if let Ok(val) = HeaderValue::from_str(&self.mime) {
             data.response.headers_mut().insert(CONTENT_TYPE, val);
         }

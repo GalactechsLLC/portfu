@@ -1,7 +1,7 @@
 mod config;
 
 use crate::config::{Config, DatabaseType};
-use log::LevelFilter;
+use log::{info, LevelFilter};
 use portfu::pfcore::files::DynamicFiles;
 use portfu::pfcore::service::ServiceGroup;
 use portfu::prelude::*;
@@ -13,6 +13,7 @@ use simple_logger::SimpleLogger;
 use sqlx::postgres::PgPoolOptions;
 use std::env;
 use std::path::PathBuf;
+use portfu_admin::services::themes::ThemeSelector;
 
 #[tokio::main]
 async fn main() -> Result<(), std::io::Error> {
@@ -23,6 +24,8 @@ async fn main() -> Result<(), std::io::Error> {
     let config = env::var("CONFIG_PATH").map_or(Config::from_env(), |s| {
         Config::try_from(std::path::Path::new(&s)).unwrap()
     });
+    let test_res: Result<usize, std::io::Error> = Ok(1024usize);
+    info!("{test_res:?}");
     let mut service_group = ServiceGroup::default();
     for directory in config.directories {
         service_group = service_group.sub_group(DynamicFiles {
@@ -63,6 +66,7 @@ async fn main() -> Result<(), std::io::Error> {
     }
     let server = ServerBuilder::default()
         .register(service_group)
+        .default_service(ThemeSelector::default().into())
         .host(config.hostname)
         .port(config.port)
         .build();
