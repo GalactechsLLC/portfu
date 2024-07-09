@@ -64,7 +64,6 @@ pub struct Server {
     pub run: Arc<AtomicBool>,
     pub shared_state: Arc<RwLock<Extensions>>,
     filters: Vec<Arc<dyn FilterFn + Sync + Send>>,
-    tasks: Vec<Arc<Task>>,
     wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
 }
 impl Server {
@@ -194,7 +193,7 @@ impl Server {
             Ok(response.into())
         } else {
             let mut handler = None;
-            let services: Vec<Arc<Service>> = server.registry.read().await.services.iter().cloned().collect();
+            let services: Vec<Arc<Service>> = server.registry.read().await.services.to_vec();
             for service in services {
                 if service.handles(&request).await {
                     handler = Some(service.clone());
@@ -270,7 +269,6 @@ pub struct ServerBuilder {
     shared_state: Extensions,
     run_handle: Arc<AtomicBool>,
     filters: Vec<Arc<dyn FilterFn + Sync + Send>>,
-    tasks: Vec<Arc<Task>>,
     wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
 }
 impl ServerBuilder {
@@ -281,7 +279,6 @@ impl ServerBuilder {
             shared_state: Extensions::default(),
             run_handle: Arc::new(AtomicBool::new(true)),
             filters: vec![],
-            tasks: vec![],
             wrappers: vec![],
         }
     }
@@ -340,7 +337,6 @@ impl ServerBuilder {
             run: self.run_handle,
             shared_state: Arc::new(RwLock::new(self.shared_state)),
             filters: self.filters,
-            tasks: self.tasks,
             wrappers: self.wrappers,
         }
     }
@@ -353,7 +349,6 @@ impl Default for ServerBuilder {
             shared_state: Extensions::default(),
             run_handle: Arc::new(AtomicBool::new(true)),
             filters: vec![],
-            tasks: vec![],
             wrappers: vec![],
         }
     }

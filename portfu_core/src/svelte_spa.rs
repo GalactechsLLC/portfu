@@ -7,7 +7,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 use async_trait::async_trait;
 use http::Extensions;
-use log::{error, info, trace, warn};
+use log::{error, info, trace};
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc::{channel, Sender};

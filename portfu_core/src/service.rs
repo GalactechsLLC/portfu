@@ -578,11 +578,6 @@ impl ServiceResponse {
         self.response.status()
     }
 }
-impl Default for ServiceResponse {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 pub trait MutBody {
     fn consume(&mut self) -> BodyType;
     fn set_body(&mut self, body: BodyType);
