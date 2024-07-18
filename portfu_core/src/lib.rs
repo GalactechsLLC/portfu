@@ -9,7 +9,7 @@ pub mod sockets;
 mod ssl;
 pub mod task;
 pub mod wrappers;
-pub mod svelte_spa;
+pub mod npm_service;
 
 use crate::editable::EditResult;
 use crate::server::Server;

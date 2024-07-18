@@ -21,7 +21,7 @@ use crate::service::{Service, ServiceBuilder, ServiceGroup};
 use crate::signal::await_termination;
 use crate::task::{TaskFn};
 
-pub struct SvelteSinglePageApp {
+pub struct NpmSinglePageApp {
     managed_files: RwLock<HashSet<Uuid>>,
     pub src_directory: PathBuf,
     pub output_directory: PathBuf,
@@ -29,7 +29,7 @@ pub struct SvelteSinglePageApp {
     pub editable: bool,
 
 }
-impl SvelteSinglePageApp {
+impl NpmSinglePageApp {
     pub fn new(src_directory: PathBuf, output_directory: PathBuf, build_command: String) -> Self {
         Self {
             managed_files: Default::default(),
@@ -41,9 +41,9 @@ impl SvelteSinglePageApp {
     }
 }
 #[async_trait]
-impl TaskFn for SvelteSinglePageApp {
+impl TaskFn for NpmSinglePageApp {
     fn name(&self) -> &str {
-        "Svelte Watcher Service"
+        "Npm Watcher Service"
     }
 
     async fn run(&self, state: Arc<RwLock<Extensions>>) -> Result<(), Error> {
@@ -170,10 +170,10 @@ impl TaskFn for SvelteSinglePageApp {
         }
     }
 }
-impl From<SvelteSinglePageApp> for ServiceGroup {
-    fn from(mut slf: SvelteSinglePageApp) -> ServiceGroup {
+impl From<NpmSinglePageApp> for ServiceGroup {
+    fn from(mut slf: NpmSinglePageApp) -> ServiceGroup {
         let mut files = HashMap::new();
-        info!("Searching for Svelte Project at: {:?}", &slf.src_directory);
+        info!("Searching for Node Project at: {:?}", &slf.src_directory);
         let mut build = true;
         if !slf.src_directory.exists() {
             if let Err(e) = std::fs::create_dir(&slf.src_directory) {
@@ -262,10 +262,10 @@ pub fn run_build<P: AsRef<std::path::Path>>(src_directory: P) -> Result<(), Erro
         }
     }
     if !npm_exists && !yarn_exists {
-        error!("Failed to Find 'npm' or 'yarn', install either to manage svelte projects");
+        error!("Failed to Find 'npm' or 'yarn', install either to manage nodejs projects");
     } else {
         let path = src_directory.as_ref();
-        info!("Building Svelte Project at: {:?}", path);
+        info!("Building Node Project at: {:?}", path);
         let mut cmd = Command::new(if npm_exists { "npm" } else { "yarn"});
         cmd.current_dir(path);
         cmd.arg("run").arg("build").stdout(Stdio::piped()).stderr(Stdio::piped());

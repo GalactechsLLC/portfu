@@ -6,7 +6,7 @@ use crate::stores::UserStore;
 use portfu::prelude::ServiceGroup;
 use portfu::wrappers::sessions::SessionWrapper;
 use std::sync::Arc;
-use portfu::pfcore::svelte_spa::SvelteSinglePageApp;
+use portfu::pfcore::npm_service::NpmSinglePageApp;
 
 pub mod auth;
 pub mod services;
@@ -27,7 +27,7 @@ impl<U: UserStore> From<PortfuAdmin<U>> for ServiceGroup {
             .shared_state(admin.user_datastore)
             .wrap(Arc::new(SessionWrapper::default()))
             .sub_group(ServiceEditor::default())
-            .sub_group(SvelteSinglePageApp::new(
+            .sub_group(NpmSinglePageApp::new(
                 PathBuf::from(env::var("SVELTE_SOURCE").unwrap()),
                 PathBuf::from(env::var("SVELTE_OUTPUT").unwrap()),
                 "build".to_string()
