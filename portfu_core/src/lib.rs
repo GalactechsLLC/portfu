@@ -394,12 +394,15 @@ impl<T: for<'a> Deserialize<'a>> Json<T> {
 }
 
 #[async_trait::async_trait]
-impl<T> FromBody for Json<T>
+impl<T> FromBody for Json<Option<T>>
 where
     T: for<'a> Deserialize<'a>,
 {
     async fn from_body(body: &mut RefBodyType) -> Result<Self, Error> {
         let bytes = body_to_bytes(body).await?;
+        if bytes.is_empty() || bytes.eq_ignore_ascii_case("{}".as_bytes()) {
+            return Ok(Json(None));
+        }
         serde_json::from_slice(bytes.as_ref())
             .map_err(|e| {
                 Error::new(
@@ -407,6 +410,25 @@ where
                     format!("Failed to parse body as JSON: {e:?}"),
                 )
             })
+            .map(Some)
+            .map(Json)
+    }
+}
+#[async_trait::async_trait]
+impl<'r, T: for<'a> Deserialize<'a>> FromRequest<'r> for Json<Option<T>> {
+    async fn from_request(request: &'r mut ServiceRequest, _: &'r str) -> Result<Self, Error> {
+        let bytes = body_to_bytes(&mut request.request.body()).await?;
+        if bytes.is_empty() || bytes.eq_ignore_ascii_case("{}".as_bytes()) {
+            return Ok(Json(None));
+        }
+        serde_json::from_slice(bytes.as_ref())
+            .map_err(|e| {
+                Error::new(
+                    ErrorKind::InvalidInput,
+                    format!("Failed to parse body as JSON: {e:?}"),
+                )
+            })
+            .map(Some)
             .map(Json)
     }
 }

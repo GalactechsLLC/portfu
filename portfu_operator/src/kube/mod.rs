@@ -15,10 +15,29 @@ use serde::{Deserialize, Serialize};
 use portfu::prelude::*;
 use portfu_runtime_lib::config::Config as PortfuConfig;
 
-const DEFAULT_NAMESPACE: &str = "portfu-infrastructure";
-const DEFAULT_CONFIG_PREFIX: &str = "portfu-config-";
-const DEFAULT_POD_PREFIX: &str = "portfu-";
-const DEFAULT_POD_IMAGE: &str = "";
+pub const DEFAULT_NAMESPACE: &str = "portfu-infrastructure";
+pub const DEFAULT_CONFIG_PREFIX: &str = "portfu-config-";
+pub const DEFAULT_POD_PREFIX: &str = "portfu-";
+pub const DEFAULT_POD_IMAGE: &str = "";
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct SearchParams {
+    pub label_selector: Option<String>,
+    pub field_selector: Option<String>,
+    pub limit: Option<u32>,
+    pub continue_token: Option<String>,
+}
+
+impl From<SearchParams> for ListParams {
+    fn from(value: SearchParams) -> Self {
+        Self {
+            label_selector: value.label_selector,
+            field_selector: value.field_selector,
+            limit: value.limit,
+            continue_token: value.continue_token,
+            ..Default::default()
+        }
+    }
+}
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VolumeConfig {
