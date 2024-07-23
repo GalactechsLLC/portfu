@@ -266,7 +266,7 @@ impl ToTokens for Endpoint {
                     let service_data: Ident = Ident::new("ServiceData", segment.ident.span());
                     let state_ident: Ident = Ident::new("State", segment.ident.span());
                     if state_ident == segment.ident {
-                        if let Some(inner_type) = match &segment.arguments {
+                        if let Some(_inner_type) = match &segment.arguments {
                             PathArguments::None => panic!("State Inner Object Cannot be None"),
                             PathArguments::AngleBracketed(args) => {
                                 if let Some(GenericArgument::Type(ty)) = args.args.first() {
@@ -278,10 +278,10 @@ impl ToTokens for Endpoint {
                             PathArguments::Parenthesized(args) => args.inputs.first(),
                         } {
                             dyn_vars.push(quote! {
-                                let #ident_val: #ident_type = match handle_data.request.get::<::std::sync::Arc<#inner_type>>()
+                                let #ident_val: #ident_type = match handle_data.request.get()
                                     .cloned()
                                     .map(|data| ::portfu::pfcore::State(data)).ok_or(
-                                        ::std::io::Error::new(::std::io::ErrorKind::NotFound, format!("Failed to find State of type {}", stringify!(#inner_type)))
+                                        ::std::io::Error::new(::std::io::ErrorKind::NotFound, format!("Failed to find State"))
                                     ) {
                                     Ok(v) => v,
                                     Err(e) => {

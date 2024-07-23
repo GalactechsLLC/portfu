@@ -24,7 +24,13 @@ impl<
     > DataStore<P, T, Error> for PostgresDataStore<P, T>
 {
     async fn init(&self) -> Result<(), Error> {
-        Ok(())
+        let conn = self.connection.acquire().await.map_err(|e| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!("Failed to acquire connection: {e:?}"),
+            )
+        })?;
+        T::table_init(conn)
     }
 
     async fn search(&self, mut params: SearchParams) -> Result<Vec<T>, Error> {

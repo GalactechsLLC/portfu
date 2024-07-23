@@ -147,7 +147,9 @@ impl ToTokens for Interval {
                         #(#dyn_vars)*
                         tokio::select! {
                             _ = __interval_duration.tick() => {
-                                let _ = #name(#(#additional_function_vars)*).await;
+                                if let Err(e) = #name(#(#additional_function_vars)*).await {
+                                    ::portfu::prelude::log::error!("Error in Interval {} - {e:?} ", stringify!(#name));
+                                }
                             }
                             _ = ::portfu::pfcore::signal::await_termination() => {
                                 break;

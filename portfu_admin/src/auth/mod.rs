@@ -1,24 +1,36 @@
 use crate::users::UserRole;
 use http::StatusCode;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
-use portfu::macros::get;
+use portfu::macros::{get, post};
 use portfu::pfcore::wrappers::{Wrapper, WrapperFn, WrapperResult};
 use portfu::prelude::async_trait::async_trait;
 use portfu::prelude::log::error;
 use portfu::prelude::once_cell::sync::Lazy;
 use portfu::prelude::uuid::Uuid;
-use portfu::prelude::ServiceData;
+use portfu::prelude::{Body, ServiceData, State};
 use portfu::wrappers::sessions::Session;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::io::{Error, ErrorKind};
 use std::sync::Arc;
+use portfu::pfcore::{FromRequest, Json, Query};
 use tokio::sync::RwLock;
 
 #[cfg(feature = "github_auth")]
 pub mod github;
 
-#[get("/user/jwt")]
+#[derive(Default, Clone, Deserialize)]
+pub struct BasicLoginRequest {
+    username: String,
+    password: String,
+}
+
+#[async_trait]
+pub trait BasicAuth {
+    async fn login<U: AsRef<str>, P: AsRef<str>>(&self, username: U, password: P) -> Result<Claims, Error>;
+}
+
+#[get("/auth/jwt")]
 pub async fn get_jwt(data: &mut ServiceData) -> Result<String, Error> {
     if let Some(session) = data.request.get::<Arc<RwLock<Session>>>() {
         if let Some(claims) = session.read().await.data.get::<Claims>() {
@@ -27,16 +39,54 @@ pub async fn get_jwt(data: &mut ServiceData) -> Result<String, Error> {
                 claims,
                 &EncodingKey::from_secret(CURRENT_SECRET.as_bytes()),
             )
-            .map_err(|e| {
-                Error::new(
-                    ErrorKind::InvalidInput,
-                    format!("Failed to Encode JWT: {e:?}"),
-                )
-            });
+                .map_err(|e| {
+                    Error::new(
+                        ErrorKind::InvalidInput,
+                        format!("Failed to Encode JWT: {e:?}"),
+                    )
+                });
         }
     }
     *data.response.status_mut() = StatusCode::NOT_FOUND;
     Ok(String::new())
+}
+
+#[post("/auth/login")]
+pub async fn basic_login<B: BasicAuth + Send + Sync + 'static>(data: &mut ServiceData) -> Result<String, Error> {
+    let basic_login: Arc<B> = match data.request.get::<Arc<B>>() {
+        Some(data) => {
+            data.clone()
+        }
+        None => {
+            let msg = "No Auth Backend for to handle Request";
+            error!("{}", msg);
+            *data.response.status_mut() = StatusCode::NOT_FOUND;
+            return Ok(msg.to_string());
+        }
+    };
+    let body: Option<BasicLoginRequest> = match Body::from_request(&mut data.request, "").await {
+        Ok(v) => {
+            let json: Json<BasicLoginRequest> = v.inner();
+            Some(json.inner())
+        }
+        Err(_) => None,
+    };
+    let body: BasicLoginRequest = match body {
+        None => Query::<BasicLoginRequest>::from_request(&mut data.request, "").await.map(|v| v.inner())?,
+        Some(v) => v,
+    };
+    let claims: Claims = basic_login.as_ref().login(body.username, body.password).await?;
+    return encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(CURRENT_SECRET.as_bytes()),
+    )
+        .map_err(|e| {
+            Error::new(
+                ErrorKind::InvalidInput,
+                format!("Failed to Encode JWT: {e:?}"),
+            )
+        });
 }
 
 pub static CURRENT_SECRET: Lazy<String> =

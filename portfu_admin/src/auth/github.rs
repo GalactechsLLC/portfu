@@ -11,7 +11,6 @@ use oauth2::{
 };
 use octocrab::models::orgs::Organization;
 use octocrab::models::Author;
-use portfu::filters::method::GET;
 use portfu::pfcore::service::{ServiceBuilder, ServiceGroup};
 use portfu::pfcore::{FromRequest, Json, Query, ServiceData, ServiceHandler};
 use portfu::prelude::{async_trait, Body};
@@ -365,14 +364,12 @@ impl OAuthLoginBuilder {
         });
         let login_service = ServiceBuilder::new("/github/login")
             .name("index")
-            .filter(GET.clone())
             .handler(Arc::new(OAuthLoginHandler {
                 config: config.clone(),
             }))
             .build();
         let auth_service = ServiceBuilder::new("/github/auth")
             .name("index")
-            .filter(GET.clone())
             .handler(Arc::new(OAuthAuthHandler {
                 config: config.clone(),
             }))
