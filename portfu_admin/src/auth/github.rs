@@ -200,8 +200,6 @@ pub struct OAuthLoginBuilder {
     pub auth_url: Option<AuthUrl>,
     pub token_url: Option<TokenUrl>,
     pub api_base_url: Option<String>,
-    pub on_success_redirect: Option<String>,
-    pub on_failure_redirect: Option<String>,
     pub redirect_url: Option<RedirectUrl>,
     pub allowed_organizations: Vec<u64>,
     pub allowed_users: Vec<u64>,

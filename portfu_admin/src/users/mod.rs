@@ -12,6 +12,7 @@ use sqlx::query::Query;
 #[cfg(feature = "postgres")]
 use sqlx::{Error, FromRow, Postgres, Row};
 use std::fmt::{Display, Formatter};
+use std::str::FromStr;
 use struct_field_names_as_array::FieldNamesAsSlice;
 use time::OffsetDateTime;
 
@@ -191,6 +192,21 @@ impl Display for UserRole {
             UserRole::Manager => f.write_str("Manager"),
             UserRole::Admin => f.write_str("Admin"),
             UserRole::SuperAdmin => f.write_str("SuperAdmin"),
+        }
+    }
+}
+impl FromStr for UserRole {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "user" => Ok(UserRole::User),
+            "viewer" => Ok(UserRole::Viewer),
+            "contributor" => Ok(UserRole::Contributor),
+            "editor" => Ok(UserRole::Editor),
+            "manager" => Ok(UserRole::Manager),
+            "admin" => Ok(UserRole::Admin),
+            "superadmin" => Ok(UserRole::SuperAdmin),
+            _ => Err(format!("{s} is not a valid UserRole")),
         }
     }
 }

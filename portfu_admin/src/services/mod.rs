@@ -1,8 +1,8 @@
 use http::{header, HeaderValue, StatusCode};
 use hyper::body::Bytes;
 use portfu::pfcore::service::BodyType;
-use portfu::pfcore::{IntoStreamBody, ServiceData};
 use std::io::Error;
+use portfu::pfcore::{IntoStreamBody, ServiceData};
 
 pub mod editor;
 pub mod themes;

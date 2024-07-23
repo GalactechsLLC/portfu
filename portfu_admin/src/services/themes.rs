@@ -3,7 +3,7 @@ use crate::themes::token::Token;
 use crate::themes::Theme;
 use portfu::pfcore::editable::EditResult;
 use portfu::pfcore::service::{Service, ServiceBuilder};
-use portfu::pfcore::{ServiceData, ServiceHandler, ServiceRegister, ServiceRegistry};
+use portfu::pfcore::{ServiceData, ServiceHandler, ServiceRegister, ServiceRegistry, ServiceType};
 use portfu::prelude::async_trait::async_trait;
 use portfu::prelude::http::Extensions;
 use std::collections::HashMap;
@@ -43,6 +43,11 @@ impl ServiceHandler for ThemeSelector {
     fn is_editable(&self) -> bool {
         true
     }
+
+    fn service_type(&self) -> ServiceType {
+        ServiceType::API
+    }
+
     async fn current_value(&self) -> EditResult {
         EditResult::Success(self.selected_theme.read().await.name.as_bytes().to_vec())
     }

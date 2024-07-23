@@ -9,6 +9,7 @@ pub mod sockets;
 mod ssl;
 pub mod task;
 pub mod wrappers;
+pub mod npm_service;
 
 use crate::editable::EditResult;
 use crate::server::Server;
@@ -16,9 +17,7 @@ use crate::service::{
     BodyType, IncomingRequest, RefBodyType, Service, ServiceRequest, ServiceResponse,
 };
 use async_trait::async_trait;
-use futures_util::{Stream, TryStreamExt};
 use http::Extensions;
-use http_body::Frame;
 use http_body_util::Full;
 use http_body_util::{BodyExt, BodyStream, StreamBody};
 use hyper::body::{Bytes, Incoming};
@@ -30,6 +29,15 @@ use std::io::{Error, ErrorKind};
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
+use futures_util::{Stream, TryStreamExt};
+use http_body::Frame;
+use crate::task::Task;
+
+pub enum ServiceType {
+    File,
+    Folder,
+    API
+}
 
 #[async_trait]
 pub trait ServiceHandler {
@@ -38,6 +46,7 @@ pub trait ServiceHandler {
     fn is_editable(&self) -> bool {
         false
     }
+    fn service_type(&self) -> ServiceType;
     async fn current_value(&self) -> EditResult {
         EditResult::NotEditable
     }
@@ -69,6 +78,10 @@ impl ServiceHandler for (&'static str, &'static str) {
             ))));
         Ok(data)
     }
+
+    fn service_type(&self) -> ServiceType {
+        ServiceType::File
+    }
 }
 
 #[async_trait]
@@ -82,6 +95,10 @@ impl ServiceHandler for (String, String) {
             .set_body(BodyType::Sized(Full::new(Bytes::from(self.1.clone()))));
         Ok(data)
     }
+
+    fn service_type(&self) -> ServiceType {
+        ServiceType::File
+    }
 }
 
 #[async_trait]
@@ -94,6 +111,10 @@ impl ServiceHandler for (&'static str, &'static [u8]) {
         data.response
             .set_body(BodyType::Sized(Full::new(Bytes::from_static(self.1))));
         Ok(data)
+    }
+
+    fn service_type(&self) -> ServiceType {
+        ServiceType::File
     }
 }
 pub type BoxedBody =
@@ -208,11 +229,13 @@ pub trait ServiceRegister {
 }
 
 pub static mut STATIC_REGISTRY: Lazy<ServiceRegistry> =
-    Lazy::new(|| ServiceRegistry { services: vec![] });
+    Lazy::new(|| ServiceRegistry { services: vec![], tasks: vec![], default_service: None });
 
 #[derive(Clone, Debug, Default)]
 pub struct ServiceRegistry {
     pub services: Vec<Arc<Service>>,
+    pub default_service: Option<Arc<Service>>,
+    pub tasks: Vec<Arc<Task>>,
 }
 impl ServiceRegistry {
     pub fn register(&mut self, service: Service) {
@@ -371,12 +394,15 @@ impl<T: for<'a> Deserialize<'a>> Json<T> {
 }
 
 #[async_trait::async_trait]
-impl<T> FromBody for Json<T>
+impl<T> FromBody for Json<Option<T>>
 where
     T: for<'a> Deserialize<'a>,
 {
     async fn from_body(body: &mut RefBodyType) -> Result<Self, Error> {
         let bytes = body_to_bytes(body).await?;
+        if bytes.is_empty() || bytes.eq_ignore_ascii_case("{}".as_bytes()) {
+            return Ok(Json(None));
+        }
         serde_json::from_slice(bytes.as_ref())
             .map_err(|e| {
                 Error::new(
@@ -384,6 +410,25 @@ where
                     format!("Failed to parse body as JSON: {e:?}"),
                 )
             })
+            .map(Some)
+            .map(Json)
+    }
+}
+#[async_trait::async_trait]
+impl<'r, T: for<'a> Deserialize<'a>> FromRequest<'r> for Json<Option<T>> {
+    async fn from_request(request: &'r mut ServiceRequest, _: &'r str) -> Result<Self, Error> {
+        let bytes = body_to_bytes(&mut request.request.body()).await?;
+        if bytes.is_empty() || bytes.eq_ignore_ascii_case("{}".as_bytes()) {
+            return Ok(Json(None));
+        }
+        serde_json::from_slice(bytes.as_ref())
+            .map_err(|e| {
+                Error::new(
+                    ErrorKind::InvalidInput,
+                    format!("Failed to parse body as JSON: {e:?}"),
+                )
+            })
+            .map(Some)
             .map(Json)
     }
 }

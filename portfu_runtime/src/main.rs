@@ -1,5 +1,8 @@
-use log::{error, warn, LevelFilter};
-use portfu::macros::files;
+mod config;
+
+use crate::config::{Config, DatabaseType};
+use log::{info, LevelFilter};
+use portfu::pfcore::files::DynamicFiles;
 use portfu::pfcore::service::ServiceGroup;
 use portfu::prelude::*;
 use portfu_admin::stores::memory::MemoryDataStore;
@@ -8,10 +11,9 @@ use portfu_admin::users::User;
 use portfu_admin::PortfuAdmin;
 use simple_logger::SimpleLogger;
 use sqlx::postgres::PgPoolOptions;
-use std::str::FromStr;
-
-#[files("front_end_dist/")]
-pub struct EditableFiles;
+use std::env;
+use std::path::PathBuf;
+use portfu_admin::services::themes::ThemeSelector;
 
 #[tokio::main]
 async fn main() -> Result<(), std::io::Error> {
@@ -19,54 +21,54 @@ async fn main() -> Result<(), std::io::Error> {
         .with_level(LevelFilter::Debug)
         .init()
         .unwrap();
-    let host = std::env::var("HOST").unwrap_or_else(|_| {
-        warn!("HOST not set, Using 0.0.0.0");
-        String::from("0.0.0.0")
+    let config = env::var("CONFIG_PATH").map_or(Config::from_env(), |s| {
+        Config::try_from(std::path::Path::new(&s)).unwrap()
     });
-    let port = std::env::var("PORT")
-        .map(|s| {
-            u16::from_str(&s).unwrap_or_else(|e| {
-                error!("Invalid PORT {e:?}, Falling back to 8080");
-                8080
-            })
-        })
-        .unwrap_or_else(|_| {
-            warn!("PORT not set, Using 8080");
-            8080
+    let test_res: Result<usize, std::io::Error> = Ok(1024usize);
+    info!("{test_res:?}");
+    let mut service_group = ServiceGroup::default();
+    for directory in config.directories {
+        service_group = service_group.sub_group(DynamicFiles {
+            root_directory: PathBuf::from(directory),
+            editable: true,
         });
-    let mut service_group = ServiceGroup::default().sub_group(EditableFiles);
-    match std::env::var("DATABASE_URL").ok() {
-        Some(_url) => {
-            {
-                let pg_pool = PgPoolOptions::new()
-                    .max_connections(100)
-                    .connect(&_url)
-                    .await
-                    .unwrap();
-                service_group =
-                    service_group.sub_group(PortfuAdmin::<PostgresDataStore<i64, User>> {
-                        user_datastore: PostgresDataStore::new(pg_pool),
-                    });
-            }
-            #[cfg(not(feature = "postgres"))]
-            {
-                warn!("Database URL Provided but no Database Feature Enabled");
+    }
+    if let Some(db_url) = config.database_url {
+        match config.database_type {
+            Some(d_type) => match d_type {
+                DatabaseType::Mysql => {
+                    todo!()
+                }
+                DatabaseType::Postgres => {
+                    let pg_pool = PgPoolOptions::new()
+                        .max_connections(100)
+                        .connect(&db_url)
+                        .await
+                        .unwrap();
+                    service_group =
+                        service_group.sub_group(PortfuAdmin::<PostgresDataStore<i64, User>> {
+                            user_datastore: PostgresDataStore::new(pg_pool),
+                        });
+                }
+            },
+            None => {
                 service_group =
                     service_group.sub_group(PortfuAdmin::<MemoryDataStore<i64, User>> {
                         user_datastore: MemoryDataStore::<i64, User>::default(),
                     });
             }
-        }
-        None => {
-            service_group = service_group.sub_group(PortfuAdmin::<MemoryDataStore<i64, User>> {
+        };
+    } else {
+        service_group =
+            service_group.sub_group(PortfuAdmin::<MemoryDataStore<i64, User>> {
                 user_datastore: MemoryDataStore::<i64, User>::default(),
             });
-        }
-    };
+    }
     let server = ServerBuilder::default()
         .register(service_group)
-        .host(host)
-        .port(port)
+        .default_service(ThemeSelector::default().into())
+        .host(config.hostname)
+        .port(config.port)
         .build();
     server.run().await
 }

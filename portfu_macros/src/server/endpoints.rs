@@ -436,6 +436,9 @@ impl ToTokens for Endpoint {
                         }
                     }
                 }
+                fn service_type(&self) -> ::portfu::prelude::ServiceType {
+                    ::portfu::prelude::ServiceType::API
+                }
             }
         };
         token_out.extend(stream);

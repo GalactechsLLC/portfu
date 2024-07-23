@@ -17,6 +17,7 @@ pub mod prelude {
     pub extern crate tokio_tungstenite;
     pub extern crate uuid;
     pub type Service = ::pfcore::service::Service;
+    pub type ServiceType = ::pfcore::ServiceType;
     pub type Server = ::pfcore::server::Server;
     pub type ServerBuilder = ::pfcore::server::ServerBuilder;
     pub type SslConfig = ::pfcore::server::SslConfig;

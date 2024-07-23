@@ -8,12 +8,12 @@ use hyper::body::Body;
 use log::error;
 use once_cell::sync::Lazy;
 use pfcore::service::{BodyType, MutBody, ServiceBuilder};
-use pfcore::wrappers::{WrapperFn, WrapperResult};
-use pfcore::{IntoStreamBody, ServiceHandler, ServiceRegister, ServiceRegistry};
 use prometheus::{self, HistogramOpts, HistogramVec, Registry, TextEncoder};
 use std::io::{Error, ErrorKind};
 use std::sync::Arc;
 use std::time::Instant;
+use pfcore::{IntoStreamBody, ServiceHandler, ServiceRegister, ServiceRegistry, ServiceType};
+use pfcore::wrappers::{WrapperFn, WrapperResult};
 use uuid::Uuid;
 
 #[derive(Copy, Clone)]
@@ -126,6 +126,10 @@ impl ServiceHandler for MetricsEndpoint {
             )),
         }
     }
+
+    fn service_type(&self) -> ServiceType {
+        ServiceType::API
+    }
 }
 impl ServiceRegister for MetricsEndpoint {
     fn register(self, service_registry: &mut ServiceRegistry, shared_state: Extensions) {
@@ -138,7 +142,6 @@ impl ServiceRegister for MetricsEndpoint {
         service_registry.register(__resource);
     }
 }
-
 #[derive(Default)]
 pub struct MetricsWrapper {}
 
