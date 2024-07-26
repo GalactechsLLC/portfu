@@ -8,12 +8,12 @@ use hyper::body::Body;
 use log::error;
 use once_cell::sync::Lazy;
 use pfcore::service::{BodyType, MutBody, ServiceBuilder};
+use pfcore::wrappers::{WrapperFn, WrapperResult};
+use pfcore::{IntoStreamBody, ServiceHandler, ServiceRegister, ServiceRegistry, ServiceType};
 use prometheus::{self, HistogramOpts, HistogramVec, Registry, TextEncoder};
 use std::io::{Error, ErrorKind};
 use std::sync::Arc;
 use std::time::Instant;
-use pfcore::{IntoStreamBody, ServiceHandler, ServiceRegister, ServiceRegistry, ServiceType};
-use pfcore::wrappers::{WrapperFn, WrapperResult};
 use uuid::Uuid;
 
 #[derive(Copy, Clone)]

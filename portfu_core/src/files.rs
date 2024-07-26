@@ -1,4 +1,5 @@
 use crate::editable::EditResult;
+use crate::service::{BodyType, ServiceBuilder, ServiceGroup};
 use crate::{IntoStreamBody, ServiceData, ServiceHandler, ServiceType, StreamingBody};
 use futures_util::TryStreamExt;
 use http::header::{CONTENT_LENGTH, CONTENT_TYPE};
@@ -16,7 +17,6 @@ use tokio::fs::{File, OpenOptions};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 use tokio_util::codec::BytesCodec;
-use crate::service::{BodyType, ServiceBuilder, ServiceGroup};
 
 pub struct DynamicFiles {
     pub root_directory: PathBuf,
@@ -31,7 +31,8 @@ impl From<DynamicFiles> for ServiceGroup {
                 log::error!("Error Creating Root Directory: {e:?}");
             }
         }
-        if let Err(e) = read_directory(&slf.root_directory, slf.root_directory.clone(), &mut files) {
+        if let Err(e) = read_directory(&slf.root_directory, slf.root_directory.clone(), &mut files)
+        {
             log::error!("Error Loading files: {e:?}");
         }
         ServiceGroup {
@@ -51,7 +52,8 @@ impl From<DynamicFiles> for ServiceGroup {
                             editable: slf.editable,
                             cache_threshold: 65536,
                             cache_status: AtomicBool::default(),
-                            cached_value: Arc::new(RwLock::new(Vec::with_capacity(0))),}))
+                            cached_value: Arc::new(RwLock::new(Vec::with_capacity(0))),
+                        }))
                         .build()
                 })
                 .collect(),
@@ -304,9 +306,6 @@ pub fn read_file(
         .strip_prefix(root)
         .map_err(|e| Error::new(::std::io::ErrorKind::InvalidInput, format!("{e:?}")))?;
     new_root.extend(path);
-    file_map.insert(
-        new_root.to_string_lossy().to_string(),
-        starting_path,
-    );
+    file_map.insert(new_root.to_string_lossy().to_string(), starting_path);
     Ok(())
 }

@@ -5,6 +5,7 @@ use log::{info, LevelFilter};
 use portfu::pfcore::files::DynamicFiles;
 use portfu::pfcore::service::ServiceGroup;
 use portfu::prelude::*;
+use portfu_admin::services::themes::ThemeSelector;
 use portfu_admin::stores::memory::MemoryDataStore;
 use portfu_admin::stores::postgres::PostgresDataStore;
 use portfu_admin::users::User;
@@ -13,7 +14,6 @@ use simple_logger::SimpleLogger;
 use sqlx::postgres::PgPoolOptions;
 use std::env;
 use std::path::PathBuf;
-use portfu_admin::services::themes::ThemeSelector;
 
 #[tokio::main]
 async fn main() -> Result<(), std::io::Error> {
@@ -59,10 +59,9 @@ async fn main() -> Result<(), std::io::Error> {
             }
         };
     } else {
-        service_group =
-            service_group.sub_group(PortfuAdmin::<MemoryDataStore<i64, User>> {
-                user_datastore: MemoryDataStore::<i64, User>::default(),
-            });
+        service_group = service_group.sub_group(PortfuAdmin::<MemoryDataStore<i64, User>> {
+            user_datastore: MemoryDataStore::<i64, User>::default(),
+        });
     }
     let server = ServerBuilder::default()
         .register(service_group)

@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use http::Extensions;
 use std::fmt::{Debug, Formatter};
 use std::io::Error;
-use std::sync::{Arc};
+use std::sync::Arc;
 use tokio::sync::RwLock;
 
 #[derive(Debug)]

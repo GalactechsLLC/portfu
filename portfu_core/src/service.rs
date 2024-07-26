@@ -1,5 +1,6 @@
 use crate::filters::{FilterFn, FilterResult};
 use crate::routes::Route;
+use crate::task::{Task, TaskFn};
 use crate::wrappers::{WrapperFn, WrapperResult};
 use crate::{
     IntoStreamBody, ServiceData, ServiceHandler, ServiceRegister, ServiceRegistry, StreamingBody,
@@ -22,7 +23,6 @@ use std::task::{Context, Poll};
 use tokio_tungstenite::tungstenite::error::ProtocolError;
 use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
 use uuid::Uuid;
-use crate::task::{Task, TaskFn};
 
 #[derive(Debug)]
 pub struct ServiceBuilder {

@@ -1,6 +1,7 @@
 pub mod editable;
 pub mod files;
 pub mod filters;
+pub mod npm_service;
 pub mod routes;
 pub mod server;
 pub mod service;
@@ -9,15 +10,17 @@ pub mod sockets;
 mod ssl;
 pub mod task;
 pub mod wrappers;
-pub mod npm_service;
 
 use crate::editable::EditResult;
 use crate::server::Server;
 use crate::service::{
     BodyType, IncomingRequest, RefBodyType, Service, ServiceRequest, ServiceResponse,
 };
+use crate::task::Task;
 use async_trait::async_trait;
+use futures_util::{Stream, TryStreamExt};
 use http::Extensions;
+use http_body::Frame;
 use http_body_util::Full;
 use http_body_util::{BodyExt, BodyStream, StreamBody};
 use hyper::body::{Bytes, Incoming};
@@ -29,14 +32,11 @@ use std::io::{Error, ErrorKind};
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
-use futures_util::{Stream, TryStreamExt};
-use http_body::Frame;
-use crate::task::Task;
 
 pub enum ServiceType {
     File,
     Folder,
-    API
+    API,
 }
 
 #[async_trait]
@@ -228,8 +228,11 @@ pub trait ServiceRegister {
     fn register(self, service_registry: &mut ServiceRegistry, shared_state: Extensions);
 }
 
-pub static mut STATIC_REGISTRY: Lazy<ServiceRegistry> =
-    Lazy::new(|| ServiceRegistry { services: vec![], tasks: vec![], default_service: None });
+pub static mut STATIC_REGISTRY: Lazy<ServiceRegistry> = Lazy::new(|| ServiceRegistry {
+    services: vec![],
+    tasks: vec![],
+    default_service: None,
+});
 
 #[derive(Clone, Debug, Default)]
 pub struct ServiceRegistry {

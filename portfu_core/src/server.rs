@@ -20,9 +20,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
+use tokio::sync::RwLock;
 use tokio::task::JoinSet;
 use tokio::{select, spawn};
-use tokio::sync::RwLock;
 use tokio_rustls::TlsAcceptor;
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -201,9 +201,7 @@ impl Server {
                 }
             }
             match handler {
-                Some(service) => {
-                    handle_service(request, service, server.clone(), response).await
-                }
+                Some(service) => handle_service(request, service, server.clone(), response).await,
                 None => {
                     if let Some(service) = server.registry.read().await.default_service.clone() {
                         handle_service(request, service, server.clone(), response).await
@@ -217,7 +215,12 @@ impl Server {
     }
 }
 
-pub async fn handle_service(mut request: Request<Incoming>, service: Arc<Service>, server: Arc<Server>, response: ServiceResponse) -> Result<Response<StreamingBody>, Error> {
+pub async fn handle_service(
+    mut request: Request<Incoming>,
+    service: Arc<Service>,
+    server: Arc<Server>,
+    response: ServiceResponse,
+) -> Result<Response<StreamingBody>, Error> {
     request
         .extensions_mut()
         .extend(service.shared_state.clone());
@@ -237,21 +240,19 @@ pub async fn handle_service(mut request: Request<Incoming>, service: Arc<Service
             }
         }
     }
-    service_data =
-        service
-            .handle(service_data)
-            .await
-            .unwrap_or_else(|(mut sd, e)| {
-                error!(
-                    "Service Error when Handling {} - {e:?}",
-                    sd.request.request.uri()
-                );
-                *sd.response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                sd.response.set_body(BodyType::Sized(
-                    Full::new(Bytes::from(format!("{:?}", e),
-                ))));
-                sd
-            });
+    service_data = service
+        .handle(service_data)
+        .await
+        .unwrap_or_else(|(mut sd, e)| {
+            error!(
+                "Service Error when Handling {} - {e:?}",
+                sd.request.request.uri()
+            );
+            *sd.response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+            sd.response
+                .set_body(BodyType::Sized(Full::new(Bytes::from(format!("{:?}", e)))));
+            sd
+        });
     for func in server.wrappers.iter() {
         match func.after(&mut service_data).await {
             WrapperResult::Continue => {}
@@ -274,7 +275,11 @@ pub struct ServerBuilder {
 impl ServerBuilder {
     pub fn from_config(config: ServerConfig) -> Self {
         Self {
-            services: ServiceRegistry { services: vec![], tasks: vec![], default_service: None },
+            services: ServiceRegistry {
+                services: vec![],
+                tasks: vec![],
+                default_service: None,
+            },
             config,
             shared_state: Extensions::default(),
             run_handle: Arc::new(AtomicBool::new(true)),
@@ -344,7 +349,11 @@ impl ServerBuilder {
 impl Default for ServerBuilder {
     fn default() -> Self {
         Self {
-            services: ServiceRegistry { services: vec![] , tasks: vec![], default_service: None},
+            services: ServiceRegistry {
+                services: vec![],
+                tasks: vec![],
+                default_service: None,
+            },
             config: ServerConfig::default(),
             shared_state: Extensions::default(),
             run_handle: Arc::new(AtomicBool::new(true)),

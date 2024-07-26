@@ -41,7 +41,11 @@ macro_rules! method_macro {
                 Ok(ast) => ast,
                 Err(err) => return input_and_compile_error(input, err),
             };
-            match Endpoint::new(args, ast, vec![method::Method::$variant, method::Method::Options]) {
+            match Endpoint::new(
+                args,
+                ast,
+                vec![method::Method::$variant, method::Method::Options],
+            ) {
                 Ok(route) => route.into_token_stream().into(),
                 Err(err) => input_and_compile_error(input, err),
             }

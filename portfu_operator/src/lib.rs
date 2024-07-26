@@ -1,4 +1,4 @@
-pub mod kube;
-pub mod tasks;
 pub mod config;
+pub mod kube;
 pub mod services;
+pub mod tasks;

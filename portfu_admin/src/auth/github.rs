@@ -13,7 +13,7 @@ use octocrab::models::orgs::Organization;
 use octocrab::models::Author;
 use portfu::pfcore::service::{ServiceBuilder, ServiceGroup};
 use portfu::pfcore::{FromRequest, Json, Query, ServiceData, ServiceHandler, ServiceType};
-use portfu::prelude::{async_trait};
+use portfu::prelude::async_trait;
 use portfu::wrappers::sessions::Session;
 use serde::Deserialize;
 use std::env;
@@ -99,9 +99,7 @@ impl ServiceHandler for OAuthAuthHandler {
         mut data: portfu::prelude::ServiceData,
     ) -> Result<ServiceData, (ServiceData, Error)> {
         let body: Option<AuthRequest> = match Json::from_request(&mut data.request, "").await {
-            Ok(json) => {
-                json.inner()
-            }
+            Ok(json) => json.inner(),
             Err(_) => None,
         };
         let body: AuthRequest = match body {
