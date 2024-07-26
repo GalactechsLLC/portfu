@@ -87,7 +87,7 @@ pub struct Endpoint {
     doc_attributes: Vec<syn::Attribute>,
 }
 impl Endpoint {
-    pub fn new(args: EndpointArgs, ast: syn::ItemFn, method: Option<Method>) -> syn::Result<Self> {
+    pub fn new(args: EndpointArgs, ast: syn::ItemFn, methods: Vec<Method>) -> syn::Result<Self> {
         let name = ast.sig.ident.clone();
         let generics = ast.sig.generics.clone();
 
@@ -100,7 +100,7 @@ impl Endpoint {
             .cloned()
             .collect();
 
-        let args = Args::new(args, method)?;
+        let args = Args::new(args, methods)?;
 
         if args.methods.is_empty() {
             return Err(syn::Error::new(
@@ -417,6 +417,9 @@ impl ToTokens for Endpoint {
                     mut handle_data: ::portfu::prelude::ServiceData
                 ) -> Result<::portfu::prelude::ServiceData, (::portfu::prelude::ServiceData, ::std::io::Error)> {
                     use ::portfu::pfcore::IntoStreamBody;
+                    if handle_data.request.request.method() == ::portfu::prelude::http::method::Method::OPTIONS {
+                        return Ok(handle_data)
+                    }
                     #function_def
                     #(#dyn_vars)*
                     match #name #function_ext(#(#additional_function_vars)*).await {
@@ -455,15 +458,12 @@ struct Args {
 }
 
 impl Args {
-    fn new(args: EndpointArgs, method: Option<Method>) -> syn::Result<Self> {
+    fn new(args: EndpointArgs, method: Vec<Method>) -> syn::Result<Self> {
         let mut resource_name = None;
         let mut filters = Vec::new();
         let mut wrappers = Vec::new();
-        let mut methods = HashSet::new();
+        let mut methods = HashSet::from_iter(method);
         let mut output = OutputType::Bytes;
-        if let Some(method) = method {
-            methods.insert(method);
-        }
         for nv in args.options {
             if nv.path.is_ident("name") {
                 if let syn::Expr::Lit(syn::ExprLit {

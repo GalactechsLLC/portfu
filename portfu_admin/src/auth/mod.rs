@@ -7,7 +7,7 @@ use portfu::prelude::async_trait::async_trait;
 use portfu::prelude::log::error;
 use portfu::prelude::once_cell::sync::Lazy;
 use portfu::prelude::uuid::Uuid;
-use portfu::prelude::{Body, ServiceData, State};
+use portfu::prelude::{ServiceData};
 use portfu::wrappers::sessions::Session;
 use serde::{Deserialize, Serialize};
 use std::env;
@@ -27,7 +27,7 @@ pub struct BasicLoginRequest {
 
 #[async_trait]
 pub trait BasicAuth {
-    async fn login<U: AsRef<str>, P: AsRef<str>>(&self, username: U, password: P) -> Result<Claims, Error>;
+    async fn login<U: AsRef<str> + Send + Sync, P: AsRef<str> + Send + Sync>(&self, username: U, password: P) -> Result<Claims, Error>;
 }
 
 #[get("/auth/jwt")]
@@ -64,10 +64,9 @@ pub async fn basic_login<B: BasicAuth + Send + Sync + 'static>(data: &mut Servic
             return Ok(msg.to_string());
         }
     };
-    let body: Option<BasicLoginRequest> = match Body::from_request(&mut data.request, "").await {
-        Ok(v) => {
-            let json: Json<BasicLoginRequest> = v.inner();
-            Some(json.inner())
+    let body: Option<BasicLoginRequest> = match Json::from_request(&mut data.request, "").await {
+        Ok(json) => {
+            json.inner()
         }
         Err(_) => None,
     };
@@ -103,16 +102,16 @@ pub static VALIDATIONS: Lazy<Validation> = Lazy::new(|| {
 });
 
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
-struct Claims {
-    aud: String,   // Optional. Audience
-    exp: usize, // Required (validate_exp defaults to true in validation). Expiration time (as UTC timestamp)
-    iat: usize, // Optional. Issued at (as UTC timestamp)
-    iss: String, // Optional. Issuer
-    nbf: usize, // Optional. Not Before (as UTC timestamp)
-    sub: String, // Optional. User ID
-    eml: String, // Optional. User Email
-    rol: UserRole, // Optional. UserRole
-    org: Vec<u64>, // Optional. UserOrganizations
+pub struct Claims {
+    pub aud: String,   // Optional. Audience
+    pub exp: usize, // Required (validate_exp defaults to true in validation). Expiration time (as UTC timestamp)
+    pub iat: usize, // Optional. Issued at (as UTC timestamp)
+    pub iss: String, // Optional. Issuer
+    pub nbf: usize, // Optional. Not Before (as UTC timestamp)
+    pub sub: String, // Optional. User ID
+    pub eml: String, // Optional. User Email
+    pub rol: UserRole, // Optional. UserRole
+    pub org: Vec<u64>, // Optional. UserOrganizations
 }
 
 macro_rules! user_role_macro {

@@ -41,7 +41,7 @@ impl From<DynamicFiles> for ServiceGroup {
             services: files
                 .into_iter()
                 .map(|(name, path)| {
-                    let mime = get_mime_type(&name);
+                    let mime = get_mime_type(&path);
                     ServiceBuilder::new(&name)
                         .name(&name)
                         .handler(Arc::new(FileLoader {
@@ -52,7 +52,6 @@ impl From<DynamicFiles> for ServiceGroup {
                             cache_threshold: 65536,
                             cache_status: AtomicBool::default(),
                             cached_value: Arc::new(RwLock::new(Vec::with_capacity(0))),}))
-
                         .build()
                 })
                 .collect(),
@@ -90,7 +89,12 @@ impl ServiceHandler for FileLoader {
             Ok(data)
         } else {
             let mut stream = true;
-            match File::open(&self.path).await {
+            let file_path = if self.path.is_dir() {
+                self.path.join("index.html")
+            } else {
+                self.path.clone()
+            };
+            match File::open(&file_path).await {
                 Ok(f) => {
                     if let Ok(metadata) = f.metadata().await {
                         let size = metadata.len();
@@ -98,7 +102,7 @@ impl ServiceHandler for FileLoader {
                             .headers_mut()
                             .insert(CONTENT_LENGTH, HeaderValue::from(size));
                         if size < self.cache_threshold {
-                            match load_from_disk(&self.path).await {
+                            match load_from_disk(&file_path).await {
                                 Ok(bytes) => {
                                     *self.cached_value.write().await = bytes;
                                     self.cache_status.store(true, Ordering::Relaxed);
@@ -126,7 +130,7 @@ impl ServiceHandler for FileLoader {
                 }
             }
             if stream {
-                match stream_from_disk(&self.path).await {
+                match stream_from_disk(&file_path).await {
                     Ok(stream) => {
                         if let Ok(val) = HeaderValue::from_str(&self.mime) {
                             data.response.headers_mut().insert(CONTENT_TYPE, val);
@@ -285,7 +289,7 @@ pub fn read_directory(
     new_root.extend(path);
     file_map.insert(
         new_root.to_string_lossy().to_string(),
-        file_path,
+        file_path.join("index.html"),
     );
     Ok(())
 }

@@ -12,8 +12,8 @@ use oauth2::{
 use octocrab::models::orgs::Organization;
 use octocrab::models::Author;
 use portfu::pfcore::service::{ServiceBuilder, ServiceGroup};
-use portfu::pfcore::{FromRequest, Json, Query, ServiceData, ServiceHandler};
-use portfu::prelude::{async_trait, Body};
+use portfu::pfcore::{FromRequest, Json, Query, ServiceData, ServiceHandler, ServiceType};
+use portfu::prelude::{async_trait};
 use portfu::wrappers::sessions::Session;
 use serde::Deserialize;
 use std::env;
@@ -81,6 +81,10 @@ impl ServiceHandler for OAuthLoginHandler {
         );
         Ok(data)
     }
+
+    fn service_type(&self) -> ServiceType {
+        ServiceType::API
+    }
 }
 pub struct OAuthAuthHandler {
     config: Arc<OAuthConfig>,
@@ -94,10 +98,9 @@ impl ServiceHandler for OAuthAuthHandler {
         &self,
         mut data: portfu::prelude::ServiceData,
     ) -> Result<ServiceData, (ServiceData, Error)> {
-        let body: Option<AuthRequest> = match Body::from_request(&mut data.request, "").await {
-            Ok(v) => {
-                let json: Json<AuthRequest> = v.inner();
-                Some(json.inner())
+        let body: Option<AuthRequest> = match Json::from_request(&mut data.request, "").await {
+            Ok(json) => {
+                json.inner()
             }
             Err(_) => None,
         };
@@ -190,6 +193,10 @@ impl ServiceHandler for OAuthAuthHandler {
         session.write().await.data.insert(claims);
         redirect_to_url(data, self.config.on_success_redirect.as_str())
     }
+
+    fn service_type(&self) -> ServiceType {
+        ServiceType::API
+    }
 }
 
 #[derive(Default)]
@@ -201,6 +208,8 @@ pub struct OAuthLoginBuilder {
     pub token_url: Option<TokenUrl>,
     pub api_base_url: Option<String>,
     pub redirect_url: Option<RedirectUrl>,
+    pub on_success_redirect: Option<String>,
+    pub on_failure_redirect: Option<String>,
     pub allowed_organizations: Vec<u64>,
     pub allowed_users: Vec<u64>,
     pub admin_users: Vec<u64>,

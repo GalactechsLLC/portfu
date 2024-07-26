@@ -326,7 +326,7 @@ impl IncomingRequest {
             IncomingRequest::Sized(r) => r.method(),
             IncomingRequest::Stream(r) => r.method(),
             IncomingRequest::Consumed(r) => &r.method,
-            IncomingRequest::Empty => &Method::GET,
+            IncomingRequest::Empty => &Method::OPTIONS,
         }
     }
     pub fn size_hint(&self) -> SizeHint {
