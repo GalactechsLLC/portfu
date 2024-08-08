@@ -3,7 +3,7 @@ use std::mem::swap;
 pub struct CircularCache<K, V, const N: usize> {
     keys: [Option<K>; N],
     values: [Option<V>; N],
-    index: Option<usize>
+    index: Option<usize>,
 }
 impl<K: Eq + PartialEq, V, const N: usize> CircularCache<K, V, N> {
     const KEY_REPEAT_VALUE: Option<K> = None;
@@ -13,16 +13,31 @@ impl<K: Eq + PartialEq, V, const N: usize> CircularCache<K, V, N> {
         Self {
             keys: [Self::KEY_REPEAT_VALUE; N],
             values: [Self::VAL_REPEAT_VALUE; N],
-            index: None
+            index: None,
         }
     }
-    pub fn get(&self, key: &K) -> Option<&V> {
+    pub fn first(&self, key: &K) -> Option<&V> {
         for (i, k) in self.keys.iter().enumerate() {
             if k.as_ref() == Some(key) {
                 return self.values[i].as_ref();
             }
         }
         None
+    }
+    pub fn get(&self, key: &K) -> Vec<&Option<V>> {
+        let mut slices = vec![];
+        for (i, k) in self.keys.iter().enumerate() {
+            if k.as_ref() == Some(key) {
+                slices.push(&self.values[i])
+            }
+        }
+        slices
+    }
+    pub fn keys(&self) -> &[Option<K>] {
+        &self.keys
+    }
+    pub fn values(&self) -> &[Option<V>] {
+        &self.values
     }
     pub fn get_all(&self, key: &K) -> Vec<&Option<V>> {
         let mut slices = vec![];

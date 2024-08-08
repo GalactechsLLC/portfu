@@ -1,3 +1,4 @@
+pub mod cache;
 pub mod editable;
 pub mod files;
 pub mod filters;
@@ -10,7 +11,6 @@ pub mod sockets;
 mod ssl;
 pub mod task;
 pub mod wrappers;
-pub mod cache;
 
 use crate::editable::EditResult;
 use crate::server::Server;
