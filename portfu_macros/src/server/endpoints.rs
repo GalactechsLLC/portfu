@@ -369,6 +369,9 @@ impl ToTokens for Endpoint {
                         Err(e) => {
                             let err = format!("{e:?}");
                             let bytes: ::portfu::prelude::hyper::body::Bytes = err.into();
+                            if handle_data.response.status() == ::portfu::prelude::hyper::StatusCode::OK {
+                                *handle_data.response.status_mut() = ::portfu::prelude::http::StatusCode::INTERNAL_SERVER_ERROR;
+                            }
                             handle_data.response.set_body(
                                 ::portfu::pfcore::service::BodyType::Stream(
                                     bytes.stream_body()
