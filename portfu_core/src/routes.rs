@@ -49,11 +49,14 @@ impl Route {
             segments.push(PathSegment::Static(to_parse.to_string()));
             re.push_str(&escape(to_parse));
             re.push('$');
-        }
-        if segments.is_empty() {
-            Self::Static(Cow::Owned(input), Regex::new(re.as_str()).unwrap())
         } else {
-            Self::Segmented(segments, Regex::new(re.as_str()).unwrap())
+            re.push('$');
+        }
+        let regex_string = Regex::new(re.as_str()).unwrap();
+        if segments.is_empty() {
+            Self::Static(Cow::Owned(input), regex_string)
+        } else {
+            Self::Segmented(segments, regex_string)
         }
     }
     pub fn matches(&self, path: &str) -> bool {
