@@ -8,7 +8,7 @@ use portfu::prelude::async_trait::async_trait;
 use portfu::prelude::log::error;
 use portfu::prelude::once_cell::sync::Lazy;
 use portfu::prelude::uuid::Uuid;
-use portfu::prelude::ServiceData;
+use portfu::prelude::{ServiceData, State};
 use portfu::wrappers::sessions::Session;
 use serde::{Deserialize, Serialize};
 use std::env;
@@ -82,6 +82,9 @@ pub async fn basic_login<B: BasicAuth + Send + Sync + 'static>(
         .as_ref()
         .login(body.username, body.password)
         .await?;
+    if let Ok(session) = State::<Arc<RwLock<Session>>>::from_request(&mut data.request, "").await {
+        session.0.write().await.data.insert(claims.clone());
+    }
     return encode(
         &Header::default(),
         &claims,
@@ -105,6 +108,7 @@ pub static VALIDATIONS: Lazy<Validation> = Lazy::new(|| {
     val.set_required_spec_claims(&[
         "aud", "exp", "iat", "iat", "iss", "nbf", "sub", "eml", "rol", "org",
     ]);
+    val.validate_exp = false;
     val
 });
 
@@ -148,9 +152,7 @@ macro_rules! user_role_macro {
                                             let res =
                                                 (token_data.claims.rol >= UserRole::$object).into();
                                             session.write().await.data.insert(token_data.claims);
-                                            if res {
-                                                return WrapperResult::Continue;
-                                            }
+                                            return res;
                                         }
                                         Err(e) => {
                                             error!("Error Parsing JWT Token: {e:?}");

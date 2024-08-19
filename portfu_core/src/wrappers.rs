@@ -8,6 +8,16 @@ pub enum WrapperResult {
     Return,
 }
 
+impl From<bool> for WrapperResult {
+    fn from(value: bool) -> Self {
+        if value {
+            WrapperResult::Continue
+        } else {
+            WrapperResult::Return
+        }
+    }
+}
+
 #[async_trait]
 pub trait WrapperFn {
     fn name(&self) -> &str;
