@@ -78,10 +78,17 @@ pub async fn basic_login<B: BasicAuth + Send + Sync + 'static>(
             .map(|v| v.inner())?,
         Some(v) => v,
     };
-    let claims: Claims = basic_login
+    let claims: Claims = match basic_login
         .as_ref()
         .login(body.username, body.password)
-        .await?;
+        .await
+    {
+        Ok(claims) => claims,
+        Err(_) => {
+            *data.response.status_mut() = StatusCode::BAD_REQUEST;
+            return Err(Error::new(ErrorKind::InvalidInput, "Invalid Login"));
+        }
+    };
     if let Ok(session) = State::<Arc<RwLock<Session>>>::from_request(&mut data.request, "").await {
         session.0.write().await.data.insert(claims.clone());
     }
