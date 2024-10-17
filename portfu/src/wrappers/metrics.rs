@@ -24,7 +24,7 @@ struct TrackingStruct {
 pub static REGISTRY: Lazy<Registry> = Lazy::new(|| {
     let instance_id = Uuid::new_v4();
     Registry::new_custom(
-        Some(String::from("farm_gate")),
+        Some(String::from("portfu_metrics")),
         Some(std::collections::HashMap::from([(
             "instance".to_string(),
             instance_id.to_string(),
