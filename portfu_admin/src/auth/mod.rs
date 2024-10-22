@@ -92,7 +92,7 @@ pub async fn basic_login<B: BasicAuth + Send + Sync + 'static>(
     if let Ok(session) = State::<Arc<RwLock<Session>>>::from_request(&mut data.request, "").await {
         session.0.write().await.data.insert(claims.clone());
     }
-   encode(
+    encode(
         &Header::default(),
         &claims,
         &EncodingKey::from_secret(CURRENT_SECRET.as_bytes()),

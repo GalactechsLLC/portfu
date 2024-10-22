@@ -152,9 +152,12 @@ fn read_directory(root: &Path, path: &Path, file_map: &mut HashMap<String, Strin
 
 fn read_file(root: &'_ Path, starting_path: &'_ Path, file_map: &'_ mut HashMap<String, String>) {
     let mut new_root = PathBuf::from("/");
-    let path = starting_path.canonicalize().map_err(|e| {
-        panic!("An Error occurred when applying canonicalize to root path {root:?} - {e:?}");
-    }).unwrap();
+    let path = starting_path
+        .canonicalize()
+        .map_err(|e| {
+            panic!("An Error occurred when applying canonicalize to root path {root:?} - {e:?}");
+        })
+        .unwrap();
     let path = path.strip_prefix(root.canonicalize().map_err(|e| {
         panic!("An Error occurred when applying canonicalize to root path {root:?} - {e:?}");
     }).unwrap()).map_err(|e| {
