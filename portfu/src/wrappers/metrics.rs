@@ -39,9 +39,8 @@ static RESPONSE_TIMES: Lazy<Arc<HistogramVec>> = Lazy::new(|| {
             HistogramOpts::new("response_times_histogram", "Response Times"),
             &["method", "path", "status_code"],
         )
-        .map(|g: HistogramVec| {
+        .inspect(|g: &HistogramVec| {
             REGISTRY.register(Box::new(g.clone())).unwrap_or(());
-            g
         })
         .unwrap(),
     )
@@ -64,9 +63,8 @@ static REQUEST_SIZES: Lazy<Arc<HistogramVec>> = Lazy::new(|| {
             ]),
             &["method", "path", "status_code"],
         )
-        .map(|g: HistogramVec| {
+        .inspect(|g: &HistogramVec| {
             REGISTRY.register(Box::new(g.clone())).unwrap_or(());
-            g
         })
         .unwrap(),
     )
@@ -89,9 +87,8 @@ static RESPONSE_SIZES: Lazy<Arc<HistogramVec>> = Lazy::new(|| {
             ]),
             &["method", "path", "status_code"],
         )
-        .map(|g: HistogramVec| {
+        .inspect(|g: &HistogramVec| {
             REGISTRY.register(Box::new(g.clone())).unwrap_or(());
-            g
         })
         .unwrap(),
     )
