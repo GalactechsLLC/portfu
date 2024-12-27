@@ -1,3 +1,4 @@
+use std::env;
 use crate::filters::{Filter, FilterFn, FilterResult};
 use crate::service::{BodyType, IncomingRequest, Service, ServiceRequest, ServiceResponse};
 use crate::signal::await_termination;
@@ -19,6 +20,8 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use sha2::{Digest, Sha256, Sha256VarCore};
+use sha2::digest::Output;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
@@ -38,6 +41,7 @@ pub struct ServerConfig {
     pub host: String,
     pub port: u16,
     pub ssl_config: Option<SslConfig>,
+    pub client_ssl_config: Option<SslConfig>,
     pub keep_alive: bool,
     pub half_close: bool,
     pub preserve_header_case: bool,
@@ -49,12 +53,24 @@ impl Default for ServerConfig {
             host: "localhost".to_string(),
             port: 8080,
             ssl_config: None,
+            client_ssl_config: None,
             keep_alive: true,
             half_close: true,
             preserve_header_case: true,
             max_buf_size: 1024 * 1024 * 2, //2 Mib
         }
     }
+}
+
+#[derive(Copy, Clone, Hash, Eq, PartialEq, Debug)]
+pub struct PeerId(pub [u8; 32]);
+
+pub fn peer_hash(input: impl AsRef<[u8]>) -> PeerId {
+    let mut hasher = Sha256::new();
+    hasher.update(input);
+    let mut buf = [0u8; 32];
+    hasher.finalize_into(<&mut Output<Sha256VarCore>>::from(&mut buf));
+    PeerId(buf)
 }
 
 #[derive(Debug)]
@@ -76,13 +92,66 @@ impl Server {
         let socket_addr = Self::get_socket_addr(&server.config)?;
         info!("Server Starting Up on {socket_addr}");
         let listener = TcpListener::bind(socket_addr).await?;
-        let tls_acceptor = Arc::new(match server.config.ssl_config.as_ref() {
-            Some(_) => {
-                let certs = load_ssl_certs(&server.config)?;
-                Some(TlsAcceptor::from(certs))
-            }
-            None => None,
-        });
+        if server.config.ssl_config.is_none() &&
+            env::var("PRIVATE_CA_CRT").ok().is_none() &&
+            env::var("PRIVATE_CA_KEY").ok().is_none() &&
+            env::var("SSL_CERTS").ok().is_none() &&
+            env::var("SSL_PRIVATE_KEY").ok().is_none() &&
+            env::var("SSL_ROOT_CERTS").ok().is_none() {
+            env::set_var("PRIVATE_CA_CRT",
+            r#"-----BEGIN CERTIFICATE-----
+MIIDKTCCAhGgAwIBAgIUEwvVHT/nnEbmFRRPvEhTbO0FwwswDQYJKoZIhvcNAQEL
+BQAwRDENMAsGA1UECgwEQ2hpYTEQMA4GA1UEAwwHQ2hpYSBDQTEhMB8GA1UECwwY
+T3JnYW5pYyBGYXJtaW5nIERpdmlzaW9uMB4XDTIzMTIxNzAxNTY1MloXDTMzMTIx
+NDAxNTY1MlowRDENMAsGA1UECgwEQ2hpYTEQMA4GA1UEAwwHQ2hpYSBDQTEhMB8G
+A1UECwwYT3JnYW5pYyBGYXJtaW5nIERpdmlzaW9uMIIBIjANBgkqhkiG9w0BAQEF
+AAOCAQ8AMIIBCgKCAQEAmSVb4oXGe9HIenJKmy7XcSBJlISestNI8pXz5PJ+wjjb
+GIGgsHFQPNir7eGlqymqKue7Zln1oUfIUbZqq+k/492VRz5MlxiwLLl6MVEHu4zh
+MfkIW1AgXlI2hSnLh7uoELscWMWmMTxuUGsjIUtF3Xgk/rm+Sv7Ki2xHA8DYOD9S
+3Dgj0X/KWrUfjTw6OK+BzasT3Kca+5+nJ3HSmwDKm0+AK/AxzAbseedjyKtkmtOE
+1fPcjeRL1CtGwj6mn+Y1tZeljJKuhQCEZVEDrQZC3N5T83ApSv4l/Yx/F/k04PL0
+akZeJ1CbGXdtVlali82CKHoK5NGieYkMy9Kbh2zL2wIDAQABoxMwETAPBgNVHRMB
+Af8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQAwSVQhg7trxxZcABrp8m4xcCni
+288eRvLO7XibqFrPqomus6xA2quk0P47CBqzd9gxLAoaPVrvQy1Hz2H0h9C4PId/
+aOroKc5SqynpSYWCdxZ6RqsfJHpoHOE9khsmr2U1yVaKFHwGi7TGmK9srmPx4xFt
+7skUli/gpek9oc4lEtWxxmxTMeby/D5XrvMkZRDLYEGzaXwblou6UT3k7Dnf9It/
+iaR8PmpJLvZMWwteka4DKLS6ZFkmPm7L2mFDMsqgKCsKRgI51cSaUlLIbqt1l1xP
+pGjvrkvR+RYVFLDXRNMRftK61665vMyddmKw2xWxbTFssprp4f2yuxjbBE2M
+-----END CERTIFICATE-----
+"#);
+        }
+        env::set_var("PRIVATE_CA_KEY",
+r#"-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCZJVvihcZ70ch6
+ckqbLtdxIEmUhJ6y00jylfPk8n7CONsYgaCwcVA82Kvt4aWrKaoq57tmWfWhR8hR
+tmqr6T/j3ZVHPkyXGLAsuXoxUQe7jOEx+QhbUCBeUjaFKcuHu6gQuxxYxaYxPG5Q
+ayMhS0XdeCT+ub5K/sqLbEcDwNg4P1LcOCPRf8patR+NPDo4r4HNqxPcpxr7n6cn
+cdKbAMqbT4Ar8DHMBux552PIq2Sa04TV89yN5EvUK0bCPqaf5jW1l6WMkq6FAIRl
+UQOtBkLc3lPzcClK/iX9jH8X+TTg8vRqRl4nUJsZd21WVqWLzYIoegrk0aJ5iQzL
+0puHbMvbAgMBAAECggEAQSfKVHEa1XIWy7WVdTl0Ep6sf2H/DNDkf8T5e4YKFQLQ
+gDgiT/8dpo1+dFokvFIhIljt+2k5nlDmcpFcB+DYPE95I9LnDf/EcHrG+HVjh1E0
+PCkZ+5N2+fobVQNHoutdYSTiNgh9IQR3YIJ8cz1Nr6BeiPsocUq+jJvYCMpCk4cA
+j6LiipytZSyDm4azDOHaHMekCZmZvNGzXuIkQWZvpm2pW3Tdw1IUCX5wpp4gUfxT
+DvBTekhBP97suEOaUp9lI6BInbl18fIeaRqakQC+nOlhfNmVI1FCqYKfoUvKbUCB
+xqaC7z2oVNOKtsopm5NGLhBK4NGrR89kX01ORHxOiQKBgQDT9138mGald/fp2NZN
+95OOMKiA9AAc+0aBxOt4udrlhyBfVC0gFzBfHAsB4oksk4nLT5kJf1SIEEjDAqQQ
+hMgVuPqUHrE/2Dn+vcG8SlV2HyeVVE+hGGf5UKCYdDz8/AhFmjPzVIBz6sdN+45U
+yTBb66UK1Fl4d1JEAbnJkfydIwKBgQC49docOnWrYEI3ywcF+tXz6Rbbct9KExCn
+FJH0gLktdifi2oYGUwjrAvOa+9OlJx5Xnd+8JfjTt3hROxFNBk0tWZ8nlXX59kRt
+gWR8yJGrUcOFfQD5yA0ke7KMUYVvgDmenFwXsDUly89pirEsuvLQXsVykHr9tWoq
+kcWou00N6QKBgH5le74sgskZCNSBYQmNIIghq9l5prehfyHS8zdCXK2SLlOqNl50
+dXvBlS7Cj1ntgLWj+XYYX6fjTgA7iunuxAFwFLxOsROJNMwbC3PkP6H4YfpCFFnT
+2+xnj9xZNCUHhUc79M6dDRwSXFa8MtuMPTITCo+yoMedH4k+HjN8wk5RAoGBALfV
+lA2OhTnqmKY/oyFsaI7fU5qWGBzVyi1mopL0BhmLYKV3MNLEYQ7Ehj+6oGd79Ap9
+ncyxqRk1N9706IM4CilS9H8xbGsfPG/itW/ZIf+3arAYyIl7LqTeVV5mAEwMlDhz
+jIz21DxW0DZEZUjiH0i/iVwPAk98qqLY9C56y2FRAoGBAKpFCGYywAIzIbhR45n0
+RY+ru6DG+VCiCl+RnjLx4Hlvvaw9LE3JyhhgwORe+Y5eMSFFamaCx6L/+qjROWIe
+quApe6+W+Ota++RRKHdOVw7Czyom1Kw68Vr7AH4z8tSdFxAkJ6L2ULMrSkJm1rdW
+z6/dmI43PN2//g+0cGs8BL2v
+-----END PRIVATE KEY-----
+"#);
+        let certs = load_ssl_certs(&server.config)?;
+        let tls_acceptor = Arc::new(Some(TlsAcceptor::from(certs)));
         let mut http = Builder::new();
         http.half_close(server.config.half_close);
         http.keep_alive(server.config.keep_alive);
@@ -113,13 +182,20 @@ impl Server {
                             let tls_acceptor = tls_acceptor.clone();
                             let http = http.clone();
                             spawn(async move {
-                                let service = service_fn(move |req| {
-                                    let server = server.clone();
-                                    Self::connection_handler(server, req, address)
-                                });
                                 if let Some(acceptor) = tls_acceptor.as_ref() {
                                     match acceptor.accept(stream).await {
                                         Ok(stream) => {
+                                            let mut peer_id = None;
+                                            if let Some(certs) = stream.get_ref().1.peer_certificates() {
+                                                if !certs.is_empty() {
+                                                    peer_id = Some(peer_hash(&certs[0].to_vec()));
+                                                }
+                                            }
+                                            let service = service_fn(move |req| {
+                                                let peer_id = Arc::new(peer_id);
+                                                let server = server.clone();
+                                                Self::connection_handler(server, req, address, peer_id)
+                                            });
                                             let connection = http.serve_connection(TokioIo::new(stream), service).with_upgrades();
                                             if let Err(err) = connection.await {
                                                 error!("Error serving tls connection: {:?}", err);
@@ -130,6 +206,10 @@ impl Server {
                                         }
                                     }
                                 } else {
+                                    let service = service_fn(move |req| {
+                                        let server = server.clone();
+                                        Self::connection_handler(server, req, address, Arc::new(None))
+                                    });
                                     let connection = http.serve_connection(TokioIo::new(stream), service).with_upgrades();
                                     if let Err(err) = connection.await {
                                         error!("Error serving connection: {:?}", err);
@@ -172,8 +252,10 @@ impl Server {
         server: Arc<Self>,
         mut request: Request<Incoming>,
         address: SocketAddr,
+        peer_id: Arc<Option<PeerId>>
     ) -> Result<Response<StreamingBody>, Error> {
         request.extensions_mut().insert(address);
+        request.extensions_mut().insert(peer_id);
         request.extensions_mut().insert(server.shared_state.clone()); //Put the Server Shared State in the Request Extensions
         let mut response: ServiceResponse = ServiceResponse::new();
         let handle = if !server.filters.is_empty() {
@@ -307,8 +389,9 @@ impl ServerBuilder {
         service.register(&mut s.services, s.shared_state.clone());
         s
     }
-    pub fn default_service(self, service: Service) -> Self {
+    pub fn default_service(self, mut service: Service) -> Self {
         let mut s = self;
+        service.shared_state.extend(s.shared_state.clone());
         s.services.default_service = Some(Arc::new(service));
         s
     }

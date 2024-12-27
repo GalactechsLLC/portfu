@@ -148,7 +148,7 @@ pub struct MetricsWrapper {}
 #[async_trait]
 impl WrapperFn for MetricsWrapper {
     fn name(&self) -> &str {
-        "SessionWrapper"
+        "MetricsWrapper"
     }
 
     async fn before(&self, data: &mut ServiceData) -> WrapperResult {

@@ -367,16 +367,16 @@ impl ToTokens for Endpoint {
                             );
                         }
                         Err(e) => {
-                            let err = format!("{e:?}");
-                            let bytes: ::portfu::prelude::hyper::body::Bytes = err.into();
                             if handle_data.response.status() == ::portfu::prelude::hyper::StatusCode::OK {
                                 *handle_data.response.status_mut() = ::portfu::prelude::http::StatusCode::INTERNAL_SERVER_ERROR;
                             }
+                            let err = format!("{e:?}");;
+                            let bytes: ::portfu::prelude::hyper::body::Bytes = err.into();
                             handle_data.response.set_body(
                                 ::portfu::pfcore::service::BodyType::Stream(
                                     bytes.stream_body()
                                 )
-                            );
+                            )
                         }
                     }
                 }
@@ -431,16 +431,32 @@ impl ToTokens for Endpoint {
                             Ok(handle_data)
                         }
                         Err(e) => {
-                            let err = format!("{e:?}");
-                            let bytes: ::portfu::prelude::hyper::body::Bytes = err.into();
                             if handle_data.response.status() == ::portfu::prelude::hyper::StatusCode::OK {
                                 *handle_data.response.status_mut() = ::portfu::prelude::http::StatusCode::INTERNAL_SERVER_ERROR;
                             }
-                            handle_data.response.set_body(
-                                ::portfu::pfcore::service::BodyType::Stream(
-                                    bytes.stream_body()
-                                )
-                            );
+                            match ::portfu::prelude::serde_json::to_vec(&e) {
+                                Ok(v) => {
+                                    handle_data.response.headers_mut().insert(
+                                        ::portfu::prelude::hyper::header::CONTENT_TYPE,
+                                        ::portfu::prelude::hyper::header::HeaderValue::from_static("application/json")
+                                    );
+                                    let bytes: ::portfu::prelude::hyper::body::Bytes = v.into();
+                                    handle_data.response.set_body(
+                                        ::portfu::pfcore::service::BodyType::Stream(
+                                            bytes.stream_body()
+                                        )
+                                    )
+                                }
+                                Err(_) => {
+                                    let err = format!("{e:?}");;
+                                    let bytes: ::portfu::prelude::hyper::body::Bytes = err.into();
+                                    handle_data.response.set_body(
+                                        ::portfu::pfcore::service::BodyType::Stream(
+                                            bytes.stream_body()
+                                        )
+                                    )
+                                }
+                            }
                             Ok(handle_data)
                         }
                     }

@@ -444,7 +444,7 @@ impl<T: for<'a> Deserialize<'a>> Query<T> {
     }
 }
 #[async_trait::async_trait]
-impl<'r, T: for<'a> Deserialize<'a>> FromRequest<'r> for Query<T> {
+impl<'r, T: for<'a> Deserialize<'a>> FromRequest<'r> for Query<Option<T>> {
     async fn from_request(request: &'r mut ServiceRequest, _: &'r str) -> Result<Self, Error> {
         if let Some(query) = request.request.uri().query() {
             serde_urlencoded::from_str(query)
@@ -454,12 +454,10 @@ impl<'r, T: for<'a> Deserialize<'a>> FromRequest<'r> for Query<T> {
                         format!("Failed to parse query string: {e:?}"),
                     )
                 })
+                .map(Some)
                 .map(Query)
         } else {
-            Err(Error::new(
-                ErrorKind::InvalidInput,
-                "No Query String Provided",
-            ))
+            Ok(Query(None))
         }
     }
 }

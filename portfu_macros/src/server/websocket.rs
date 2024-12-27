@@ -96,16 +96,20 @@ impl ToTokens for WebSocketRoute {
                         panic!("Body Not Supported for Websocket");
                     } else if state_ident == segment.ident {
                         dyn_vars.push(quote! {
-                            let #ident_val: #ident_type = match ::portfu::prelude::State::extract(&mut request).await {
-                                Some(v) => v,
-                                None => {
-                                    *response.status_mut() = ::portfu::prelude::http::StatusCode::INTERNAL_SERVER_ERROR;
-                                    let bytes =::portfu::prelude::hyper::body::Bytes::from(format!("Failed to find {}", stringify!(#ident_type).replace(' ',"")));
-                                    handle_data.response.set_body(::portfu::pfcore::service::BodyType::Stream(bytes.stream_body()));
-                                    return Err(ServiceResponse {
-                                        request,
-                                        response
-                                    });
+                            let #ident_val: #ident_type = match ::portfu::pfcore::FromRequest::from_request(&mut handle_data.request, stringify!(#ident_val)).await {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    *handle_data.response.status_mut() = ::portfu::prelude::http::StatusCode::INTERNAL_SERVER_ERROR;
+                                    handle_data.response.set_body(
+                                        ::portfu::pfcore::service::BodyType::Stream(
+                                            ::portfu::prelude::hyper::body::Bytes::from(
+                                                format!("Failed to extract {} as {}, {e:?}",
+                                                    stringify!(#ident_val), stringify!(#ident_type).replace(' ',"")
+                                                )
+                                            ).stream_body()
+                                        )
+                                    );
+                                    return Ok(handle_data);
                                 }
                             };
                         });
@@ -121,27 +125,19 @@ impl ToTokens for WebSocketRoute {
                     }
                 }
             }
-            let function_name = &ast.sig.ident;
-            additional_function_vars.push(quote! {
-                match request.get() {
-                    Some(v) => v,
-                    None => {
-                        *response.status_mut() = ::portfu::prelude::http::StatusCode::INTERNAL_SERVER_ERROR;
-                        let bytes =::portfu::prelude::hyper::body::Bytes::from(format!("Failed to find {} for {}", stringify!(#ident_type).replace(' ',""), stringify!(#function_name)));
-                        handle_data.response.set_body(::portfu::pfcore::service::BodyType::Stream(bytes.stream_body()));
-                        return Err(ServiceResponse {
-                            request,
-                            response
-                        });
-                    }
-                },
-            });
         }
         let stream = quote! {
             #(#doc_attributes)*
             #[allow(non_camel_case_types, missing_docs)]
             pub struct #name {
-                peers: ::portfu::prelude::Peers
+                pub peers: ::portfu::prelude::Peers
+            }
+            impl Default for #name {
+                fn default() -> Self {
+                    Self {
+                        peers: Default::default()
+                    }
+                }
             }
             impl ::portfu::pfcore::ServiceRegister for #name {
                 fn register(self, service_registry: &mut portfu::prelude::ServiceRegistry, _shared_state: portfu::prelude::http::Extensions) {
@@ -169,6 +165,9 @@ impl ToTokens for WebSocketRoute {
                 fn name(&self) -> &str {
                     stringify!(#name)
                 }
+                fn service_type(&self) -> ::portfu::pfcore::ServiceType {
+                    ::portfu::pfcore::ServiceType::API
+                }
                 async fn handle(
                     &self,
                     mut handle_data: ::portfu::prelude::ServiceData
@@ -188,7 +187,7 @@ impl ToTokens for WebSocketRoute {
                         };
                         let peers = self.peers.clone();
                         ::tokio::spawn( async move {
-                            select! {
+                            ::tokio::select! {
                                 _ = async {
                                     let websocket = match websocket.await {
                                         Ok(ws) => ::portfu::prelude::tokio_tungstenite::WebSocketStream::from_raw_socket(
@@ -223,8 +222,8 @@ impl ToTokens for WebSocketRoute {
                         log::trace!("Sending Upgrade Response");
                         let (parts, body) = response.into_parts();
                         handle_data.response.set_response(
-                            ::portfu::pfcore::service::OutgoingReponse::Stream(
-                                Response::from_parts(parts, body.stream_body())
+                            ::portfu::pfcore::service::OutgoingResponse::Stream(
+                                ::portfu::prelude::http::response::Response::from_parts(parts, body.stream_body())
                             )
                         );
                         Ok::<::portfu::prelude::ServiceData, (::portfu::prelude::ServiceData, ::std::io::Error)>(handle_data)
