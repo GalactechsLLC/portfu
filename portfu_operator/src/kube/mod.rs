@@ -3,7 +3,7 @@ use k8s_openapi::api::apps::v1::{
 };
 use k8s_openapi::api::core::v1::{
     ConfigMap, Namespace, PersistentVolumeClaim, PersistentVolumeClaimSpec, Pod,
-    ResourceRequirements, Service, ServicePort, ServiceSpec, Volume,
+    ResourceRequirements, Service, ServicePort, ServiceSpec,
 };
 use k8s_openapi::api::networking::v1::{
     HTTPIngressPath, HTTPIngressRuleValue, Ingress, IngressBackend, IngressRule,
@@ -24,9 +24,10 @@ use std::io::{Error, ErrorKind};
 use std::ops::Deref;
 
 pub const DEFAULT_NAMESPACE: &str = "portfu-infrastructure";
+#[allow(unused)]
 pub const DEFAULT_CONFIG_PREFIX: &str = "portfu-config-";
+#[allow(unused)]
 pub const DEFAULT_POD_PREFIX: &str = "portfu-";
-pub const DEFAULT_POD_IMAGE: &str = "";
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct SearchParams {
     pub label_selector: Option<String>,
@@ -103,6 +104,7 @@ pub struct RuntimeConfig {
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RuntimeConfigMap(ConfigMap);
+#[allow(unused)]
 impl RuntimeConfigMap {
     pub fn name(&self) -> Option<&str> {
         self.0.metadata.name.as_deref()
@@ -156,6 +158,7 @@ impl Deref for RuntimeConfigMap {
     }
 }
 
+#[allow(unused)]
 pub async fn find_configs(
     client: Client,
     namespace: Option<String>,
@@ -180,6 +183,7 @@ pub async fn find_configs(
     Ok(configs)
 }
 
+#[allow(unused)]
 pub async fn save_config(
     client: Client,
     namespace: Option<String>,
@@ -205,6 +209,7 @@ pub async fn save_config(
     }
 }
 
+#[allow(unused)]
 pub async fn create_namespace(
     client: Client,
     namespace: Option<String>,
@@ -238,6 +243,7 @@ pub async fn create_namespace(
         .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))
 }
 
+#[allow(unused)]
 pub async fn create_persistent_volume_claim(
     client: Client,
     namespace: Option<String>,
@@ -283,6 +289,7 @@ pub async fn create_persistent_volume_claim(
         .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))
 }
 
+#[allow(unused)]
 pub async fn create_service(
     client: Client,
     namespace: Option<String>,
@@ -329,6 +336,7 @@ pub async fn create_service(
         .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))
 }
 
+#[allow(unused)]
 pub async fn create_ingress(
     client: Client,
     namespace: Option<String>,
@@ -421,6 +429,7 @@ pub async fn create_ingress(
         .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))
 }
 
+#[allow(unused)]
 pub async fn has_persistent_volume_claim(
     client: Client,
     namespace: Option<String>,
@@ -433,6 +442,7 @@ pub async fn has_persistent_volume_claim(
         .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))
 }
 
+#[allow(unused)]
 pub async fn has_service(
     client: Client,
     namespace: Option<String>,
@@ -445,6 +455,7 @@ pub async fn has_service(
         .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))
 }
 
+#[allow(unused)]
 pub async fn has_running_pod(
     client: Client,
     namespace: Option<String>,
@@ -459,6 +470,7 @@ pub async fn has_running_pod(
     Ok(pod)
 }
 
+#[allow(unused)]
 pub async fn has_deployment(
     client: Client,
     namespace: Option<String>,
@@ -473,6 +485,7 @@ pub async fn has_deployment(
     Ok(deployment)
 }
 
+#[allow(unused)]
 pub async fn has_ingress(
     client: Client,
     namespace: Option<String>,
@@ -487,6 +500,7 @@ pub async fn has_ingress(
     Ok(ingress)
 }
 
+#[allow(unused)]
 pub async fn create_deployment(
     client: Client,
     namespace: Option<String>,
@@ -538,14 +552,14 @@ pub async fn create_deployment(
             .await
             .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?;
         //Create the Services
-        let services =
+        let _services =
             if let Some(i) = has_service(client.clone(), namespace.clone(), &config).await? {
                 i
             } else {
                 create_service(client.clone(), namespace.clone(), &config).await?
             };
         //Create the Ingress
-        let ingress =
+        let _ingress =
             if let Some(i) = has_ingress(client.clone(), namespace.clone(), &config).await? {
                 i
             } else {
