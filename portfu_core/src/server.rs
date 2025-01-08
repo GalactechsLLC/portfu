@@ -273,20 +273,18 @@ pub struct ServerBuilder {
     wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
 }
 pub struct SharedState<T> {
-    inner: Arc<T>
+    inner: Arc<T>,
 }
 impl<T> From<T> for SharedState<T> {
     fn from(value: T) -> Self {
         SharedState {
-            inner: Arc::new(value)
+            inner: Arc::new(value),
         }
     }
 }
 impl<T> From<Arc<T>> for SharedState<T> {
     fn from(inner: Arc<T>) -> Self {
-        SharedState {
-            inner
-        }
+        SharedState { inner }
     }
 }
 impl ServerBuilder {
@@ -347,7 +345,10 @@ impl ServerBuilder {
         self.run_handle = run_handle;
         self
     }
-    pub fn shared_state<T: Send + Sync + 'static>(self, shared_state: impl Into<SharedState<T>>) -> Self {
+    pub fn shared_state<T: Send + Sync + 'static>(
+        self,
+        shared_state: impl Into<SharedState<T>>,
+    ) -> Self {
         let mut s = self;
         let state: SharedState<T> = shared_state.into();
         s.shared_state.insert(state.inner);

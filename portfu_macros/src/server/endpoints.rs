@@ -281,7 +281,7 @@ impl ToTokens for Endpoint {
                                 let #ident_val: #ident_type = match handle_data.request.get()
                                     .cloned()
                                     .map(|data| ::portfu::pfcore::State(data)).ok_or(
-                                        ::std::io::Error::new(::std::io::ErrorKind::NotFound, format!("Failed to find State"))
+                                        ::std::io::Error::new(::std::io::ErrorKind::NotFound, format!("Failed to find State of type {}", stringify!(#ident_type)))
                                     ) {
                                     Ok(v) => v,
                                     Err(e) => {
