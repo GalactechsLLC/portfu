@@ -276,11 +276,23 @@ impl<'a, T: Send + Sync + 'static> FromRequest<'a> for State<T> {
         request
             .request
             .extensions()
-            .ok_or(Error::new(ErrorKind::NotFound, "Failed to find State"))?
+            .ok_or(Error::new(
+                ErrorKind::NotFound,
+                format!(
+                    "Failed to find State of type {}",
+                    std::any::type_name::<T>()
+                ),
+            ))?
             .get::<Arc<T>>()
             .cloned()
             .map(State)
-            .ok_or(Error::new(ErrorKind::NotFound, "Failed to find State"))
+            .ok_or(Error::new(
+                ErrorKind::NotFound,
+                format!(
+                    "Failed to find State of type {}",
+                    std::any::type_name::<T>()
+                ),
+            ))
     }
 }
 
