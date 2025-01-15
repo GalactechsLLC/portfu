@@ -38,10 +38,12 @@ portfu_runtime_lib = {path = "./portfu_runtime", version = "1.2.0", default-feat
 prometheus = "0.13.4"
 proc-macro2 = "1.0.84"
 quote = "1.0.36"
+rand = "0.8.5"
 regex = "1.10.4"
 reqwest = {version="0.12.4", default-features = false, features = ["rustls-tls", "json", "stream"] }
 rustls = { version= "0.23.8" }
 rustls-pemfile = "2.1.2"
+rsa = { version = "0.9.6", features = ["std", "pem", "sha2"] }
 serde = { version = "1.0.203", features = ["derive"] }
 serde_html_form = "0.2.7"
 serde_json = "1.0.117"
@@ -56,5 +58,5 @@ tokio-tungstenite = {version = "0.21.0", features = ["rustls-tls-webpki-roots", 
 tokio-util = "0.7.11"
 url = "2.5.0"
 uuid = {version = "1.8.0", features = ["v4", "serde"]}
-x509-cert = "0.2.5"
+x509-cert = { version = "0.2.5", features = ["std", "pem", "builder"] }
 webpki-roots = "0.26.1"
