@@ -399,7 +399,7 @@ impl ToTokens for Endpoint {
         };
         let err_output_statement = match eoutput {
             OutputType::Json => {
-                quote!{
+                quote! {
                     match ::portfu::prelude::serde_json::to_vec(&e) {
                         Ok(v) => {
                             handle_data.response.headers_mut().insert(
@@ -545,9 +545,9 @@ impl Args {
             } else if nv.path.is_ident("eoutput") {
                 e_output_set = true;
                 if let syn::Expr::Lit(syn::ExprLit {
-                      lit: syn::Lit::Str(lit),
-                      ..
-                  }) = nv.value
+                    lit: syn::Lit::Str(lit),
+                    ..
+                }) = nv.value
                 {
                     eoutput = OutputType::try_from(&lit)?;
                 } else {
