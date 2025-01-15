@@ -2,7 +2,7 @@ use crate::parse_path_variables;
 use crate::server::endpoints::EndpointArgs;
 use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{quote, ToTokens};
-use syn::{parse_quote, FnArg, LitStr, Pat, Path, Type};
+use syn::{parse_quote, FnArg, GenericArgument, LitStr, Pat, Path, PathArguments, Type};
 
 pub struct WebSocketRoute {
     /// Name of the handler function being annotated.
@@ -95,27 +95,33 @@ impl ToTokens for WebSocketRoute {
                     if body_ident == segment.ident {
                         panic!("Body Not Supported for Websocket");
                     } else if state_ident == segment.ident {
-                        dyn_vars.push(quote! {
-                            let #ident_val: #ident_type = match ::portfu::pfcore::FromRequest::from_request(&mut handle_data.request, stringify!(#ident_val)).await {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    *handle_data.response.status_mut() = ::portfu::prelude::http::StatusCode::INTERNAL_SERVER_ERROR;
-                                    handle_data.response.set_body(
-                                        ::portfu::pfcore::service::BodyType::Stream(
-                                            ::portfu::prelude::hyper::body::Bytes::from(
-                                                format!("Failed to extract {} as {}, {e:?}",
-                                                    stringify!(#ident_val), stringify!(#ident_type).replace(' ',"")
-                                                )
-                                            ).stream_body()
-                                        )
-                                    );
-                                    return Ok(handle_data);
+                        if let Some(_inner_type) = match &segment.arguments {
+                            PathArguments::None => panic!("State Inner Object Cannot be None"),
+                            PathArguments::AngleBracketed(args) => {
+                                if let Some(GenericArgument::Type(ty)) = args.args.first() {
+                                    Some(ty)
+                                } else {
+                                    continue;
                                 }
-                            };
-                        });
-                        additional_function_vars.push(quote! {
-                            #ident_val,
-                        });
+                            }
+                            PathArguments::Parenthesized(args) => args.inputs.first(),
+                        } {
+                            dyn_vars.push(quote! {
+                                let #ident_val: #ident_type = match handle_data.request.get()
+                                    .cloned()
+                                    .map(|data| ::portfu::pfcore::State(data)).ok_or(
+                                        ::std::io::Error::new(::std::io::ErrorKind::NotFound, format!("Failed to find State"))
+                                    ) {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        return Err((handle_data, e));
+                                    }
+                                };
+                            });
+                            additional_function_vars.push(quote! {
+                                #ident_val,
+                            });
+                        }
                         continue;
                     } else if ws_ident == segment.ident {
                         additional_function_vars.push(quote! {
@@ -125,6 +131,27 @@ impl ToTokens for WebSocketRoute {
                     }
                 }
             }
+            dyn_vars.push(quote! {
+                let #ident_val: #ident_type = match ::portfu::pfcore::FromRequest::from_request(&mut handle_data.request, stringify!(#ident_val)).await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        *handle_data.response.status_mut() = ::portfu::prelude::http::StatusCode::INTERNAL_SERVER_ERROR;
+                        handle_data.response.set_body(
+                            ::portfu::pfcore::service::BodyType::Stream(
+                                ::portfu::prelude::hyper::body::Bytes::from(
+                                    format!("Failed to extract {} as {}, {e:?}",
+                                        stringify!(#ident_val), stringify!(#ident_type).replace(' ',"")
+                                    )
+                                ).stream_body()
+                            )
+                        );
+                        return Ok(handle_data);
+                    }
+                };
+            });
+            additional_function_vars.push(quote! {
+                #ident_val,
+            });
         }
         let stream = quote! {
             #(#doc_attributes)*
@@ -140,9 +167,10 @@ impl ToTokens for WebSocketRoute {
                 }
             }
             impl ::portfu::pfcore::ServiceRegister for #name {
-                fn register(self, service_registry: &mut portfu::prelude::ServiceRegistry, _shared_state: portfu::prelude::http::Extensions) {
+                fn register(self, service_registry: &mut portfu::prelude::ServiceRegistry, shared_state: portfu::prelude::http::Extensions) {
                     let __resource = ::portfu::pfcore::service::ServiceBuilder::new(#path)
                         .name(#resource_name)
+                        .extend_state(shared_state.clone())
                         .filter(::portfu::filters::method::GET.clone())
                         #(.filter(::portfu::pfcore::filters::fn_guard(#filters)))*
                         #(.wrap(#wrappers))*

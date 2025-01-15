@@ -1,4 +1,3 @@
-use std::env;
 use crate::filters::{Filter, FilterFn, FilterResult};
 use crate::service::{BodyType, IncomingRequest, Service, ServiceRequest, ServiceResponse};
 use crate::signal::await_termination;
@@ -14,14 +13,15 @@ use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
 use log::{error, info};
 use serde::{Deserialize, Serialize};
+use sha2::digest::Output;
+use sha2::{Digest, Sha256, Sha256VarCore};
+use std::env;
 use std::io::{Error, ErrorKind};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use sha2::{Digest, Sha256, Sha256VarCore};
-use sha2::digest::Output;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
@@ -92,14 +92,16 @@ impl Server {
         let socket_addr = Self::get_socket_addr(&server.config)?;
         info!("Server Starting Up on {socket_addr}");
         let listener = TcpListener::bind(socket_addr).await?;
-        if server.config.ssl_config.is_none() &&
-            env::var("PRIVATE_CA_CRT").ok().is_none() &&
-            env::var("PRIVATE_CA_KEY").ok().is_none() &&
-            env::var("SSL_CERTS").ok().is_none() &&
-            env::var("SSL_PRIVATE_KEY").ok().is_none() &&
-            env::var("SSL_ROOT_CERTS").ok().is_none() {
-            env::set_var("PRIVATE_CA_CRT",
-            r#"-----BEGIN CERTIFICATE-----
+        if server.config.ssl_config.is_none()
+            && env::var("PRIVATE_CA_CRT").ok().is_none()
+            && env::var("PRIVATE_CA_KEY").ok().is_none()
+            && env::var("SSL_CERTS").ok().is_none()
+            && env::var("SSL_PRIVATE_KEY").ok().is_none()
+            && env::var("SSL_ROOT_CERTS").ok().is_none()
+        {
+            env::set_var(
+                "PRIVATE_CA_CRT",
+                r#"-----BEGIN CERTIFICATE-----
 MIIDKTCCAhGgAwIBAgIUEwvVHT/nnEbmFRRPvEhTbO0FwwswDQYJKoZIhvcNAQEL
 BQAwRDENMAsGA1UECgwEQ2hpYTEQMA4GA1UEAwwHQ2hpYSBDQTEhMB8GA1UECwwY
 T3JnYW5pYyBGYXJtaW5nIERpdmlzaW9uMB4XDTIzMTIxNzAxNTY1MloXDTMzMTIx
@@ -118,10 +120,12 @@ aOroKc5SqynpSYWCdxZ6RqsfJHpoHOE9khsmr2U1yVaKFHwGi7TGmK9srmPx4xFt
 iaR8PmpJLvZMWwteka4DKLS6ZFkmPm7L2mFDMsqgKCsKRgI51cSaUlLIbqt1l1xP
 pGjvrkvR+RYVFLDXRNMRftK61665vMyddmKw2xWxbTFssprp4f2yuxjbBE2M
 -----END CERTIFICATE-----
-"#);
+"#,
+            );
         }
-        env::set_var("PRIVATE_CA_KEY",
-r#"-----BEGIN PRIVATE KEY-----
+        env::set_var(
+            "PRIVATE_CA_KEY",
+            r#"-----BEGIN PRIVATE KEY-----
 MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCZJVvihcZ70ch6
 ckqbLtdxIEmUhJ6y00jylfPk8n7CONsYgaCwcVA82Kvt4aWrKaoq57tmWfWhR8hR
 tmqr6T/j3ZVHPkyXGLAsuXoxUQe7jOEx+QhbUCBeUjaFKcuHu6gQuxxYxaYxPG5Q
@@ -149,7 +153,8 @@ RY+ru6DG+VCiCl+RnjLx4Hlvvaw9LE3JyhhgwORe+Y5eMSFFamaCx6L/+qjROWIe
 quApe6+W+Ota++RRKHdOVw7Czyom1Kw68Vr7AH4z8tSdFxAkJ6L2ULMrSkJm1rdW
 z6/dmI43PN2//g+0cGs8BL2v
 -----END PRIVATE KEY-----
-"#);
+"#,
+        );
         let certs = load_ssl_certs(&server.config)?;
         let tls_acceptor = Arc::new(Some(TlsAcceptor::from(certs)));
         let mut http = Builder::new();
@@ -188,7 +193,7 @@ z6/dmI43PN2//g+0cGs8BL2v
                                             let mut peer_id = None;
                                             if let Some(certs) = stream.get_ref().1.peer_certificates() {
                                                 if !certs.is_empty() {
-                                                    peer_id = Some(peer_hash(&certs[0].to_vec()));
+                                                    peer_id = Some(peer_hash(&certs[0]));
                                                 }
                                             }
                                             let service = service_fn(move |req| {
@@ -252,7 +257,7 @@ z6/dmI43PN2//g+0cGs8BL2v
         server: Arc<Self>,
         mut request: Request<Incoming>,
         address: SocketAddr,
-        peer_id: Arc<Option<PeerId>>
+        peer_id: Arc<Option<PeerId>>,
     ) -> Result<Response<StreamingBody>, Error> {
         request.extensions_mut().insert(address);
         request.extensions_mut().insert(peer_id);
@@ -355,20 +360,18 @@ pub struct ServerBuilder {
     wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
 }
 pub struct SharedState<T> {
-    inner: Arc<T>
+    inner: Arc<T>,
 }
 impl<T> From<T> for SharedState<T> {
     fn from(value: T) -> Self {
         SharedState {
-            inner: Arc::new(value)
+            inner: Arc::new(value),
         }
     }
 }
 impl<T> From<Arc<T>> for SharedState<T> {
     fn from(inner: Arc<T>) -> Self {
-        SharedState {
-            inner
-        }
+        SharedState { inner }
     }
 }
 impl ServerBuilder {
@@ -430,7 +433,10 @@ impl ServerBuilder {
         self.run_handle = run_handle;
         self
     }
-    pub fn shared_state<T: Send + Sync + 'static>(self, shared_state: impl Into<SharedState<T>>) -> Self {
+    pub fn shared_state<T: Send + Sync + 'static>(
+        self,
+        shared_state: impl Into<SharedState<T>>,
+    ) -> Self {
         let mut s = self;
         let state: SharedState<T> = shared_state.into();
         s.shared_state.insert(state.inner);

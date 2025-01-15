@@ -1,38 +1,38 @@
-use std::collections::HashMap;
-use crate::server::{ServerConfig};
+use crate::server::ServerConfig;
 use log::error;
-use rustls::crypto::aws_lc_rs::sign::RsaSigningKey;
-use rustls::pki_types::{CertificateDer, DnsName, PrivateKeyDer, ServerName, UnixTime};
-use rustls::sign::CertifiedKey;
-use rustls::{DigitallySignedStruct, DistinguishedName, RootCertStore, SignatureScheme};
-use rustls_pemfile::{certs, read_one, Item};
-use std::env;
-use std::fmt::{Debug};
-use std::io::{BufReader, Error, ErrorKind};
-use std::ops::Sub;
-use std::str::FromStr;
-use std::sync::Arc;
-use std::time::{Duration, SystemTime};
 use rand::Rng;
 use rsa::pkcs1::DecodeRsaPrivateKey;
 use rsa::pkcs1v15::SigningKey;
 use rsa::pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey};
 use rustls::client::danger::HandshakeSignatureValid;
+use rustls::crypto::aws_lc_rs::default_provider;
+use rustls::crypto::aws_lc_rs::sign::RsaSigningKey;
+use rustls::pki_types::{CertificateDer, DnsName, PrivateKeyDer, ServerName, UnixTime};
 use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
 use rustls::server::{ClientHello, ParsedCertificate, ResolvesServerCert};
-use rustls::crypto::aws_lc_rs::default_provider;
+use rustls::sign::CertifiedKey;
+use rustls::{DigitallySignedStruct, DistinguishedName, RootCertStore, SignatureScheme};
+use rustls_pemfile::{certs, read_one, Item};
 use sha2::Sha256;
+use std::collections::HashMap;
+use std::env;
+use std::fmt::Debug;
+use std::io::{BufReader, Error, ErrorKind};
+use std::ops::Sub;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 use x509_cert::builder::{Builder, CertificateBuilder, Profile};
-use x509_cert::Certificate;
-use x509_cert::der::{DateTime, DecodePem, EncodePem};
 use x509_cert::der::asn1::{Ia5String, UtcTime};
 use x509_cert::der::pem::LineEnding;
+use x509_cert::der::{DateTime, DecodePem, EncodePem};
 use x509_cert::ext::pkix::name::GeneralName;
 use x509_cert::ext::pkix::SubjectAltName;
 use x509_cert::name::Name;
 use x509_cert::serial_number::SerialNumber;
 use x509_cert::spki::SubjectPublicKeyInfo;
 use x509_cert::time::{Time, Validity};
+use x509_cert::Certificate;
 
 pub fn load_ssl_certs(config: &ServerConfig) -> Result<Arc<rustls::ServerConfig>, Error> {
     default_provider().install_default().unwrap();
@@ -46,8 +46,7 @@ pub fn load_ssl_certs(config: &ServerConfig) -> Result<Arc<rustls::ServerConfig>
         env::var("PRIVATE_CA_CRT").ok(),
         env::var("PRIVATE_CA_KEY").ok(),
     ) {
-        let (cert_bytes, key_bytes) =
-            generate_ca_signed_cert(crt.as_bytes(), key.as_bytes())?;
+        let (cert_bytes, key_bytes) = generate_ca_signed_cert(crt.as_bytes(), key.as_bytes())?;
         (
             load_certs(&cert_bytes)?,
             load_private_key(&key_bytes)?,
@@ -107,10 +106,10 @@ pub fn load_ssl_certs(config: &ServerConfig) -> Result<Arc<rustls::ServerConfig>
         }
         Some(client_ssl) => {
             let (certs, key, root_certs) = (
-                    load_certs(client_ssl.certs.as_bytes())?,
-                    load_private_key(client_ssl.key.as_bytes())?,
-                    load_certs(client_ssl.root_certs.as_bytes())?,
-                );
+                load_certs(client_ssl.certs.as_bytes())?,
+                load_private_key(client_ssl.key.as_bytes())?,
+                load_certs(client_ssl.root_certs.as_bytes())?,
+            );
             for cert in root_certs {
                 root_cert_store.add(cert).map_err(|e| {
                     Error::new(
@@ -128,12 +127,14 @@ pub fn load_ssl_certs(config: &ServerConfig) -> Result<Arc<rustls::ServerConfig>
                     )
                 })?),
             );
-            resolver.add(client_ssl.domain.as_str(), cer_key).map_err(|e| {
-                Error::new(
-                    ErrorKind::InvalidInput,
-                    format!("Failed to add SSL Certs to Resolver: {:?}", e),
-                )
-            })?;
+            resolver
+                .add(client_ssl.domain.as_str(), cer_key)
+                .map_err(|e| {
+                    Error::new(
+                        ErrorKind::InvalidInput,
+                        format!("Failed to add SSL Certs to Resolver: {:?}", e),
+                    )
+                })?;
             let resolver = Arc::new(resolver);
             Ok(Arc::new(
                 rustls::ServerConfig::builder()
@@ -179,7 +180,7 @@ pub fn generate_ca_signed_cert(
             .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?
             .as_bytes(),
     )
-        .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?;
+    .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?;
     let mut cert = CertificateBuilder::new(
         Profile::Leaf {
             issuer: root_cert.tbs_certificate.issuer,
@@ -197,7 +198,7 @@ pub fn generate_ca_signed_cert(
                     DateTime::new(2049, 8, 2, 0, 0, 0)
                         .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?,
                 )
-                    .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?,
+                .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?,
             ),
         },
         Name::from_str("CN=Chia,O=Chia,OU=Organic Farming Division")
@@ -205,11 +206,11 @@ pub fn generate_ca_signed_cert(
         subject_pub_key,
         &signing_key,
     )
-        .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?;
+    .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?;
     cert.add_extension(&SubjectAltName(vec![GeneralName::DnsName(
         Ia5String::new("chia.net").map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?,
     )]))
-        .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?;
+    .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?;
     let cert = cert
         .build()
         .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?;
@@ -260,17 +261,34 @@ impl ClientCertVerifier for AllowAny {
         false
     }
 
-    fn root_hint_subjects(&self) -> &[DistinguishedName] { &[] }
+    fn root_hint_subjects(&self) -> &[DistinguishedName] {
+        &[]
+    }
 
-    fn verify_client_cert(&self, _end_entity: &CertificateDer<'_>, _intermediates: &[CertificateDer<'_>], _now: UnixTime) -> Result<ClientCertVerified, rustls::Error> {
+    fn verify_client_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _now: UnixTime,
+    ) -> Result<ClientCertVerified, rustls::Error> {
         Ok(ClientCertVerified::assertion())
     }
 
-    fn verify_tls12_signature(&self, _message: &[u8], _cert: &CertificateDer<'_>, _dss: &DigitallySignedStruct) -> Result<HandshakeSignatureValid, rustls::Error> {
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
         Ok(HandshakeSignatureValid::assertion())
     }
 
-    fn verify_tls13_signature(&self, _message: &[u8], _cert: &CertificateDer<'_>, _dss: &DigitallySignedStruct) -> Result<HandshakeSignatureValid, rustls::Error> {
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
         Ok(HandshakeSignatureValid::assertion())
     }
 
@@ -285,7 +303,7 @@ impl ClientCertVerifier for AllowAny {
             SignatureScheme::RSA_PSS_SHA512,
             SignatureScheme::RSA_PSS_SHA384,
             SignatureScheme::RSA_PSS_SHA256,
-            SignatureScheme::ED25519
+            SignatureScheme::ED25519,
         ]
     }
 }
