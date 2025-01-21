@@ -73,9 +73,10 @@ pub async fn basic_login<B: BasicAuth + Send + Sync + 'static>(
         Err(_) => None,
     };
     let body: BasicLoginRequest = match body {
-        None => Query::<BasicLoginRequest>::from_request(&mut data.request, "")
+        None => Query::<Option<BasicLoginRequest>>::from_request(&mut data.request, "")
             .await
-            .map(|v| v.inner())?,
+            .map(|v| v.inner())?
+            .ok_or(Error::new(ErrorKind::Other, "Login info in Request"))?,
         Some(v) => v,
     };
     let claims: Claims = match basic_login

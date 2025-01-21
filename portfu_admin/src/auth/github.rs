@@ -18,6 +18,7 @@ use portfu::wrappers::sessions::Session;
 use serde::Deserialize;
 use std::env;
 use std::io::{Error, ErrorKind};
+use std::num::ParseIntError;
 use std::sync::Arc;
 use time::OffsetDateTime;
 use tokio::sync::RwLock;
@@ -103,8 +104,16 @@ impl ServiceHandler for OAuthAuthHandler {
             Err(_) => None,
         };
         let body: AuthRequest = match body {
-            None => match Query::<AuthRequest>::from_request(&mut data.request, "").await {
-                Ok(v) => v.inner(),
+            None => match Query::<Option<AuthRequest>>::from_request(&mut data.request, "").await {
+                Ok(v) => match v.inner() {
+                    Some(v) => v,
+                    None => {
+                        return send_internal_error(
+                            data,
+                            "Failed to extract AuthRequest"
+                        );
+                    }
+                },
                 Err(e) => {
                     return send_internal_error(
                         data,
@@ -225,9 +234,7 @@ impl OAuthLoginBuilder {
                 env::var("OAUTH_CLIENT_SECRET")
                     .expect("Missing the OAUTH_CLIENT_SECRET environment variable."),
             ))
-            .oauthserver(
-                env::var("OAUTH_SERVER").expect("Missing the OAUTH_SERVER environment variable."),
-            )
+            .oauthserver(oauthserver.clone())
             .auth_url(
                 AuthUrl::new(format!("https://{}/oauth/authorize", oauthserver))
                     .expect("Invalid authorization endpoint URL"),
@@ -236,13 +243,40 @@ impl OAuthLoginBuilder {
                 env::var("OAUTH_SUCCESS_URL").unwrap_or_else(|_| String::from("/")),
             )
             .on_failure_redirect(
-                env::var("OAUTH_SUCCESS_URL").unwrap_or_else(|_| String::from("/")),
+                env::var("OAUTH_FAILURE_URL").unwrap_or_else(|_| String::from("/")),
             )
             .token_url(
                 TokenUrl::new(format!("https://{}/oauth/access_token", oauthserver))
                     .expect("Invalid token endpoint URL"),
             )
             .api_base_url(format!("https://{}/api/v4", oauthserver))
+            .allowed_organizations(
+                &env::var("OAUTH_ORGANIZATIONS")
+                    .unwrap_or_default()
+                    .split(',')
+                    .try_fold(vec![], |mut a, v| {
+                        a.push(v.parse()?);
+                        Ok::<Vec<u64>, ParseIntError>(a)
+                    }).unwrap_or_default()
+            )
+            .allowed_users(
+                &env::var("OAUTH_USERS")
+                    .unwrap_or_default()
+                    .split(',')
+                    .try_fold(vec![], |mut a, v| {
+                        a.push(v.parse()?);
+                        Ok::<Vec<u64>, ParseIntError>(a)
+                    }).unwrap_or_default()
+            )
+            .admin_users(
+                &env::var("OAUTH_ADMINS")
+                    .unwrap_or_default()
+                    .split(',')
+                    .try_fold(vec![], |mut a, v| {
+                        a.push(v.parse()?);
+                        Ok::<Vec<u64>, ParseIntError>(a)
+                    }).unwrap_or_default()
+            )
             .redirect_url(
                 RedirectUrl::new(
                     env::var("OAUTH_REDIRECT_URL")
