@@ -151,7 +151,7 @@ impl IntoStreamBody for String {
     }
 }
 
-impl<'a> IntoStreamBody for &'a str {
+impl IntoStreamBody for &str {
     type Data = Bytes;
     type Error = IntoStreamError;
     fn stream_body(self) -> StreamingBody {

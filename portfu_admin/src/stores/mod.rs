@@ -50,7 +50,7 @@ pub trait DatabaseEntry<R: Row, P>: for<'r> FromRow<'r, R> {
         &'q self,
         query: Query<'q, Postgres, <Postgres as HasArguments>::Arguments>,
         field: &str,
-    ) -> Query<'q, Postgres, <Postgres as HasArguments>::Arguments>;
+    ) -> Query<'q, Postgres, <Postgres as HasArguments<'q>>::Arguments>;
     fn database() -> String;
     fn table() -> String;
     fn table_init(connection: PoolConnection<Postgres>) -> Result<(), Error> {

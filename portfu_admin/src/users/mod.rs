@@ -130,7 +130,7 @@ impl DatabaseEntry<PgRow, i64> for User {
         &'q self,
         mut query: Query<'q, Postgres, <Postgres as HasArguments>::Arguments>,
         field: &str,
-    ) -> Query<'q, Postgres, <Postgres as HasArguments>::Arguments> {
+    ) -> Query<'q, Postgres, <Postgres as HasArguments<'q>>::Arguments> {
         if !Self::FIELD_NAMES_AS_SLICE.contains(&field) {
             return query;
         }

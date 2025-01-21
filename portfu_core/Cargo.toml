@@ -17,7 +17,6 @@ http-body.workspace = true
 http-body-util.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
-jsonwebtoken.workspace = true
 log.workspace = true
 mime_guess.workspace = true
 notify.workspace = true
