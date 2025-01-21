@@ -108,10 +108,7 @@ impl ServiceHandler for OAuthAuthHandler {
                 Ok(v) => match v.inner() {
                     Some(v) => v,
                     None => {
-                        return send_internal_error(
-                            data,
-                            "Failed to extract AuthRequest"
-                        );
+                        return send_internal_error(data, "Failed to extract AuthRequest");
                     }
                 },
                 Err(e) => {
@@ -257,7 +254,8 @@ impl OAuthLoginBuilder {
                     .try_fold(vec![], |mut a, v| {
                         a.push(v.parse()?);
                         Ok::<Vec<u64>, ParseIntError>(a)
-                    }).unwrap_or_default()
+                    })
+                    .unwrap_or_default(),
             )
             .allowed_users(
                 &env::var("OAUTH_USERS")
@@ -266,7 +264,8 @@ impl OAuthLoginBuilder {
                     .try_fold(vec![], |mut a, v| {
                         a.push(v.parse()?);
                         Ok::<Vec<u64>, ParseIntError>(a)
-                    }).unwrap_or_default()
+                    })
+                    .unwrap_or_default(),
             )
             .admin_users(
                 &env::var("OAUTH_ADMINS")
@@ -275,7 +274,8 @@ impl OAuthLoginBuilder {
                     .try_fold(vec![], |mut a, v| {
                         a.push(v.parse()?);
                         Ok::<Vec<u64>, ParseIntError>(a)
-                    }).unwrap_or_default()
+                    })
+                    .unwrap_or_default(),
             )
             .redirect_url(
                 RedirectUrl::new(
