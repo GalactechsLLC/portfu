@@ -1,4 +1,3 @@
-use std::env;
 use crate::filters::{Filter, FilterFn, FilterResult};
 use crate::service::{BodyType, IncomingRequest, Service, ServiceRequest, ServiceResponse};
 use crate::signal::await_termination;
@@ -16,6 +15,7 @@ use log::{error, info};
 use serde::{Deserialize, Serialize};
 use sha2::digest::Output;
 use sha2::{Digest, Sha256, Sha256VarCore};
+use std::env;
 use std::io::{Error, ErrorKind};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::str::FromStr;
@@ -96,12 +96,15 @@ impl Server {
         let tls_acceptor = if server.config.ssl_config.is_some() {
             let certs = load_ssl_certs(&server.config)?;
             Some(TlsAcceptor::from(certs))
-        } else if env::var("PRIVATE_CA_CRT").ok().is_some() && env::var("PRIVATE_CA_KEY").ok().is_some() {
+        } else if env::var("PRIVATE_CA_CRT").ok().is_some()
+            && env::var("PRIVATE_CA_KEY").ok().is_some()
+        {
             let certs = load_ssl_certs(&server.config)?;
             Some(TlsAcceptor::from(certs))
-        } else if env::var("SSL_CERTS").ok().is_some() &&
-            env::var("SSL_PRIVATE_KEY").ok().is_some() &&
-            env::var("SSL_ROOT_CERTS").ok().is_some() {
+        } else if env::var("SSL_CERTS").ok().is_some()
+            && env::var("SSL_PRIVATE_KEY").ok().is_some()
+            && env::var("SSL_ROOT_CERTS").ok().is_some()
+        {
             let certs = load_ssl_certs(&server.config)?;
             Some(TlsAcceptor::from(certs))
         } else {
