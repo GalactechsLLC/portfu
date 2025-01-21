@@ -5,7 +5,6 @@ pub mod postgres;
 
 use crate::users::User;
 use portfu::prelude::async_trait::async_trait;
-use portfu::prelude::log::debug;
 #[cfg(feature = "postgres")]
 use sqlx::database::HasArguments;
 #[cfg(feature = "postgres")]
