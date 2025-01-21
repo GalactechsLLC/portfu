@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
+#[derive(PartialEq, Eq, Copy, Clone)]
 pub enum WrapperResult {
     Continue,
     Return,

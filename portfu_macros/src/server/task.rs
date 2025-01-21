@@ -77,7 +77,7 @@ impl ToTokens for Task {
                         let state_ident: Ident = Ident::new("State", segment.ident.span());
                         if state_ident == segment.ident {
                             dyn_vars.push(quote! {
-                            let #ident_val: #ident_type = state.get::<Arc<#inner_type>>()
+                            let #ident_val: #ident_type = state.get::<::std::sync::Arc<#inner_type>>()
                                 .cloned()
                                 .map(::portfu::pfcore::State).ok_or(
                                     ::std::io::Error::new(::std::io::ErrorKind::NotFound, "Failed to find State")
@@ -117,7 +117,7 @@ impl ToTokens for Task {
                     state: std::sync::Arc< ::portfu::prelude::http::Extensions >
                 ) -> Result<(), ::std::io::Error> {
                     ::tokio::spawn( async move {
-                        select! {
+                        ::tokio::select! {
                             _ = async {
                                 #ast
                                 #(#dyn_vars)*

@@ -131,20 +131,26 @@ impl ToTokens for WebSocketRoute {
                     }
                 }
             }
-            let function_name = &ast.sig.ident;
-            additional_function_vars.push(quote! {
-                match handle_data.request.get() {
-                    Some(v) => v,
-                    None => {
+            dyn_vars.push(quote! {
+                let #ident_val: #ident_type = match ::portfu::pfcore::FromRequest::from_request(&mut handle_data.request, stringify!(#ident_val)).await {
+                    Ok(v) => v,
+                    Err(e) => {
                         *handle_data.response.status_mut() = ::portfu::prelude::http::StatusCode::INTERNAL_SERVER_ERROR;
-                        let bytes =::portfu::prelude::hyper::body::Bytes::from(format!("Failed to find {} for {}", stringify!(#ident_type).replace(' ',""), stringify!(#function_name)));
-                        handle_data.response.set_body(::portfu::pfcore::service::BodyType::Stream(bytes.stream_body()));
-                        return Err(ServiceResponse {
-                            handle_data.request,
-                            handle_data.response
-                        });
+                        handle_data.response.set_body(
+                            ::portfu::pfcore::service::BodyType::Stream(
+                                ::portfu::prelude::hyper::body::Bytes::from(
+                                    format!("Failed to extract {} as {}, {e:?}",
+                                        stringify!(#ident_val), stringify!(#ident_type).replace(' ',"")
+                                    )
+                                ).stream_body()
+                            )
+                        );
+                        return Ok(handle_data);
                     }
-                },
+                };
+            });
+            additional_function_vars.push(quote! {
+                #ident_val,
             });
         }
         let stream = quote! {
@@ -153,10 +159,18 @@ impl ToTokens for WebSocketRoute {
             pub struct #name {
                 pub peers: ::portfu::prelude::Peers
             }
+            impl Default for #name {
+                fn default() -> Self {
+                    Self {
+                        peers: Default::default()
+                    }
+                }
+            }
             impl ::portfu::pfcore::ServiceRegister for #name {
                 fn register(self, service_registry: &mut portfu::prelude::ServiceRegistry, shared_state: portfu::prelude::http::Extensions) {
                     let __resource = ::portfu::pfcore::service::ServiceBuilder::new(#path)
                         .name(#resource_name)
+                        .extend_state(shared_state.clone())
                         .filter(::portfu::filters::method::GET.clone())
                         .extend_state(shared_state.clone())
                         #(.filter(::portfu::pfcore::filters::fn_guard(#filters)))*

@@ -263,7 +263,7 @@ impl WrapperFn for RateLimiter {
     }
 }
 
-fn create_error(data: &mut ServiceData, error: String, status: StatusCode) -> WrapperResult {
+pub fn create_error(data: &mut ServiceData, error: String, status: StatusCode) -> WrapperResult {
     data.response
         .set_body(BodyType::Sized(Full::new(Bytes::from(error))));
     *data.response.status_mut() = status;
@@ -271,7 +271,7 @@ fn create_error(data: &mut ServiceData, error: String, status: StatusCode) -> Wr
 }
 
 #[inline]
-async fn handle_unsized(data: &mut ServiceData, limit: usize) -> Result<WrapperResult, Error> {
+pub async fn handle_unsized(data: &mut ServiceData, limit: usize) -> Result<WrapperResult, Error> {
     let mut body = data.request.consume();
     let mut buffer = Vec::with_capacity(limit);
     while let Some(next) = body.frame().await {

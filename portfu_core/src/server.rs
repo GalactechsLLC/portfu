@@ -13,6 +13,9 @@ use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
 use log::{error, info};
 use serde::{Deserialize, Serialize};
+use sha2::digest::Output;
+use sha2::{Digest, Sha256, Sha256VarCore};
+use std::env;
 use std::io::{Error, ErrorKind};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::str::FromStr;
@@ -38,6 +41,7 @@ pub struct ServerConfig {
     pub host: String,
     pub port: u16,
     pub ssl_config: Option<SslConfig>,
+    pub client_ssl_config: Option<SslConfig>,
     pub keep_alive: bool,
     pub half_close: bool,
     pub preserve_header_case: bool,
@@ -49,12 +53,24 @@ impl Default for ServerConfig {
             host: "localhost".to_string(),
             port: 8080,
             ssl_config: None,
+            client_ssl_config: None,
             keep_alive: true,
             half_close: true,
             preserve_header_case: true,
             max_buf_size: 1024 * 1024 * 2, //2 Mib
         }
     }
+}
+
+#[derive(Copy, Clone, Hash, Eq, PartialEq, Debug)]
+pub struct PeerId(pub [u8; 32]);
+
+pub fn peer_hash(input: impl AsRef<[u8]>) -> PeerId {
+    let mut hasher = Sha256::new();
+    hasher.update(input);
+    let mut buf = [0u8; 32];
+    hasher.finalize_into(<&mut Output<Sha256VarCore>>::from(&mut buf));
+    PeerId(buf)
 }
 
 #[derive(Debug)]
@@ -113,13 +129,20 @@ impl Server {
                             let tls_acceptor = tls_acceptor.clone();
                             let http = http.clone();
                             spawn(async move {
-                                let service = service_fn(move |req| {
-                                    let server = server.clone();
-                                    Self::connection_handler(server, req, address)
-                                });
                                 if let Some(acceptor) = tls_acceptor.as_ref() {
                                     match acceptor.accept(stream).await {
                                         Ok(stream) => {
+                                            let mut peer_id = None;
+                                            if let Some(certs) = stream.get_ref().1.peer_certificates() {
+                                                if !certs.is_empty() {
+                                                    peer_id = Some(peer_hash(&certs[0]));
+                                                }
+                                            }
+                                            let service = service_fn(move |req| {
+                                                let peer_id = Arc::new(peer_id);
+                                                let server = server.clone();
+                                                Self::connection_handler(server, req, address, peer_id)
+                                            });
                                             let connection = http.serve_connection(TokioIo::new(stream), service).with_upgrades();
                                             if let Err(err) = connection.await {
                                                 error!("Error serving tls connection: {:?}", err);
@@ -130,6 +153,10 @@ impl Server {
                                         }
                                     }
                                 } else {
+                                    let service = service_fn(move |req| {
+                                        let server = server.clone();
+                                        Self::connection_handler(server, req, address, Arc::new(None))
+                                    });
                                     let connection = http.serve_connection(TokioIo::new(stream), service).with_upgrades();
                                     if let Err(err) = connection.await {
                                         error!("Error serving connection: {:?}", err);
@@ -172,8 +199,10 @@ impl Server {
         server: Arc<Self>,
         mut request: Request<Incoming>,
         address: SocketAddr,
+        peer_id: Arc<Option<PeerId>>,
     ) -> Result<Response<StreamingBody>, Error> {
         request.extensions_mut().insert(address);
+        request.extensions_mut().insert(peer_id);
         request.extensions_mut().insert(server.shared_state.clone()); //Put the Server Shared State in the Request Extensions
         let mut response: ServiceResponse = ServiceResponse::new();
         let handle = if !server.filters.is_empty() {
@@ -322,8 +351,9 @@ impl ServerBuilder {
         service.register(&mut s.services, s.shared_state.clone());
         s
     }
-    pub fn default_service(self, service: Service) -> Self {
+    pub fn default_service(self, mut service: Service) -> Self {
         let mut s = self;
+        service.shared_state.extend(s.shared_state.clone());
         s.services.default_service = Some(Arc::new(service));
         s
     }
