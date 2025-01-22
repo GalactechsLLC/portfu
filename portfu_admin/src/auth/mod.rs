@@ -64,24 +64,28 @@ pub async fn basic_login<B: BasicAuth + Send + Sync + 'static>(
 ) -> Result<String, Error> {
     let body: BasicLoginRequest = match json.inner() {
         Some(v) => v,
-        None=> match query.inner() {
+        None => match query.inner() {
             Some(v) => v,
-            None=> return Err(Error::new(ErrorKind::Other, "No Auth Request Found"))
+            None => return Err(Error::new(ErrorKind::Other, "No Auth Request Found")),
         },
     };
-    let claims: Claims = login_handle.0.as_ref().login(body.username, body.password).await?;
+    let claims: Claims = login_handle
+        .0
+        .as_ref()
+        .login(body.username, body.password)
+        .await?;
     session.0.write().await.data.insert(claims.clone());
     encode(
         &Header::default(),
         &claims,
         &EncodingKey::from_secret(CURRENT_SECRET.as_bytes()),
     )
-        .map_err(|e| {
-            Error::new(
-                ErrorKind::InvalidInput,
-                format!("Failed to Encode JWT: {e:?}"),
-            )
-        })
+    .map_err(|e| {
+        Error::new(
+            ErrorKind::InvalidInput,
+            format!("Failed to Encode JWT: {e:?}"),
+        )
+    })
 }
 
 pub static CURRENT_SECRET: Lazy<String> =

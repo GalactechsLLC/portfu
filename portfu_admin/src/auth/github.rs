@@ -55,8 +55,26 @@ pub struct AuthRequest {
 }
 
 pub enum OAuthCallbackFn {
-    OnSuccess(Pin<Box<dyn Fn(usize) -> Box<dyn Future<Output=Result<(), Error>>> + Send + Sync + 'static>>),
-    OnFailure(Pin<Box<dyn Fn(usize) -> Box<dyn Future<Output=Result<(), Error>>> + Send + Sync + 'static>>),
+    OnSuccess(
+        Pin<
+            Box<
+                dyn Fn(usize) -> Box<dyn Future<Output = Result<(), Error>>>
+                    + Send
+                    + Sync
+                    + 'static,
+            >,
+        >,
+    ),
+    OnFailure(
+        Pin<
+            Box<
+                dyn Fn(usize) -> Box<dyn Future<Output = Result<(), Error>>>
+                    + Send
+                    + Sync
+                    + 'static,
+            >,
+        >,
+    ),
 }
 
 pub struct OAuthLoginHandler {
