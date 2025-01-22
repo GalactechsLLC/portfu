@@ -17,8 +17,10 @@ use portfu::prelude::async_trait;
 use portfu::wrappers::sessions::Session;
 use serde::Deserialize;
 use std::env;
+use std::future::Future;
 use std::io::{Error, ErrorKind};
 use std::num::ParseIntError;
+use std::pin::Pin;
 use std::sync::Arc;
 use time::OffsetDateTime;
 use tokio::sync::RwLock;
@@ -50,6 +52,11 @@ pub struct UserData {
 pub struct AuthRequest {
     code: String,
     state: String,
+}
+
+pub enum OAuthCallbackFn {
+    OnSuccess(Pin<Box<dyn Fn(usize) -> Box<dyn Future<Output=Result<(), Error>>> + Send + Sync + 'static>>),
+    OnFailure(Pin<Box<dyn Fn(usize) -> Box<dyn Future<Output=Result<(), Error>>> + Send + Sync + 'static>>),
 }
 
 pub struct OAuthLoginHandler {
@@ -215,6 +222,7 @@ pub struct OAuthLoginBuilder {
     pub on_success_redirect: Option<String>,
     pub on_failure_redirect: Option<String>,
     pub allowed_organizations: Vec<u64>,
+    pub callbacks: Vec<OAuthCallbackFn>,
     pub allowed_users: Vec<u64>,
     pub admin_users: Vec<u64>,
 }
@@ -346,6 +354,11 @@ impl OAuthLoginBuilder {
     pub fn admin_users(self, admin_users: &[u64]) -> Self {
         let mut s = self;
         s.admin_users.extend(admin_users);
+        s
+    }
+    pub fn callbacks(self, callback: OAuthCallbackFn) -> Self {
+        let mut s = self;
+        s.callbacks.push(callback);
         s
     }
     pub fn build(self) -> Result<ServiceGroup, Error> {
