@@ -15,7 +15,7 @@ use std::io::{Error, ErrorKind};
 
 pub struct KubeNamespace(pub String);
 
-#[get("/cluster/nodes", output = "Json")]
+#[get("/cluster/nodes", output = "Json", eoutput = "bytes")]
 pub async fn get_nodes(
     client: State<Client>,
     list_params: Json<Option<SearchParams>>,
@@ -26,7 +26,7 @@ pub async fn get_nodes(
         .map_err(|e| Error::new(ErrorKind::Other, format!("Error Reading Node List: {e:?}")))
 }
 
-#[get("/cluster/ingress", output = "Json")]
+#[get("/cluster/ingress", output = "Json", eoutput = "bytes")]
 pub async fn get_ingress(
     client: State<Client>,
     namespace: State<KubeNamespace>,
@@ -43,7 +43,7 @@ pub async fn get_ingress(
         })
 }
 
-#[get("/cluster/services", output = "Json")]
+#[get("/cluster/services", output = "Json", eoutput = "bytes")]
 pub async fn get_services(
     client: State<Client>,
     namespace: State<KubeNamespace>,
@@ -61,7 +61,7 @@ pub async fn get_services(
         })
 }
 
-#[get("/cluster/configs", output = "Json")]
+#[get("/cluster/configs", output = "Json", eoutput = "bytes")]
 pub async fn get_configs(
     client: State<Client>,
     namespace: State<KubeNamespace>,
@@ -79,7 +79,7 @@ pub async fn get_configs(
         })
 }
 
-#[get("/cluster/volume_claims", output = "Json")]
+#[get("/cluster/volume_claims", output = "Json", eoutput = "bytes")]
 pub async fn get_volume_claims(
     client: State<Client>,
     namespace: State<KubeNamespace>,
@@ -97,7 +97,7 @@ pub async fn get_volume_claims(
         })
 }
 
-#[get("/cluster/pods", output = "Json")]
+#[get("/cluster/pods", output = "Json", eoutput = "bytes")]
 pub async fn get_pods(
     client: State<Client>,
     namespace: State<KubeNamespace>,
@@ -109,7 +109,7 @@ pub async fn get_pods(
         .map_err(|e| Error::new(ErrorKind::Other, format!("Error Reading Pod List: {e:?}")))
 }
 
-#[get("/cluster/volumes", output = "Json")]
+#[get("/cluster/volumes", output = "Json", eoutput = "bytes")]
 pub async fn get_volumes(
     client: State<Client>,
     list_params: Json<Option<SearchParams>>,
@@ -125,7 +125,7 @@ pub async fn get_volumes(
         })
 }
 
-#[get("/cluster/storage_classes", output = "Json")]
+#[get("/cluster/storage_classes", output = "Json", eoutput = "bytes")]
 pub async fn get_storage_classes(
     client: State<Client>,
     list_params: Json<Option<SearchParams>>,
@@ -141,7 +141,7 @@ pub async fn get_storage_classes(
         })
 }
 
-#[get("/cluster/namespaces", output = "Json")]
+#[get("/cluster/namespaces", output = "Json", eoutput = "bytes")]
 pub async fn get_namespaces(
     client: State<Client>,
     list_params: Json<Option<SearchParams>>,
@@ -157,7 +157,7 @@ pub async fn get_namespaces(
         })
 }
 
-#[get("/cluster/deployments", output = "Json")]
+#[get("/cluster/deployments", output = "Json", eoutput = "bytes")]
 pub async fn get_deployments(
     client: State<Client>,
     list_params: Json<Option<SearchParams>>,

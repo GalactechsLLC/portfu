@@ -93,17 +93,12 @@ impl Server {
         info!("Server Starting Up on {socket_addr}");
         let listener = TcpListener::bind(socket_addr).await?;
         //Check for various ways of using SSL
-        let tls_acceptor = if server.config.ssl_config.is_some() {
-            let certs = load_ssl_certs(&server.config)?;
-            Some(TlsAcceptor::from(certs))
-        } else if env::var("PRIVATE_CA_CRT").ok().is_some()
-            && env::var("PRIVATE_CA_KEY").ok().is_some()
-        {
-            let certs = load_ssl_certs(&server.config)?;
-            Some(TlsAcceptor::from(certs))
-        } else if env::var("SSL_CERTS").ok().is_some()
-            && env::var("SSL_PRIVATE_KEY").ok().is_some()
-            && env::var("SSL_ROOT_CERTS").ok().is_some()
+        let tls_acceptor = if server.config.ssl_config.is_some()
+            || (env::var("PRIVATE_CA_CRT").ok().is_some()
+                && env::var("PRIVATE_CA_KEY").ok().is_some())
+            || (env::var("SSL_CERTS").ok().is_some()
+                && env::var("SSL_PRIVATE_KEY").ok().is_some()
+                && env::var("SSL_ROOT_CERTS").ok().is_some())
         {
             let certs = load_ssl_certs(&server.config)?;
             Some(TlsAcceptor::from(certs))
