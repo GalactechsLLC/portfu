@@ -16,6 +16,7 @@ use portfu::pfcore::{FromRequest, Json, Query, ServiceData, ServiceHandler, Serv
 use portfu::prelude::async_trait;
 use portfu::wrappers::sessions::Session;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::env;
 use std::future::Future;
 use std::io::{Error, ErrorKind};
@@ -35,6 +36,9 @@ pub struct OAuthConfig {
     pub api_base_url: String,
     pub on_success_redirect: String,
     pub on_failure_redirect: String,
+    pub claims_audience: String,
+    pub claims_issuer: String,
+    pub claims_expire_time: usize,
     pub allowed_organizations: Vec<u64>,
     pub allowed_users: Vec<u64>,
     pub admin_users: Vec<u64>,
@@ -95,29 +99,34 @@ impl ServiceHandler for OAuthLoginHandler {
         mut data: portfu::prelude::ServiceData,
     ) -> Result<ServiceData, (ServiceData, Error)> {
         //Check if there is a current_page query
-        if let Ok(Some(q)) =
+        let redirect_params = if let Ok(Some(q)) =
             Query::<Option<OAuthLoginRedirectParams>>::from_request(&mut data.request, "")
                 .await
                 .map(|q| q.inner())
         {
-            if let Ok(session) = State::<RwLock<Session>>::from_request(&mut data.request, "")
-                .await
-                .map(|q| q.inner())
-            {
-                session.write().await.data.insert(q);
-            }
-        }
+            Some(q)
+        } else {
+            None
+        };
         // Create a PKCE code verifier and SHA-256 encode it as a code challenge.
         let (pkce_code_challenge, _pkce_code_verifier) = PkceCodeChallenge::new_random_sha256();
         // Generate the authorization URL to which we'll redirect the user.
         let client = &self.config.client;
-        let (auth_url, _csrf_token) = client
+        let mut auth_request = client
             .authorize_url(CsrfToken::new_random)
             // Set the desired scopes.
             .add_scope(Scope::new("read:user user:email read:org".to_string()))
             // Set the PKCE code challenge.
-            .set_pkce_challenge(pkce_code_challenge)
-            .url();
+            .set_pkce_challenge(pkce_code_challenge);
+        if let Some(redirect_params) = redirect_params {
+            if let Ok(session) = State::<RwLock<Session>>::from_request(&mut data.request, "")
+                .await
+                .map(|q| q.inner())
+            {
+                session.write().await.data.insert(redirect_params);
+            }
+        }
+        let (auth_url, _csrf_token) = client.url();
         *data.response.status_mut() = StatusCode::FOUND;
         data.response.headers_mut().insert(
             header::LOCATION,
@@ -168,17 +177,6 @@ impl ServiceHandler for OAuthAuthHandler {
         } else {
             return send_internal_error(data, "Failed to Find Session to Auth".to_string());
         };
-        let mut claims: Claims = session.read().await.data.get().cloned().unwrap_or(Claims {
-            aud: "localhost".to_string(),
-            exp: 30 * 60, //30 Minutes
-            iat: OffsetDateTime::now_utc().unix_timestamp() as usize,
-            iss: "localhost".to_string(),
-            nbf: OffsetDateTime::now_utc().unix_timestamp() as usize,
-            sub: "".to_string(),
-            eml: "".to_string(),
-            rol: UserRole::None,
-            org: vec![],
-        });
         let code = AuthorizationCode::new(body.code.clone());
         let _token_state = CsrfToken::new(body.state.clone());
         let client = &self.config.client;
@@ -215,11 +213,21 @@ impl ServiceHandler for OAuthAuthHandler {
             .send()
             .await
         {
-            let text = org_info.text().await.unwrap_or_default();
-            serde_json::from_str(&text).ok()
+            org_info.json().await.ok()
         } else {
             return redirect_to_url(data, self.config.on_failure_redirect.as_str());
         };
+        let mut claims: Claims = session.read().await.data.get().cloned().unwrap_or(Claims {
+            aud: self.config.claims_audience.clone(),
+            exp: self.config.claims_expire_time.clone(), //30 * 60, //30 Minutes
+            iat: OffsetDateTime::now_utc().unix_timestamp() as usize,
+            iss: self.config.claims_issuer.clone(),
+            nbf: OffsetDateTime::now_utc().unix_timestamp() as usize,
+            sub: "".to_string(),
+            eml: "".to_string(),
+            rol: UserRole::None,
+            org: vec![],
+        });
         if let Some(org_list) = &org_info {
             for org in org_list {
                 claims.org.push(org.id.0);
@@ -242,7 +250,12 @@ impl ServiceHandler for OAuthAuthHandler {
             .await
             .map(|q| q.inner())
         {
-            if let Some(redirect) = session.read().await.data.get::<OAuthLoginRedirectParams>() {
+            if let Some(redirect) = session
+                .read()
+                .await
+                .data
+                .remove::<OAuthLoginRedirectParams>()
+            {
                 return redirect_to_url(data, redirect.redirect_url.as_str());
             }
         }
