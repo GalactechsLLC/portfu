@@ -12,10 +12,10 @@ use oauth2::{
 use octocrab::models::orgs::Organization;
 use octocrab::models::Author;
 use portfu::pfcore::service::{ServiceBuilder, ServiceGroup};
-use portfu::pfcore::{FromRequest, Json, Query, ServiceData, ServiceHandler, ServiceType};
+use portfu::pfcore::{FromRequest, Json, Query, ServiceData, ServiceHandler, ServiceType, State};
 use portfu::prelude::async_trait;
 use portfu::wrappers::sessions::Session;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::env;
 use std::future::Future;
 use std::io::{Error, ErrorKind};
@@ -80,6 +80,11 @@ pub enum OAuthCallbackFn {
 pub struct OAuthLoginHandler {
     config: Arc<OAuthConfig>,
 }
+
+#[derive(Deserialize, Serialize, Clone)]
+pub struct OAuthLoginRedirectParams {
+    redirect_url: String,
+}
 #[async_trait::async_trait]
 impl ServiceHandler for OAuthLoginHandler {
     fn name(&self) -> &str {
@@ -89,6 +94,19 @@ impl ServiceHandler for OAuthLoginHandler {
         &self,
         mut data: portfu::prelude::ServiceData,
     ) -> Result<ServiceData, (ServiceData, Error)> {
+        //Check if there is a current_page query
+        if let Ok(Some(q)) =
+            Query::<Option<OAuthLoginRedirectParams>>::from_request(&mut data.request, "")
+                .await
+                .map(|q| q.inner())
+        {
+            if let Ok(session) = State::<RwLock<Session>>::from_request(&mut data.request, "")
+                .await
+                .map(|q| q.inner())
+            {
+                session.write().await.data.insert(q);
+            }
+        }
         // Create a PKCE code verifier and SHA-256 encode it as a code challenge.
         let (pkce_code_challenge, _pkce_code_verifier) = PkceCodeChallenge::new_random_sha256();
         // Generate the authorization URL to which we'll redirect the user.
@@ -220,6 +238,14 @@ impl ServiceHandler for OAuthAuthHandler {
             claims.eml = user_info.email.unwrap_or_default();
         }
         session.write().await.data.insert(claims);
+        if let Ok(session) = State::<RwLock<Session>>::from_request(&mut data.request, "")
+            .await
+            .map(|q| q.inner())
+        {
+            if let Some(redirect) = session.read().await.data.get::<OAuthLoginRedirectParams>() {
+                return redirect_to_url(data, redirect.redirect_url.as_str());
+            }
+        }
         redirect_to_url(data, self.config.on_success_redirect.as_str())
     }
 
