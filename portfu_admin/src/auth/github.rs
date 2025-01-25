@@ -16,7 +16,6 @@ use portfu::pfcore::{FromRequest, Json, Query, ServiceData, ServiceHandler, Serv
 use portfu::prelude::async_trait;
 use portfu::wrappers::sessions::Session;
 use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
 use std::env;
 use std::future::Future;
 use std::io::{Error, ErrorKind};
