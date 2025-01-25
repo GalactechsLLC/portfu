@@ -111,7 +111,7 @@ impl ServiceHandler for OAuthLoginHandler {
         let (pkce_code_challenge, _pkce_code_verifier) = PkceCodeChallenge::new_random_sha256();
         // Generate the authorization URL to which we'll redirect the user.
         let client = &self.config.client;
-        let mut auth_request = client
+        let auth_request = client
             .authorize_url(CsrfToken::new_random)
             // Set the desired scopes.
             .add_scope(Scope::new("read:user user:email read:org".to_string()))
@@ -125,7 +125,7 @@ impl ServiceHandler for OAuthLoginHandler {
                 session.write().await.data.insert(redirect_params);
             }
         }
-        let (auth_url, _csrf_token) = client.url();
+        let (auth_url, _csrf_token) = auth_request.url();
         *data.response.status_mut() = StatusCode::FOUND;
         data.response.headers_mut().insert(
             header::LOCATION,
@@ -277,6 +277,9 @@ pub struct OAuthLoginBuilder {
     pub redirect_url: Option<RedirectUrl>,
     pub on_success_redirect: Option<String>,
     pub on_failure_redirect: Option<String>,
+    pub claims_audience: Option<String>,
+    pub claims_issuer: Option<String>,
+    pub claims_expire_time: Option<usize>,
     pub allowed_organizations: Vec<u64>,
     pub callbacks: Vec<OAuthCallbackFn>,
     pub allowed_users: Vec<u64>,
@@ -305,6 +308,15 @@ impl OAuthLoginBuilder {
             )
             .on_failure_redirect(
                 env::var("OAUTH_FAILURE_URL").unwrap_or_else(|_| String::from("/")),
+            )
+            .claims_issuer(env::var("OAUTH_ISSUER").unwrap_or_else(|_| String::from("localhost")))
+            .claims_audience(
+                env::var("OAUTH_AUDIENCE").unwrap_or_else(|_| String::from("localhost")),
+            )
+            .claims_expire_time(
+                env::var("OAUTH_EXPIRE_TIME")
+                    .map(|s| s.parse().unwrap_or_else(|_| 30usize * 60usize))
+                    .unwrap_or_else(|_| 30usize * 60usize),
             )
             .token_url(
                 TokenUrl::new(format!("https://{}/oauth/access_token", oauthserver))
@@ -375,6 +387,21 @@ impl OAuthLoginBuilder {
     pub fn on_success_redirect(self, on_success_redirect: String) -> Self {
         let mut s = self;
         s.on_success_redirect = Some(on_success_redirect);
+        s
+    }
+    pub fn claims_audience(self, claims_audience: String) -> Self {
+        let mut s = self;
+        s.claims_audience = Some(claims_audience);
+        s
+    }
+    pub fn claims_issuer(self, claims_issuer: String) -> Self {
+        let mut s = self;
+        s.claims_issuer = Some(claims_issuer);
+        s
+    }
+    pub fn claims_expire_time(self, claims_expire_time: usize) -> Self {
+        let mut s = self;
+        s.claims_expire_time = Some(claims_expire_time);
         s
     }
     pub fn on_failure_redirect(self, on_failure_redirect: String) -> Self {
@@ -467,8 +494,11 @@ impl OAuthLoginBuilder {
             on_failure_redirect: self
                 .on_failure_redirect
                 .unwrap_or_else(|| String::from("/")),
+            claims_audience: "".to_string(),
+            claims_issuer: "".to_string(),
             allowed_users: self.allowed_users,
             admin_users: self.admin_users,
+            claims_expire_time: 0,
         });
         let login_service = ServiceBuilder::new("/github/login")
             .name("index")
