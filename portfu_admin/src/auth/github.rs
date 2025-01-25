@@ -251,7 +251,7 @@ impl ServiceHandler for OAuthAuthHandler {
             .map(|q| q.inner())
         {
             if let Some(redirect) = session
-                .read()
+                .write()
                 .await
                 .data
                 .remove::<OAuthLoginRedirectParams>()
