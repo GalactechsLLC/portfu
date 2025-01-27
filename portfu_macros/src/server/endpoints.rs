@@ -177,17 +177,6 @@ impl ToTokens for Endpoint {
         } else {
             quote! {}
         };
-        let struct_def = if has_generics {
-            quote! {
-                pub struct #name #generics {
-                    _phantom_data: std::marker::PhantomData #generic_lables
-                }
-            }
-        } else {
-            quote! {
-                pub struct #name;
-            }
-        };
         let default_struct = if has_generics {
             quote! {
                 impl #generics Default for #name #generic_lables {
@@ -209,17 +198,27 @@ impl ToTokens for Endpoint {
         };
         let function_def = if has_generics {
             let mut new_ast = ast.clone();
-            new_ast.sig.generics = parse_quote! {
-                #generics
-            };
+            new_ast.sig.generics.params.clear();
             quote! { #new_ast }
         } else {
             quote! { #ast }
         };
-        let function_ext = if has_generics {
-            quote! { :: #generic_lables }
+        let struct_def = if has_generics {
+            quote! {
+                pub struct #name #generics {
+                    _phantom_data: std::marker::PhantomData #generic_lables
+                }
+                impl #generics #name #generic_lables {
+                    #function_def
+                }
+            }
         } else {
-            quote! {}
+            quote! {
+                pub struct #name;
+                impl #name {
+                    #function_def
+                }
+            }
         };
         let registrations = quote! {
             let __resource = ::portfu::pfcore::service::ServiceBuilder::new(#path)
@@ -468,9 +467,8 @@ impl ToTokens for Endpoint {
                     if handle_data.request.request.method() == ::portfu::prelude::http::method::Method::OPTIONS {
                         return Ok(handle_data)
                     }
-                    #function_def
                     #(#dyn_vars)*
-                    match #name #function_ext(#(#additional_function_vars)*).await {
+                    match Self::#name (#(#additional_function_vars)*).await {
                         Ok(t) => {
                             #output_statement
                             Ok(handle_data)

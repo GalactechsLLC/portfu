@@ -53,7 +53,7 @@ pub trait DatabaseEntry<R: Row, P>: for<'r> FromRow<'r, R> {
     fn database() -> String;
     fn table() -> String;
     fn table_init(connection: PoolConnection<Postgres>) -> Result<(), Error> {
-        debug!("No Init defined: {}", connection.name());
+        log::debug!("No Init defined: {}", connection.name());
         Ok(())
     }
 }

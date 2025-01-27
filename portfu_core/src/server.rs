@@ -91,13 +91,19 @@ impl Server {
         let socket_addr = Self::get_socket_addr(&server.config)?;
         info!("Server Starting Up on {socket_addr}");
         let listener = TcpListener::bind(socket_addr).await?;
-        let tls_acceptor = Arc::new(match server.config.ssl_config.as_ref() {
-            Some(_) => {
-                let certs = load_ssl_certs(&server.config)?;
-                Some(TlsAcceptor::from(certs))
-            }
-            None => None,
-        });
+        //Check for various ways of using SSL
+        let tls_acceptor = if server.config.ssl_config.is_some()
+            || (env::var("PRIVATE_CA_CRT").ok().is_some()
+                && env::var("PRIVATE_CA_KEY").ok().is_some())
+            || (env::var("SSL_CERTS").ok().is_some()
+                && env::var("SSL_PRIVATE_KEY").ok().is_some()
+                && env::var("SSL_ROOT_CERTS").ok().is_some())
+        {
+            let certs = load_ssl_certs(&server.config)?;
+            Some(TlsAcceptor::from(certs))
+        } else {
+            None
+        };
         let mut http = Builder::new();
         http.half_close(server.config.half_close);
         http.keep_alive(server.config.keep_alive);
