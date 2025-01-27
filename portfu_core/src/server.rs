@@ -15,7 +15,6 @@ use log::{error, info};
 use serde::{Deserialize, Serialize};
 use sha2::digest::Output;
 use sha2::{Digest, Sha256, Sha256VarCore};
-use std::env;
 use std::io::{Error, ErrorKind};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::str::FromStr;
