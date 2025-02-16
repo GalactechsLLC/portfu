@@ -39,6 +39,6 @@ uuid.workspace = true
 x509-cert.workspace = true
 
 [features]
+default = ["ring"]
 ring = ["rustls/ring"]
 aws-lc = ["rustls/aws-lc-rs"]
-default = ["ring"]
