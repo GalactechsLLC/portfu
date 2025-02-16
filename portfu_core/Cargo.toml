@@ -37,3 +37,8 @@ tokio-tungstenite.workspace = true
 tokio-util.workspace = true
 uuid.workspace = true
 x509-cert.workspace = true
+
+[features]
+ring = ["rustls/ring"]
+aws-lc = ["rustls/aws-lc-rs"]
+default = ["ring"]
