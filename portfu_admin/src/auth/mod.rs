@@ -3,7 +3,7 @@ use http::StatusCode;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use portfu::macros::{get, post};
 use portfu::pfcore::wrappers::{Wrapper, WrapperFn, WrapperResult};
-use portfu::pfcore::{FromRequest, Json, Query};
+use portfu::pfcore::{Json, Query};
 use portfu::prelude::async_trait::async_trait;
 use portfu::prelude::log::error;
 use portfu::prelude::once_cell::sync::Lazy;
@@ -57,41 +57,24 @@ pub async fn get_jwt(data: &mut ServiceData) -> Result<String, Error> {
 
 #[post("/auth/login")]
 pub async fn basic_login<B: BasicAuth + Send + Sync + 'static>(
-    data: &mut ServiceData,
+    login_handle: State<B>,
+    session: State<RwLock<Session>>,
+    json: Json<Option<BasicLoginRequest>>,
+    query: Query<Option<BasicLoginRequest>>,
 ) -> Result<String, Error> {
-    let basic_login: Arc<B> = match data.request.get::<Arc<B>>() {
-        Some(data) => data.clone(),
-        None => {
-            let msg = "No Auth Backend for to handle Request";
-            error!("{}", msg);
-            *data.response.status_mut() = StatusCode::NOT_FOUND;
-            return Ok(msg.to_string());
-        }
-    };
-    let body: Option<BasicLoginRequest> = match Json::from_request(&mut data.request, "").await {
-        Ok(json) => json.inner(),
-        Err(_) => None,
-    };
-    let body: BasicLoginRequest = match body {
-        None => Query::<BasicLoginRequest>::from_request(&mut data.request, "")
-            .await
-            .map(|v| v.inner())?,
+    let body: BasicLoginRequest = match json.inner() {
         Some(v) => v,
+        None => match query.inner() {
+            Some(v) => v,
+            None => return Err(Error::new(ErrorKind::Other, "No Auth Request Found")),
+        },
     };
-    let claims: Claims = match basic_login
+    let claims: Claims = login_handle
+        .0
         .as_ref()
         .login(body.username, body.password)
-        .await
-    {
-        Ok(claims) => claims,
-        Err(_) => {
-            *data.response.status_mut() = StatusCode::BAD_REQUEST;
-            return Err(Error::new(ErrorKind::InvalidInput, "Invalid Login"));
-        }
-    };
-    if let Ok(session) = State::<Arc<RwLock<Session>>>::from_request(&mut data.request, "").await {
-        session.0.write().await.data.insert(claims.clone());
-    }
+        .await?;
+    session.0.write().await.data.insert(claims.clone());
     encode(
         &Header::default(),
         &claims,

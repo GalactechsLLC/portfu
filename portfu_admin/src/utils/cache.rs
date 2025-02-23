@@ -51,7 +51,7 @@ pub struct CacheMap<K: Hash + PartialEq + Eq + Clone, T> {
     recently_used: Arc<RwLock<VecDeque<K>>>,
     entries: DashMap<K, Arc<CacheItem<T>>>,
 }
-impl<'r, K: Hash + PartialEq + Eq + Clone, T> CacheMap<K, T> {
+impl<K: Hash + PartialEq + Eq + Clone, T> CacheMap<K, T> {
     pub fn new(depth: usize, stale_timeout: Option<Duration>, lifetime: Option<Duration>) -> Self {
         Self {
             depth,

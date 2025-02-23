@@ -92,71 +92,19 @@ impl Server {
         let socket_addr = Self::get_socket_addr(&server.config)?;
         info!("Server Starting Up on {socket_addr}");
         let listener = TcpListener::bind(socket_addr).await?;
-        if server.config.ssl_config.is_none()
-            && env::var("PRIVATE_CA_CRT").ok().is_none()
-            && env::var("PRIVATE_CA_KEY").ok().is_none()
-            && env::var("SSL_CERTS").ok().is_none()
-            && env::var("SSL_PRIVATE_KEY").ok().is_none()
-            && env::var("SSL_ROOT_CERTS").ok().is_none()
+        //Check for various ways of using SSL
+        let tls_acceptor = if server.config.ssl_config.is_some()
+            || (env::var("PRIVATE_CA_CRT").ok().is_some()
+                && env::var("PRIVATE_CA_KEY").ok().is_some())
+            || (env::var("SSL_CERTS").ok().is_some()
+                && env::var("SSL_PRIVATE_KEY").ok().is_some()
+                && env::var("SSL_ROOT_CERTS").ok().is_some())
         {
-            env::set_var(
-                "PRIVATE_CA_CRT",
-                r#"-----BEGIN CERTIFICATE-----
-MIIDKTCCAhGgAwIBAgIUEwvVHT/nnEbmFRRPvEhTbO0FwwswDQYJKoZIhvcNAQEL
-BQAwRDENMAsGA1UECgwEQ2hpYTEQMA4GA1UEAwwHQ2hpYSBDQTEhMB8GA1UECwwY
-T3JnYW5pYyBGYXJtaW5nIERpdmlzaW9uMB4XDTIzMTIxNzAxNTY1MloXDTMzMTIx
-NDAxNTY1MlowRDENMAsGA1UECgwEQ2hpYTEQMA4GA1UEAwwHQ2hpYSBDQTEhMB8G
-A1UECwwYT3JnYW5pYyBGYXJtaW5nIERpdmlzaW9uMIIBIjANBgkqhkiG9w0BAQEF
-AAOCAQ8AMIIBCgKCAQEAmSVb4oXGe9HIenJKmy7XcSBJlISestNI8pXz5PJ+wjjb
-GIGgsHFQPNir7eGlqymqKue7Zln1oUfIUbZqq+k/492VRz5MlxiwLLl6MVEHu4zh
-MfkIW1AgXlI2hSnLh7uoELscWMWmMTxuUGsjIUtF3Xgk/rm+Sv7Ki2xHA8DYOD9S
-3Dgj0X/KWrUfjTw6OK+BzasT3Kca+5+nJ3HSmwDKm0+AK/AxzAbseedjyKtkmtOE
-1fPcjeRL1CtGwj6mn+Y1tZeljJKuhQCEZVEDrQZC3N5T83ApSv4l/Yx/F/k04PL0
-akZeJ1CbGXdtVlali82CKHoK5NGieYkMy9Kbh2zL2wIDAQABoxMwETAPBgNVHRMB
-Af8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQAwSVQhg7trxxZcABrp8m4xcCni
-288eRvLO7XibqFrPqomus6xA2quk0P47CBqzd9gxLAoaPVrvQy1Hz2H0h9C4PId/
-aOroKc5SqynpSYWCdxZ6RqsfJHpoHOE9khsmr2U1yVaKFHwGi7TGmK9srmPx4xFt
-7skUli/gpek9oc4lEtWxxmxTMeby/D5XrvMkZRDLYEGzaXwblou6UT3k7Dnf9It/
-iaR8PmpJLvZMWwteka4DKLS6ZFkmPm7L2mFDMsqgKCsKRgI51cSaUlLIbqt1l1xP
-pGjvrkvR+RYVFLDXRNMRftK61665vMyddmKw2xWxbTFssprp4f2yuxjbBE2M
------END CERTIFICATE-----
-"#,
-            );
-        }
-        env::set_var(
-            "PRIVATE_CA_KEY",
-            r#"-----BEGIN PRIVATE KEY-----
-MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCZJVvihcZ70ch6
-ckqbLtdxIEmUhJ6y00jylfPk8n7CONsYgaCwcVA82Kvt4aWrKaoq57tmWfWhR8hR
-tmqr6T/j3ZVHPkyXGLAsuXoxUQe7jOEx+QhbUCBeUjaFKcuHu6gQuxxYxaYxPG5Q
-ayMhS0XdeCT+ub5K/sqLbEcDwNg4P1LcOCPRf8patR+NPDo4r4HNqxPcpxr7n6cn
-cdKbAMqbT4Ar8DHMBux552PIq2Sa04TV89yN5EvUK0bCPqaf5jW1l6WMkq6FAIRl
-UQOtBkLc3lPzcClK/iX9jH8X+TTg8vRqRl4nUJsZd21WVqWLzYIoegrk0aJ5iQzL
-0puHbMvbAgMBAAECggEAQSfKVHEa1XIWy7WVdTl0Ep6sf2H/DNDkf8T5e4YKFQLQ
-gDgiT/8dpo1+dFokvFIhIljt+2k5nlDmcpFcB+DYPE95I9LnDf/EcHrG+HVjh1E0
-PCkZ+5N2+fobVQNHoutdYSTiNgh9IQR3YIJ8cz1Nr6BeiPsocUq+jJvYCMpCk4cA
-j6LiipytZSyDm4azDOHaHMekCZmZvNGzXuIkQWZvpm2pW3Tdw1IUCX5wpp4gUfxT
-DvBTekhBP97suEOaUp9lI6BInbl18fIeaRqakQC+nOlhfNmVI1FCqYKfoUvKbUCB
-xqaC7z2oVNOKtsopm5NGLhBK4NGrR89kX01ORHxOiQKBgQDT9138mGald/fp2NZN
-95OOMKiA9AAc+0aBxOt4udrlhyBfVC0gFzBfHAsB4oksk4nLT5kJf1SIEEjDAqQQ
-hMgVuPqUHrE/2Dn+vcG8SlV2HyeVVE+hGGf5UKCYdDz8/AhFmjPzVIBz6sdN+45U
-yTBb66UK1Fl4d1JEAbnJkfydIwKBgQC49docOnWrYEI3ywcF+tXz6Rbbct9KExCn
-FJH0gLktdifi2oYGUwjrAvOa+9OlJx5Xnd+8JfjTt3hROxFNBk0tWZ8nlXX59kRt
-gWR8yJGrUcOFfQD5yA0ke7KMUYVvgDmenFwXsDUly89pirEsuvLQXsVykHr9tWoq
-kcWou00N6QKBgH5le74sgskZCNSBYQmNIIghq9l5prehfyHS8zdCXK2SLlOqNl50
-dXvBlS7Cj1ntgLWj+XYYX6fjTgA7iunuxAFwFLxOsROJNMwbC3PkP6H4YfpCFFnT
-2+xnj9xZNCUHhUc79M6dDRwSXFa8MtuMPTITCo+yoMedH4k+HjN8wk5RAoGBALfV
-lA2OhTnqmKY/oyFsaI7fU5qWGBzVyi1mopL0BhmLYKV3MNLEYQ7Ehj+6oGd79Ap9
-ncyxqRk1N9706IM4CilS9H8xbGsfPG/itW/ZIf+3arAYyIl7LqTeVV5mAEwMlDhz
-jIz21DxW0DZEZUjiH0i/iVwPAk98qqLY9C56y2FRAoGBAKpFCGYywAIzIbhR45n0
-RY+ru6DG+VCiCl+RnjLx4Hlvvaw9LE3JyhhgwORe+Y5eMSFFamaCx6L/+qjROWIe
-quApe6+W+Ota++RRKHdOVw7Czyom1Kw68Vr7AH4z8tSdFxAkJ6L2ULMrSkJm1rdW
-z6/dmI43PN2//g+0cGs8BL2v
------END PRIVATE KEY-----
-"#,
-        );
-        let certs = load_ssl_certs(&server.config)?;
-        let tls_acceptor = Arc::new(Some(TlsAcceptor::from(certs)));
+            let certs = load_ssl_certs(&server.config)?;
+            Some(TlsAcceptor::from(certs))
+        } else {
+            None
+        };
         let mut http = Builder::new();
         http.half_close(server.config.half_close);
         http.keep_alive(server.config.keep_alive);

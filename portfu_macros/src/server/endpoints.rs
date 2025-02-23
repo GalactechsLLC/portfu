@@ -13,6 +13,7 @@ pub struct EndpointArgs {
     pub options: Punctuated<syn::MetaNameValue, Token![,]>,
 }
 
+#[derive(Copy, Clone)]
 pub enum OutputType {
     Json,
     Bytes,
@@ -142,6 +143,7 @@ impl ToTokens for Endpoint {
             wrappers,
             methods,
             output,
+            eoutput,
         } = args;
         let resource_name = resource_name
             .as_ref()
@@ -175,17 +177,6 @@ impl ToTokens for Endpoint {
         } else {
             quote! {}
         };
-        let struct_def = if has_generics {
-            quote! {
-                pub struct #name #generics {
-                    _phantom_data: std::marker::PhantomData #generic_lables
-                }
-            }
-        } else {
-            quote! {
-                pub struct #name;
-            }
-        };
         let default_struct = if has_generics {
             quote! {
                 impl #generics Default for #name #generic_lables {
@@ -207,17 +198,27 @@ impl ToTokens for Endpoint {
         };
         let function_def = if has_generics {
             let mut new_ast = ast.clone();
-            new_ast.sig.generics = parse_quote! {
-                #generics
-            };
+            new_ast.sig.generics.params.clear();
             quote! { #new_ast }
         } else {
             quote! { #ast }
         };
-        let function_ext = if has_generics {
-            quote! { :: #generic_lables }
+        let struct_def = if has_generics {
+            quote! {
+                pub struct #name #generics {
+                    _phantom_data: std::marker::PhantomData #generic_lables
+                }
+                impl #generics #name #generic_lables {
+                    #function_def
+                }
+            }
         } else {
-            quote! {}
+            quote! {
+                pub struct #name;
+                impl #name {
+                    #function_def
+                }
+            }
         };
         let registrations = quote! {
             let __resource = ::portfu::pfcore::service::ServiceBuilder::new(#path)
@@ -395,6 +396,49 @@ impl ToTokens for Endpoint {
                 quote! {}
             }
         };
+        let err_output_statement = match eoutput {
+            OutputType::Json => {
+                quote! {
+                    match ::portfu::prelude::serde_json::to_vec(&e) {
+                        Ok(v) => {
+                            handle_data.response.headers_mut().insert(
+                                ::portfu::prelude::hyper::header::CONTENT_TYPE,
+                                ::portfu::prelude::hyper::header::HeaderValue::from_static("application/json")
+                            );
+                            let bytes: ::portfu::prelude::hyper::body::Bytes = v.into();
+                            handle_data.response.set_body(
+                                ::portfu::pfcore::service::BodyType::Stream(
+                                    bytes.stream_body()
+                                )
+                            )
+                        }
+                        Err(_) => {
+                            let err = format!("{e:?}");;
+                            let bytes: ::portfu::prelude::hyper::body::Bytes = err.into();
+                            handle_data.response.set_body(
+                                ::portfu::pfcore::service::BodyType::Stream(
+                                    bytes.stream_body()
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+            OutputType::Bytes => {
+                quote! {
+                    let err = format!("{e:?}");;
+                    let bytes: ::portfu::prelude::hyper::body::Bytes = err.into();
+                    handle_data.response.set_body(
+                        ::portfu::pfcore::service::BodyType::Stream(
+                            bytes.stream_body()
+                        )
+                    );
+                }
+            }
+            OutputType::None => {
+                quote! {}
+            }
+        };
         let stream = quote! {
             #(#doc_attributes)*
             #[allow(non_camel_case_types, missing_docs)]
@@ -423,9 +467,8 @@ impl ToTokens for Endpoint {
                     if handle_data.request.request.method() == ::portfu::prelude::http::method::Method::OPTIONS {
                         return Ok(handle_data)
                     }
-                    #function_def
                     #(#dyn_vars)*
-                    match #name #function_ext(#(#additional_function_vars)*).await {
+                    match Self::#name (#(#additional_function_vars)*).await {
                         Ok(t) => {
                             #output_statement
                             Ok(handle_data)
@@ -434,29 +477,7 @@ impl ToTokens for Endpoint {
                             if handle_data.response.status() == ::portfu::prelude::hyper::StatusCode::OK {
                                 *handle_data.response.status_mut() = ::portfu::prelude::http::StatusCode::INTERNAL_SERVER_ERROR;
                             }
-                            match ::portfu::prelude::serde_json::to_vec(&e) {
-                                Ok(v) => {
-                                    handle_data.response.headers_mut().insert(
-                                        ::portfu::prelude::hyper::header::CONTENT_TYPE,
-                                        ::portfu::prelude::hyper::header::HeaderValue::from_static("application/json")
-                                    );
-                                    let bytes: ::portfu::prelude::hyper::body::Bytes = v.into();
-                                    handle_data.response.set_body(
-                                        ::portfu::pfcore::service::BodyType::Stream(
-                                            bytes.stream_body()
-                                        )
-                                    )
-                                }
-                                Err(_) => {
-                                    let err = format!("{e:?}");;
-                                    let bytes: ::portfu::prelude::hyper::body::Bytes = err.into();
-                                    handle_data.response.set_body(
-                                        ::portfu::pfcore::service::BodyType::Stream(
-                                            bytes.stream_body()
-                                        )
-                                    )
-                                }
-                            }
+                            #err_output_statement
                             Ok(handle_data)
                         }
                     }
@@ -477,6 +498,7 @@ struct Args {
     wrappers: Vec<syn::Expr>,
     methods: HashSet<Method>,
     output: OutputType,
+    eoutput: OutputType,
 }
 
 impl Args {
@@ -486,6 +508,8 @@ impl Args {
         let mut wrappers = Vec::new();
         let mut methods = HashSet::from_iter(method);
         let mut output = OutputType::Bytes;
+        let mut eoutput = OutputType::Bytes;
+        let mut e_output_set = false;
         for nv in args.options {
             if nv.path.is_ident("name") {
                 if let syn::Expr::Lit(syn::ExprLit {
@@ -506,7 +530,24 @@ impl Args {
                     ..
                 }) = nv.value
                 {
-                    output = OutputType::try_from(&lit)?
+                    output = OutputType::try_from(&lit)?;
+                    if !e_output_set {
+                        eoutput = output;
+                    }
+                } else {
+                    return Err(syn::Error::new_spanned(
+                        nv.value,
+                        "Attribute name expects literal string",
+                    ));
+                }
+            } else if nv.path.is_ident("eoutput") {
+                e_output_set = true;
+                if let syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(lit),
+                    ..
+                }) = nv.value
+                {
+                    eoutput = OutputType::try_from(&lit)?;
                 } else {
                     return Err(syn::Error::new_spanned(
                         nv.value,
@@ -572,6 +613,7 @@ impl Args {
             wrappers,
             methods,
             output,
+            eoutput,
         })
     }
 }

@@ -110,7 +110,7 @@ impl ToTokens for WebSocketRoute {
                                 let #ident_val: #ident_type = match handle_data.request.get()
                                     .cloned()
                                     .map(|data| ::portfu::pfcore::State(data)).ok_or(
-                                        ::std::io::Error::new(::std::io::ErrorKind::NotFound, format!("Failed to find State"))
+                                        ::std::io::Error::new(::std::io::ErrorKind::NotFound, format!("Failed to find State of type {}", stringify!(#ident_type)))
                                     ) {
                                     Ok(v) => v,
                                     Err(e) => {
@@ -172,6 +172,7 @@ impl ToTokens for WebSocketRoute {
                         .name(#resource_name)
                         .extend_state(shared_state.clone())
                         .filter(::portfu::filters::method::GET.clone())
+                        .extend_state(shared_state.clone())
                         #(.filter(::portfu::pfcore::filters::fn_guard(#filters)))*
                         #(.wrap(#wrappers))*
                         .handler(std::sync::Arc::new(self)).build();
@@ -193,50 +194,80 @@ impl ToTokens for WebSocketRoute {
                 fn name(&self) -> &str {
                     stringify!(#name)
                 }
-                fn service_type(&self) -> ::portfu::pfcore::ServiceType {
-                    ::portfu::pfcore::ServiceType::API
+                fn service_type(&self) -> ::portfu::prelude::ServiceType {
+                    ::portfu::prelude::ServiceType::API
                 }
                 async fn handle(
                     &self,
                     mut handle_data: ::portfu::prelude::ServiceData
                 ) -> Result<::portfu::prelude::ServiceData, (::portfu::prelude::ServiceData, ::std::io::Error)> {
                     use ::portfu::pfcore::IntoStreamBody;
+                    use ::portfu::prelude::futures_util::StreamExt;
+                    ::portfu::prelude::log::info!("Checking for Upgrade");
                     if handle_data.request.request.is_upgrade_request() {
                         #ast
                         #(#dyn_vars)*
-                        log::info!("Upgrading Websocket");
-                        let (response, websocket) = match handle_data.request.request.upgrade() {
-                            Ok((response, websocket)) => (response, websocket),
-                            Err(e) => {
-                                let bytes = ::portfu::prelude::hyper::body::Bytes::from("Failed to Upgrade Request");
-                                handle_data.response.set_body(::portfu::pfcore::service::BodyType::Stream(bytes.stream_body()));
-                                return Ok::<::portfu::prelude::ServiceData, (::portfu::prelude::ServiceData, ::std::io::Error)>(handle_data);
+                        ::portfu::prelude::log::info!("Upgrading Websocket");
+                        let key = match handle_data.request.request.headers().unwrap()
+                            .get("Sec-WebSocket-Key") {
+                            Some(key) => key.clone(),
+                            None => {
+                                return Err((handle_data, ::std::io::Error::new(::std::io::ErrorKind::Other, "Missing Sec-WebSocket-Key Header")));
                             }
                         };
+                        let response = match ::portfu::prelude::http::Response::builder()
+                            .status(::portfu::prelude::http::StatusCode::SWITCHING_PROTOCOLS)
+                            .header(::portfu::prelude::hyper::header::CONNECTION, "upgrade")
+                            .header(::portfu::prelude::hyper::header::UPGRADE, "websocket")
+                            .header("Sec-WebSocket-Accept", &::portfu::prelude::tokio_tungstenite::tungstenite::handshake::derive_accept_key(key.as_bytes()))
+                            .body(::portfu::prelude::http_body_util::Full::default()) {
+                            Ok(response) => response,
+                            Err(e) => {
+                                ::portfu::prelude::log::error!("Failed to build WebSocket Response: {}", e);
+                                return Err((handle_data, ::std::io::Error::new(::std::io::ErrorKind::Other, format!("{e:?}"))));
+                            }
+                        };
+                        ::portfu::prelude::log::info!("Got Past Request Upgrade");
                         let peers = self.peers.clone();
+                        let websocket = match &mut handle_data.request.request {
+                            ::portfu::prelude::IncomingRequest::Stream(request) => Ok(::portfu::prelude::hyper::upgrade::on(request)),
+                            ::portfu::prelude::IncomingRequest::Sized(request) => Ok(::portfu::prelude::hyper::upgrade::on(request)),
+                            ::portfu::prelude::IncomingRequest::Consumed(parts) => Ok(
+                                ::portfu::prelude::hyper::upgrade::on(::portfu::prelude::http::Request::<::portfu::prelude::http_body_util::Empty<()>>::from_parts(
+                                    parts.clone(),
+                                    ::portfu::prelude::http_body_util::Empty::default(),
+                                )),
+                            ),
+                            ::portfu::prelude::IncomingRequest::Empty => Err(
+                                portfu::prelude::tokio_tungstenite::tungstenite::error::ProtocolError::InvalidCloseSequence
+                            ), //maye a different error? Should not ever happen
+                        };
                         ::tokio::spawn( async move {
                             ::tokio::select! {
                                 _ = async {
-                                    let websocket = match websocket.await {
-                                        Ok(ws) => ::portfu::prelude::tokio_tungstenite::WebSocketStream::from_raw_socket(
-                                            ::portfu::prelude::hyper_util::rt::tokio::TokioIo::new(ws),
-                                            ::portfu::prelude::tokio_tungstenite::tungstenite::protocol::Role::Server,
-                                            None
-                                        ).await,
-                                        Err(e) => {
-                                            log::error!("{e:?}");
-                                            return Ok::<(), ::std::io::Error>(());
-                                        }
-                                    };
-                                    let uuid = ::std::sync::Arc::new(::portfu::prelude::uuid::Uuid::new_v4());
-                                    let connection = ::std::sync::Arc::new(::portfu::prelude::WebsocketConnection::new(websocket));
+                                    let stream = websocket.unwrap().await.map_err(|e| {
+                                        ::portfu::prelude::log::error!("Failed to Upgrade Connection: {}", e);
+                                        ::std::io::Error::new(::std::io::ErrorKind::Other, format!("{e:?}"))
+                                    })?;
+                                    let stream = ::portfu::prelude::WebsocketMsgStream::TokioIo( ::portfu::prelude::tokio_tungstenite::WebSocketStream::from_raw_socket(
+                                        portfu::prelude::hyper_util::rt::TokioIo::new(stream),
+                                        ::portfu::prelude::tokio_tungstenite::tungstenite::protocol::Role::Server, None).await
+                                    );
+                                    let (write, read) = stream.split();
+                                    let connection = ::std::sync::Arc::new(::portfu::prelude::WebsocketConnection {
+                                        write: ::tokio::sync::RwLock::new(write),
+                                        read: ::tokio::sync::RwLock::new(read),
+                                    });
+                                    let uuid = ::std::sync::Arc::new( ::portfu::prelude::uuid::Uuid::new_v4());
                                     peers.write().await.insert(*uuid.as_ref(), connection.clone());
-                                    let websocket = ::portfu::prelude::WebSocket {
+                                    let mut websocket = ::portfu::prelude::WebSocket {
                                         connection,
                                         uuid: uuid.clone(),
-                                        peers: peers.clone()
+                                        peers: peers.clone(),
                                     };
-                                    let _ = #name(#(#additional_function_vars)*).await;
+                                    if let Err(e) = #name(#(#additional_function_vars)*).await {
+                                        ::portfu::prelude::log::error!("Websocket Exited: {e:?}");
+                                    }
                                     peers.write().await.remove(uuid.as_ref());
                                     Ok::<(), ::std::io::Error>(())
                                 } => {
@@ -247,7 +278,7 @@ impl ToTokens for WebSocketRoute {
                                 }
                             }
                         });
-                        log::trace!("Sending Upgrade Response");
+                        ::portfu::prelude::log::debug!("Sending Upgrade Response");
                         let (parts, body) = response.into_parts();
                         handle_data.response.set_response(
                             ::portfu::pfcore::service::OutgoingResponse::Stream(

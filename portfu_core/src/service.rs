@@ -14,6 +14,7 @@ use http_body::Frame;
 use http_body_util::{BodyExt, BodyStream, Empty, Full, StreamBody};
 use hyper::body::{Body, Bytes, Incoming, SizeHint};
 use hyper::upgrade::OnUpgrade;
+use log::error;
 use once_cell::sync::Lazy;
 use std::io::{Error, ErrorKind};
 use std::mem::replace;
@@ -378,12 +379,15 @@ impl IncomingRequest {
                 return Err(ProtocolError::MissingSecWebSocketVersionHeader);
             }
             let response = Response::builder()
-                .status(hyper::StatusCode::SWITCHING_PROTOCOLS)
+                .status(StatusCode::SWITCHING_PROTOCOLS)
                 .header(hyper::header::CONNECTION, "upgrade")
                 .header(hyper::header::UPGRADE, "websocket")
                 .header("Sec-WebSocket-Accept", &derive_accept_key(key.as_bytes()))
-                .body(Full::<Bytes>::from("switching to websocket protocol"))
-                .expect("bug: failed to build response");
+                .body(Full::default())
+                .map_err(|e| {
+                    error!("Failed to build WebSocket Response: {}", e);
+                    ProtocolError::HandshakeIncomplete
+                })?;
             match self {
                 IncomingRequest::Stream(request) => Ok((response, hyper::upgrade::on(request))),
                 IncomingRequest::Sized(request) => Ok((response, hyper::upgrade::on(request))),

@@ -5,7 +5,6 @@ pub mod postgres;
 
 use crate::users::User;
 use portfu::prelude::async_trait::async_trait;
-use portfu::prelude::log::debug;
 #[cfg(feature = "postgres")]
 use sqlx::database::HasArguments;
 #[cfg(feature = "postgres")]
@@ -50,11 +49,11 @@ pub trait DatabaseEntry<R: Row, P>: for<'r> FromRow<'r, R> {
         &'q self,
         query: Query<'q, Postgres, <Postgres as HasArguments>::Arguments>,
         field: &str,
-    ) -> Query<'q, Postgres, <Postgres as HasArguments>::Arguments>;
+    ) -> Query<'q, Postgres, <Postgres as HasArguments<'q>>::Arguments>;
     fn database() -> String;
     fn table() -> String;
     fn table_init(connection: PoolConnection<Postgres>) -> Result<(), Error> {
-        debug!("No Init defined: {}", connection.name());
+        log::debug!("No Init defined: {}", connection.name());
         Ok(())
     }
 }

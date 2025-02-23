@@ -17,7 +17,6 @@ http-body.workspace = true
 http-body-util.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
-jsonwebtoken.workspace = true
 log.workspace = true
 mime_guess.workspace = true
 notify.workspace = true
@@ -38,3 +37,8 @@ tokio-tungstenite.workspace = true
 tokio-util.workspace = true
 uuid.workspace = true
 x509-cert.workspace = true
+
+[features]
+default = ["ring"]
+ring = ["rustls/ring"]
+aws-lc = ["rustls/aws-lc-rs"]

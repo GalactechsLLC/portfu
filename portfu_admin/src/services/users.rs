@@ -16,7 +16,8 @@ pub async fn list_users<D: DataStore<i64, User, Error> + Send + Sync + 'static>(
 ) -> Result<Vec<u8>, Error> {
     let user_store: Option<Arc<D>> = data.request.get().cloned();
     if let Some(user_store) = user_store {
-        serde_json::to_vec(&user_store.get_all().await?).map_err(|e| {
+        let to_serial = user_store.get_all().await?;
+        serde_json::to_vec(&to_serial).map_err(|e| {
             Error::new(
                 ErrorKind::InvalidData,
                 format!("Failed to Convert to JSON: {e:?}"),

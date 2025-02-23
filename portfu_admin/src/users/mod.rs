@@ -82,7 +82,7 @@ impl DataStoreEntry<i64> for User {
             "uuid" => self.uuid.to_string() == other,
             "username" => self.username == other,
             "email" => self.email == other,
-            "role" => self.role.to_string().to_ascii_lowercase() == other.to_ascii_lowercase(),
+            "role" => self.role.to_string().eq_ignore_ascii_case(other),
             "first_name" => self.first_name == other,
             "last_name" => self.last_name == other,
             "home_phone" => self.home_phone == other,
@@ -130,7 +130,7 @@ impl DatabaseEntry<PgRow, i64> for User {
         &'q self,
         mut query: Query<'q, Postgres, <Postgres as HasArguments>::Arguments>,
         field: &str,
-    ) -> Query<'q, Postgres, <Postgres as HasArguments>::Arguments> {
+    ) -> Query<'q, Postgres, <Postgres as HasArguments<'q>>::Arguments> {
         if !Self::FIELD_NAMES_AS_SLICE.contains(&field) {
             return query;
         }
