@@ -23,7 +23,7 @@ impl syn::parse::Parse for StaticFileArgs {
         } else {
             let path = PathBuf::from(
                 env::var("CARGO_MANIFEST_DIR")
-                    .expect("Expected to find env var CARGO_MANIFEST_DIR"),
+                    .expect("Expected to find .env var CARGO_MANIFEST_DIR"),
             );
             path.join(as_str)
         };
@@ -54,6 +54,7 @@ impl ToTokens for StaticFiles {
                 let file_len = Path::new(value).metadata().unwrap().len() as usize;
                 let key_name = key
                     .replace(['/', '.', ')', '(', '-', ' ', '+'], "_")
+                    .replace('@', "_at_")
                     .replace("__", "_");
                 let static_bytes_name = format_ident!("STATIC_FILE{}", key_name);
                 static_file_defs.push(quote! {
