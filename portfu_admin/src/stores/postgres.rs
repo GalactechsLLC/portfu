@@ -9,7 +9,9 @@ pub struct PostgresDataStore<P: Sync + Send, T: DataStoreEntry<P> + for<'r> From
     _phantom_data: PhantomData<(P, T)>,
     connection: PgPool,
 }
-impl<P: Sync + Send, T: DataStoreEntry<P> + DatabaseEntry<PgRow, P>> PostgresDataStore<P, T> {
+impl<P: Sync + Send, T: DataStoreEntry<P> + DatabaseEntry<Postgres, PgRow, P>>
+    PostgresDataStore<P, T>
+{
     pub fn new(connection: PgPool) -> Self {
         Self {
             _phantom_data: Default::default(),
@@ -20,7 +22,7 @@ impl<P: Sync + Send, T: DataStoreEntry<P> + DatabaseEntry<PgRow, P>> PostgresDat
 #[async_trait]
 impl<
         P: Sync + Send + for<'r> Encode<'r, Postgres> + for<'r> Decode<'r, Postgres> + Type<Postgres>,
-        T: DataStoreEntry<P> + DatabaseEntry<PgRow, P>,
+        T: DataStoreEntry<P> + DatabaseEntry<Postgres, PgRow, P>,
     > DataStore<P, T, Error> for PostgresDataStore<P, T>
 {
     async fn init(&self) -> Result<(), Error> {

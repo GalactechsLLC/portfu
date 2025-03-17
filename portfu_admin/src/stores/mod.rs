@@ -5,17 +5,11 @@ pub mod postgres;
 
 use crate::users::User;
 use portfu::prelude::async_trait::async_trait;
-#[cfg(feature = "postgres")]
-use sqlx::database::HasArguments;
-#[cfg(feature = "postgres")]
+#[cfg(feature = "sqlx")]
 use sqlx::pool::PoolConnection;
-#[cfg(feature = "postgres")]
-use sqlx::postgres::any::AnyConnectionBackend;
-#[cfg(feature = "postgres")]
+#[cfg(feature = "sqlx")]
 use sqlx::query::Query;
-#[cfg(feature = "postgres")]
-use sqlx::Postgres;
-#[cfg(feature = "postgres")]
+#[cfg(feature = "sqlx")]
 use sqlx::{FromRow, Row};
 use std::io::Error;
 
@@ -43,17 +37,17 @@ pub trait DataStoreEntry<T>: Default + Send + Sync + Eq + Clone + 'static {
     }
 }
 
-#[cfg(feature = "postgres")]
-pub trait DatabaseEntry<R: Row, P>: for<'r> FromRow<'r, R> {
+#[cfg(feature = "sqlx")]
+pub trait DatabaseEntry<DB: sqlx::Database, R: Row, P>: for<'r> FromRow<'r, R> {
     fn bind<'q>(
         &'q self,
-        query: Query<'q, Postgres, <Postgres as HasArguments>::Arguments>,
+        query: Query<'q, DB, DB::Arguments<'q>>,
         field: &str,
-    ) -> Query<'q, Postgres, <Postgres as HasArguments<'q>>::Arguments>;
+    ) -> Query<'q, DB, DB::Arguments<'q>>;
     fn database() -> String;
     fn table() -> String;
-    fn table_init(connection: PoolConnection<Postgres>) -> Result<(), Error> {
-        log::debug!("No Init defined: {}", connection.name());
+    fn table_init(connection: PoolConnection<DB>) -> Result<(), Error> {
+        log::debug!("No Init defined: {:?}", connection);
         Ok(())
     }
 }

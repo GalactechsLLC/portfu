@@ -7,10 +7,12 @@ use portfu::pfcore::service::ServiceGroup;
 use portfu::prelude::*;
 use portfu_admin::services::themes::ThemeSelector;
 use portfu_admin::stores::memory::MemoryDataStore;
+#[cfg(feature = "postgres")]
 use portfu_admin::stores::postgres::PostgresDataStore;
 use portfu_admin::users::User;
 use portfu_admin::PortfuAdmin;
 use simple_logger::SimpleLogger;
+#[cfg(feature = "postgres")]
 use sqlx::postgres::PgPoolOptions;
 use std::env;
 use std::path::PathBuf;
@@ -40,15 +42,19 @@ async fn main() -> Result<(), std::io::Error> {
                     todo!()
                 }
                 DatabaseType::Postgres => {
-                    let pg_pool = PgPoolOptions::new()
-                        .max_connections(100)
-                        .connect(&db_url)
-                        .await
-                        .unwrap();
-                    service_group =
-                        service_group.sub_group(PortfuAdmin::<PostgresDataStore<i64, User>> {
-                            user_datastore: PostgresDataStore::new(pg_pool),
-                        });
+                    #[cfg(feature = "postgres")]
+                    {
+                        let pg_pool = PgPoolOptions::new()
+                            .max_connections(100)
+                            .connect(&db_url)
+                            .await
+                            .unwrap();
+                        service_group =
+                            service_group.sub_group(PortfuAdmin::<PostgresDataStore<i64, User>> {
+                                user_datastore: PostgresDataStore::new(pg_pool),
+                            });
+                    }
+                    panic!("Postgres database support is not enabled: {}", db_url);
                 }
             },
             None => {

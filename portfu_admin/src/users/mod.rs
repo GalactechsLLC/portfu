@@ -4,8 +4,6 @@ use crate::stores::DatabaseEntry;
 use portfu::prelude::uuid::Uuid;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "postgres")]
-use sqlx::database::HasArguments;
-#[cfg(feature = "postgres")]
 use sqlx::postgres::PgRow;
 #[cfg(feature = "postgres")]
 use sqlx::query::Query;
@@ -125,12 +123,12 @@ impl<'r> FromRow<'r, PgRow> for User {
 }
 
 #[cfg(feature = "postgres")]
-impl DatabaseEntry<PgRow, i64> for User {
+impl DatabaseEntry<Postgres, PgRow, i64> for User {
     fn bind<'q>(
         &'q self,
-        mut query: Query<'q, Postgres, <Postgres as HasArguments>::Arguments>,
+        mut query: Query<'q, Postgres, <Postgres as sqlx::Database>::Arguments<'q>>,
         field: &str,
-    ) -> Query<'q, Postgres, <Postgres as HasArguments<'q>>::Arguments> {
+    ) -> Query<'q, Postgres, <Postgres as sqlx::Database>::Arguments<'q>> {
         if !Self::FIELD_NAMES_AS_SLICE.contains(&field) {
             return query;
         }
@@ -168,7 +166,7 @@ impl DatabaseEntry<PgRow, i64> for User {
 }
 
 #[derive(Debug, Default, Clone, Copy, Eq, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[cfg_attr(feature = "postgres", derive(sqlx::Type))]
+#[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
 #[repr(i64)]
 pub enum UserRole {
     #[default]
@@ -208,5 +206,10 @@ impl FromStr for UserRole {
             "superadmin" => Ok(UserRole::SuperAdmin),
             _ => Err(format!("{s} is not a valid UserRole")),
         }
+    }
+}
+impl From<String> for UserRole {
+    fn from(s: String) -> Self {
+        Self::from_str(&s).unwrap_or(UserRole::None)
     }
 }

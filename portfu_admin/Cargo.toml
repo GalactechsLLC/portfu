@@ -23,7 +23,7 @@ serde_json.workspace = true
 serde.workspace = true
 time.workspace = true
 tokio.workspace = true
-sqlx = { version ="0.7.4", optional = true, default-features = false, features = ["time"]}
+sqlx = { version = "0.8.3", optional = true, default-features = false, features = [ "any", "derive", "time"]}
 struct-field-names-as-array.workspace = true
 regex.workspace = true
 
@@ -33,3 +33,4 @@ auth = ["oauth2"]
 github_auth = ["auth", "octocrab"]
 postgres = ["sqlx", "sqlx/postgres"]
 mysql = ["sqlx", "sqlx/mysql"]
+sqlite = ["sqlx", "sqlx/sqlite"]
