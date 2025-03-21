@@ -31,6 +31,7 @@ pub trait BasicAuth {
         &self,
         username: U,
         password: P,
+        session: Arc<RwLock<Session>>
     ) -> Result<Claims, Error>;
 }
 
@@ -72,7 +73,7 @@ pub async fn basic_login<B: BasicAuth + Send + Sync + 'static>(
     let claims: Claims = login_handle
         .0
         .as_ref()
-        .login(body.username, body.password)
+        .login(body.username, body.password, session.0.clone())
         .await?;
     session.0.write().await.data.insert(claims.clone());
     encode(
