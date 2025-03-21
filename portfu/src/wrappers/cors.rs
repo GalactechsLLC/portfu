@@ -41,11 +41,7 @@ impl WrapperFn for Cors {
         "Cors Wrapper"
     }
 
-    async fn before(&self, _: &mut ServiceData) -> WrapperResult {
-        WrapperResult::Continue
-    }
-
-    async fn after(&self, data: &mut ServiceData) -> WrapperResult {
+    async fn before(&self, data: &mut ServiceData) -> WrapperResult {
         if self.allow_credentials {
             data.response.headers_mut().insert(
                 HeaderName::from_static("access-control-allow-credentials"),
@@ -93,6 +89,10 @@ impl WrapperFn for Cors {
                 }
             }
         }
+        WrapperResult::Continue
+    }
+
+    async fn after(&self, _: &mut ServiceData) -> WrapperResult {
         WrapperResult::Continue
     }
 }
