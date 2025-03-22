@@ -13,11 +13,13 @@ pub mod task;
 pub mod wrappers;
 
 use crate::editable::EditResult;
+use crate::filters::FilterFn;
 use crate::server::Server;
 use crate::service::{
     BodyType, IncomingRequest, RefBodyType, Service, ServiceRequest, ServiceResponse,
 };
 use crate::task::Task;
+use crate::wrappers::WrapperFn;
 use async_trait::async_trait;
 use futures_util::{Stream, TryStreamExt};
 use http::Extensions;
@@ -232,6 +234,8 @@ pub trait ServiceRegister {
 pub static mut STATIC_REGISTRY: Lazy<ServiceRegistry> = Lazy::new(|| ServiceRegistry {
     services: vec![],
     tasks: vec![],
+    wrappers: vec![],
+    filters: vec![],
     default_service: None,
 });
 
@@ -240,9 +244,13 @@ pub struct ServiceRegistry {
     pub services: Vec<Arc<Service>>,
     pub default_service: Option<Arc<Service>>,
     pub tasks: Vec<Arc<Task>>,
+    pub filters: Vec<Arc<dyn FilterFn + Sync + Send>>,
+    pub wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
 }
 impl ServiceRegistry {
-    pub fn register(&mut self, service: Service) {
+    pub fn register(&mut self, mut service: Service) {
+        service.wrappers.extend(self.wrappers.clone());
+        service.filters.extend(self.filters.clone());
         self.services.push(Arc::new(service));
     }
 }

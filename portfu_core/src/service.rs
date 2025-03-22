@@ -147,7 +147,7 @@ impl ServiceGroup {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Service {
     pub path: Arc<Route>,
     pub name: String,

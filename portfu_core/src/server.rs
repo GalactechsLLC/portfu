@@ -1,9 +1,9 @@
-use crate::filters::{Filter, FilterFn, FilterResult};
+use crate::filters::Filter;
 use crate::service::{BodyType, IncomingRequest, Service, ServiceRequest, ServiceResponse};
 use crate::signal::await_termination;
 use crate::ssl::load_ssl_certs;
 use crate::task::{Task, TaskFn};
-use crate::wrappers::{WrapperFn, WrapperResult};
+use crate::wrappers::WrapperFn;
 use crate::{IntoStreamBody, ServiceData, ServiceRegister, ServiceRegistry, StreamingBody};
 use http::{Extensions, Request, Response, StatusCode};
 use http_body_util::Full;
@@ -79,8 +79,6 @@ pub struct Server {
     pub config: ServerConfig,
     pub run: Arc<AtomicBool>,
     pub shared_state: Arc<RwLock<Extensions>>,
-    filters: Vec<Arc<dyn FilterFn + Sync + Send>>,
-    wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
 }
 impl Server {
     pub async fn run(self) -> Result<(), Error> {
@@ -211,39 +209,22 @@ impl Server {
         request.extensions_mut().insert(peer_id);
         request.extensions_mut().insert(server.shared_state.clone()); //Put the Server Shared State in the Request Extensions
         let mut response: ServiceResponse = ServiceResponse::new();
-        let handle = if !server.filters.is_empty() {
-            let mut handle = true;
-            for f in server.filters.iter() {
-                if f.filter(&request).await != FilterResult::Allow {
-                    handle = false;
-                    break;
-                }
+        let mut handler = None;
+        let services: Vec<Arc<Service>> = server.registry.read().await.services.to_vec();
+        for service in services {
+            if service.handles(&request).await {
+                handler = Some(service.clone());
+                break;
             }
-            handle
-        } else {
-            true
-        };
-        if !handle {
-            *response.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
-            Ok(response.into())
-        } else {
-            let mut handler = None;
-            let services: Vec<Arc<Service>> = server.registry.read().await.services.to_vec();
-            for service in services {
-                if service.handles(&request).await {
-                    handler = Some(service.clone());
-                    break;
-                }
-            }
-            match handler {
-                Some(service) => handle_service(request, service, server.clone(), response).await,
-                None => {
-                    if let Some(service) = server.registry.read().await.default_service.clone() {
-                        handle_service(request, service, server.clone(), response).await
-                    } else {
-                        *response.status_mut() = StatusCode::NOT_FOUND;
-                        Ok(response.into())
-                    }
+        }
+        match handler {
+            Some(service) => handle_service(request, service, server.clone(), response).await,
+            None => {
+                if let Some(service) = server.registry.read().await.default_service.clone() {
+                    handle_service(request, service, server.clone(), response).await
+                } else {
+                    *response.status_mut() = StatusCode::NOT_FOUND;
+                    Ok(response.into())
                 }
             }
         }
@@ -267,14 +248,6 @@ pub async fn handle_service(
         },
         response,
     };
-    for func in server.wrappers.iter() {
-        match func.before(&mut service_data).await {
-            WrapperResult::Continue => {}
-            WrapperResult::Return => {
-                return Ok(service_data.response.into());
-            }
-        }
-    }
     service_data = service
         .handle(service_data)
         .await
@@ -288,14 +261,6 @@ pub async fn handle_service(
                 .set_body(BodyType::Sized(Full::new(Bytes::from(format!("{:?}", e)))));
             sd
         });
-    for func in server.wrappers.iter() {
-        match func.after(&mut service_data).await {
-            WrapperResult::Continue => {}
-            WrapperResult::Return => {
-                return Ok(service_data.response.into());
-            }
-        }
-    }
     Ok(service_data.response.into())
 }
 
@@ -304,8 +269,6 @@ pub struct ServerBuilder {
     config: ServerConfig,
     shared_state: Extensions,
     run_handle: Arc<AtomicBool>,
-    filters: Vec<Arc<dyn FilterFn + Sync + Send>>,
-    wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
 }
 pub struct SharedState<T> {
     inner: Arc<T>,
@@ -328,13 +291,13 @@ impl ServerBuilder {
             services: ServiceRegistry {
                 services: vec![],
                 tasks: vec![],
+                wrappers: vec![],
+                filters: vec![],
                 default_service: None,
             },
             config,
             shared_state: Extensions::default(),
             run_handle: Arc::new(AtomicBool::new(true)),
-            filters: vec![],
-            wrappers: vec![],
         }
     }
     pub fn host(self, host: String) -> Self {
@@ -365,12 +328,12 @@ impl ServerBuilder {
     }
     pub fn filter(self, filter: Filter) -> Self {
         let mut s = self;
-        s.filters.push(Arc::new(filter));
+        s.services.filters.push(Arc::new(filter));
         s
     }
     pub fn wrap(self, wrapper: Arc<dyn WrapperFn + Sync + Send>) -> Self {
         let mut s = self;
-        s.wrappers.push(wrapper);
+        s.services.wrappers.push(wrapper);
         s
     }
     pub fn task<T: Into<Task>>(mut self, task: T) -> Self {
@@ -396,8 +359,6 @@ impl ServerBuilder {
             config: self.config,
             run: self.run_handle,
             shared_state: Arc::new(RwLock::new(self.shared_state)),
-            filters: self.filters,
-            wrappers: self.wrappers,
         }
     }
 }
@@ -407,13 +368,13 @@ impl Default for ServerBuilder {
             services: ServiceRegistry {
                 services: vec![],
                 tasks: vec![],
+                filters: vec![],
+                wrappers: vec![],
                 default_service: None,
             },
             config: ServerConfig::default(),
             shared_state: Extensions::default(),
             run_handle: Arc::new(AtomicBool::new(true)),
-            filters: vec![],
-            wrappers: vec![],
         }
     }
 }

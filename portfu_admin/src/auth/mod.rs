@@ -31,7 +31,7 @@ pub trait BasicAuth {
         &self,
         username: U,
         password: P,
-        session: Arc<RwLock<Session>>
+        session: Arc<RwLock<Session>>,
     ) -> Result<Claims, Error>;
 }
 
