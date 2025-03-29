@@ -92,6 +92,7 @@ impl ToTokens for WebSocketRoute {
                     let body_ident: Ident = Ident::new("Body", segment.ident.span());
                     let state_ident: Ident = Ident::new("State", segment.ident.span());
                     let ws_ident: Ident = Ident::new("WebSocket", segment.ident.span());
+                    let headers: Ident = Ident::new("HeaderMap", segment.ident.span());
                     if body_ident == segment.ident {
                         panic!("Body Not Supported for Websocket");
                     } else if state_ident == segment.ident {
@@ -126,6 +127,11 @@ impl ToTokens for WebSocketRoute {
                     } else if ws_ident == segment.ident {
                         additional_function_vars.push(quote! {
                             websocket,
+                        });
+                        continue;
+                    } else if headers == segment.ident {
+                        additional_function_vars.push(quote! {
+                            headers,
                         });
                         continue;
                     }
@@ -208,11 +214,15 @@ impl ToTokens for WebSocketRoute {
                         #ast
                         #(#dyn_vars)*
                         ::portfu::prelude::log::info!("Upgrading Websocket");
-                        let key = match handle_data.request.request.headers().unwrap()
-                            .get("Sec-WebSocket-Key") {
-                            Some(key) => key.clone(),
+                        let key = match handle_data.request.request.headers() {
+                            Some(header_map) => match header_map.get("Sec-WebSocket-Key") {
+                                Some(key) => key.clone(),
+                                None => {
+                                    return Err((handle_data, ::std::io::Error::new(::std::io::ErrorKind::Other, "Missing Sec-WebSocket-Key Header")));
+                                }
+                            }
                             None => {
-                                return Err((handle_data, ::std::io::Error::new(::std::io::ErrorKind::Other, "Missing Sec-WebSocket-Key Header")));
+                                return Err((handle_data, ::std::io::Error::new(::std::io::ErrorKind::Other, "No Headers in Request")));
                             }
                         };
                         let response = match ::portfu::prelude::http::Response::builder()
@@ -229,6 +239,7 @@ impl ToTokens for WebSocketRoute {
                         };
                         ::portfu::prelude::log::info!("Got Past Request Upgrade");
                         let peers = self.peers.clone();
+                        let headers = handle_data.request.request.headers().cloned().unwrap_or_default();
                         let websocket = match &mut handle_data.request.request {
                             ::portfu::prelude::IncomingRequest::Stream(request) => Ok(::portfu::prelude::hyper::upgrade::on(request)),
                             ::portfu::prelude::IncomingRequest::Sized(request) => Ok(::portfu::prelude::hyper::upgrade::on(request)),
@@ -239,13 +250,13 @@ impl ToTokens for WebSocketRoute {
                                 )),
                             ),
                             ::portfu::prelude::IncomingRequest::Empty => Err(
-                                portfu::prelude::tokio_tungstenite::tungstenite::error::ProtocolError::InvalidCloseSequence
-                            ), //maye a different error? Should not ever happen
+                                ::std::io::Error::new(::std::io::ErrorKind::Other, format!("Empty Socket Request"))
+                            ),
                         };
                         ::tokio::spawn( async move {
                             ::tokio::select! {
                                 _ = async {
-                                    let stream = websocket.unwrap().await.map_err(|e| {
+                                    let stream = websocket?.await.map_err(|e| {
                                         ::portfu::prelude::log::error!("Failed to Upgrade Connection: {}", e);
                                         ::std::io::Error::new(::std::io::ErrorKind::Other, format!("{e:?}"))
                                     })?;
