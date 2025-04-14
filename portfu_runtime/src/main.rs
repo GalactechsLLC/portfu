@@ -30,10 +30,11 @@ async fn main() -> Result<(), std::io::Error> {
     info!("{test_res:?}");
     let mut service_group = ServiceGroup::default();
     for directory in config.directories {
-        service_group = service_group.sub_group(DynamicFiles {
+        let sub_group: ServiceGroup = ServiceGroup::try_from(DynamicFiles {
             root_directory: PathBuf::from(directory),
             editable: true,
-        });
+        })?;
+        service_group = service_group.sub_group(sub_group);
     }
     if let Some(db_url) = config.database_url {
         match config.database_type {

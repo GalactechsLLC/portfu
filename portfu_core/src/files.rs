@@ -22,20 +22,21 @@ pub struct DynamicFiles {
     pub root_directory: PathBuf,
     pub editable: bool,
 }
-impl From<DynamicFiles> for ServiceGroup {
-    fn from(slf: DynamicFiles) -> ServiceGroup {
+impl TryFrom<DynamicFiles> for ServiceGroup {
+    type Error = Error;
+    fn try_from(slf: DynamicFiles) -> Result<ServiceGroup, Error> {
         let mut files = HashMap::new();
-        log::info!("Searching for files at: {:?}", &slf.root_directory);
-        if !slf.root_directory.exists() {
-            if let Err(e) = std::fs::create_dir(&slf.root_directory) {
+        let root_directory = slf.root_directory.canonicalize()?;
+        log::info!("Searching for files at: {:?}", &root_directory);
+        if !root_directory.exists() {
+            if let Err(e) = std::fs::create_dir(&root_directory) {
                 log::error!("Error Creating Root Directory: {e:?}");
             }
         }
-        if let Err(e) = read_directory(&slf.root_directory, slf.root_directory.clone(), &mut files)
-        {
+        if let Err(e) = read_directory(&root_directory, root_directory.clone(), &mut files) {
             log::error!("Error Loading files: {e:?}");
         }
-        ServiceGroup {
+        Ok(ServiceGroup {
             filters: vec![],
             wrappers: vec![],
             tasks: vec![],
@@ -58,7 +59,7 @@ impl From<DynamicFiles> for ServiceGroup {
                 })
                 .collect(),
             shared_state: Default::default(),
-        }
+        })
     }
 }
 
