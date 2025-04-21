@@ -5,13 +5,7 @@ use rsa::pkcs1::DecodeRsaPrivateKey;
 use rsa::pkcs1v15::SigningKey;
 use rsa::pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey};
 use rustls::client::danger::HandshakeSignatureValid;
-#[cfg(all(feature = "aws-lc", not(feature = "ring")))]
-use rustls::crypto::aws_lc_rs::default_provider;
-#[cfg(all(feature = "aws-lc", not(feature = "ring")))]
-use rustls::crypto::aws_lc_rs::sign::RsaSigningKey;
-#[cfg(all(feature = "ring", not(feature = "aws-lc")))]
 use rustls::crypto::ring::default_provider;
-#[cfg(all(feature = "ring", not(feature = "aws-lc")))]
 use rustls::crypto::ring::sign::RsaSigningKey;
 use rustls::pki_types::{CertificateDer, DnsName, PrivateKeyDer, ServerName, UnixTime};
 use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
@@ -41,7 +35,7 @@ use x509_cert::time::{Time, Validity};
 use x509_cert::Certificate;
 
 pub fn load_ssl_certs(config: &ServerConfig) -> Result<Arc<rustls::ServerConfig>, Error> {
-    default_provider().install_default().unwrap();
+    default_provider().install_default().unwrap_or_default();
     let (certs, key, root_certs) = if let Some(ssl_info) = &config.ssl_config {
         (
             load_certs(ssl_info.certs.as_bytes())?,

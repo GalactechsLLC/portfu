@@ -99,6 +99,29 @@ impl WebSocket {
             }
         }
     }
+    pub async fn send_all(&self, msgs: Vec<Message>) -> Result<(), Error> {
+        for msg in msgs {
+            if let Err(e) = self.connection.write.write().await.feed(msg).await {
+                let _ = self.connection.write.write().await.flush().await;
+                return Err(Error::new(
+                    ErrorKind::Other,
+                    format!("Failed to Send Websocket Message: {e:?}"),
+                ));
+            }
+        }
+        self.connection
+            .write
+            .write()
+            .await
+            .flush()
+            .await
+            .map_err(|e| {
+                Error::new(
+                    ErrorKind::Other,
+                    format!("Failed to Send Websocket Message: {e:?}"),
+                )
+            })
+    }
     pub async fn broadcast(&self, msg: Message) -> Result<(), Error> {
         let mut stream = self.connection.write.write().await;
         stream.send(msg.clone()).await.map_err(|e| {

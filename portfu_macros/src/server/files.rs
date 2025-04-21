@@ -41,9 +41,10 @@ impl ToTokens for Files {
         let out = quote! {
             #[allow(non_camel_case_types, missing_docs)]
             pub struct #name;
-            impl From<#name> for ::portfu::prelude::ServiceGroup {
-                fn from(slf: #name) -> ::portfu::prelude::ServiceGroup {
-                    ::portfu::prelude::ServiceGroup::from(::portfu::pfcore::files::DynamicFiles {
+            impl TryFrom<#name> for ::portfu::prelude::ServiceGroup {
+                type Error = std::io::Error;
+                fn try_from(slf: #name) -> Result<::portfu::prelude::ServiceGroup, std::io::Error> {
+                    ::portfu::prelude::ServiceGroup::try_from(::portfu::pfcore::files::DynamicFiles {
                         root_directory: std::path::PathBuf::from(#root_path),
                         editable: true
                     })

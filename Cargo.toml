@@ -29,7 +29,7 @@ notify = "6.1.1"
 once_cell = "1.19.0"
 portfu = {path = "./portfu", version = "1.2.0", default-features = false}
 portfu_admin = {path = "./portfu_admin", version = "1.2.0", default-features = false}
-portfu_core = {path = "./portfu_core", version = "1.2.0", default-features = false, features = ["ring"]}
+portfu_core = {path = "./portfu_core", version = "1.2.0", default-features = false}
 portfu_macros = {path = "./portfu_macros", version = "1.2.0", default-features = false}
 portfu_operator = {path = "./portfu_operator", version = "1.2.0", default-features = false}
 portfu_operator_lib = {path = "./portfu_operator", version = "1.2.0", default-features = false}
