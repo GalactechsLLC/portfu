@@ -57,27 +57,12 @@ pub struct AuthRequest {
     state: String,
 }
 
+pub type CallbackFn =
+    Pin<Box<dyn Fn(usize) -> Box<dyn Future<Output = Result<(), Error>>> + Send + Sync + 'static>>;
+
 pub enum OAuthCallbackFn {
-    OnSuccess(
-        Pin<
-            Box<
-                dyn Fn(usize) -> Box<dyn Future<Output = Result<(), Error>>>
-                    + Send
-                    + Sync
-                    + 'static,
-            >,
-        >,
-    ),
-    OnFailure(
-        Pin<
-            Box<
-                dyn Fn(usize) -> Box<dyn Future<Output = Result<(), Error>>>
-                    + Send
-                    + Sync
-                    + 'static,
-            >,
-        >,
-    ),
+    OnSuccess(CallbackFn),
+    OnFailure(CallbackFn),
 }
 
 pub struct OAuthLoginHandler {
@@ -174,7 +159,7 @@ impl ServiceHandler for OAuthAuthHandler {
         let session = if let Some(session) = data.request.get_mut::<Arc<RwLock<Session>>>() {
             session
         } else {
-            return send_internal_error(data, "Failed to Find Session to Auth".to_string());
+            return send_internal_error(data, "Failed to Find Session to Auth");
         };
         let code = AuthorizationCode::new(body.code.clone());
         let _token_state = CsrfToken::new(body.state.clone());
@@ -218,7 +203,7 @@ impl ServiceHandler for OAuthAuthHandler {
         };
         let mut claims: Claims = session.read().await.data.get().cloned().unwrap_or(Claims {
             aud: self.config.claims_audience.clone(),
-            exp: self.config.claims_expire_time.clone(), //30 * 60, //30 Minutes
+            exp: self.config.claims_expire_time, //30 * 60, //30 Minutes
             iat: OffsetDateTime::now_utc().unix_timestamp() as usize,
             iss: self.config.claims_issuer.clone(),
             nbf: OffsetDateTime::now_utc().unix_timestamp() as usize,
@@ -315,8 +300,8 @@ impl OAuthLoginBuilder {
             )
             .claims_expire_time(
                 env::var("OAUTH_EXPIRE_TIME")
-                    .map(|s| s.parse().unwrap_or_else(|_| 30usize * 60usize))
-                    .unwrap_or_else(|_| 30usize * 60usize),
+                    .map(|s| s.parse().unwrap_or(30usize * 60usize))
+                    .unwrap_or(30usize * 60usize),
             )
             .token_url(
                 TokenUrl::new(format!("https://{}/oauth/access_token", oauthserver))

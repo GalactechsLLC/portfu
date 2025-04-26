@@ -35,7 +35,7 @@ use x509_cert::time::{Time, Validity};
 use x509_cert::Certificate;
 
 pub fn load_ssl_certs(config: &ServerConfig) -> Result<Arc<rustls::ServerConfig>, Error> {
-    default_provider().install_default().unwrap();
+    default_provider().install_default().unwrap_or_default();
     let (certs, key, root_certs) = if let Some(ssl_info) = &config.ssl_config {
         (
             load_certs(ssl_info.certs.as_bytes())?,
