@@ -70,7 +70,12 @@ impl Route {
             Route::Static(_, _) => None,
             Route::Segmented(_, r) => {
                 if let Some(captures) = r.captures(path) {
-                    captures.name(name).map(|m| m.as_str().to_string())
+                    captures.name(name).map(|m| {
+                        //Decode the Value
+                        urlencoding::decode(m.as_str())
+                            .map(|v| v.to_string())
+                            .unwrap_or(m.as_str().to_string())
+                    })
                 } else {
                     None
                 }
