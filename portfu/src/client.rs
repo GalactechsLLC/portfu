@@ -1,4 +1,4 @@
-use std::io::{Error, ErrorKind};
+use crate::prelude::{WebSocket, WebsocketConnection, WebsocketMsgStream};
 use http::{HeaderMap, Method, Request, Response, Uri};
 use http_body_util::{BodyStream, Empty, Full, StreamBody};
 use hyper::body::{Body, Bytes, Frame, Incoming, SizeHint};
@@ -8,6 +8,7 @@ use pfcore::PinnedBody;
 use rustls::client::ClientConfig;
 use rustls::pki_types::ServerName;
 use rustls::RootCertStore;
+use std::io::{Error, ErrorKind};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -16,7 +17,6 @@ use tokio_rustls::TlsConnector;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use uuid::Uuid;
-use crate::prelude::{WebSocket, WebsocketConnection, WebsocketMsgStream};
 
 pub enum SupportedBody {
     Empty(Empty<Bytes>),
