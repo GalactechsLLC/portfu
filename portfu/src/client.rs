@@ -1,7 +1,8 @@
-use http::{Method, Request, Response, Uri};
+use std::io::{Error, ErrorKind};
+use http::{HeaderMap, Method, Request, Response, Uri};
 use http_body_util::{BodyStream, Empty, Full, StreamBody};
 use hyper::body::{Body, Bytes, Frame, Incoming, SizeHint};
-use log::error;
+use log::{debug, error};
 use pfcore::service::BodyType;
 use pfcore::PinnedBody;
 use rustls::client::ClientConfig;
@@ -12,6 +13,10 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
+use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use uuid::Uuid;
+use crate::prelude::{WebSocket, WebsocketConnection, WebsocketMsgStream};
 
 pub enum SupportedBody {
     Empty(Empty<Bytes>),
@@ -123,4 +128,23 @@ pub async fn send_request<T: Into<SupportedBody>>(
     let path = url.path();
     let req = Request::builder().method(method).uri(path).body(body)?;
     Ok(sender.send_request(req).await?)
+}
+
+pub async fn new_websocket(url: &str, headers: Option<HeaderMap>) -> Result<WebSocket, Error> {
+    debug!("Starting Websocket Connection to: {}", url);
+    let mut request = (&url)
+        .into_client_request()
+        .map_err(|e| Error::new(ErrorKind::Other, format!("{:?}", e)))?;
+    if let Some(headers) = headers {
+        request.headers_mut().extend(headers.into_iter())
+    }
+    let (ws_stream, response) = match connect_async(request).await {
+        Ok(result) => result,
+        Err(e) => return Err(Error::new(ErrorKind::Other, format!("{:?}", e))),
+    };
+    debug!("Connected with HTTP status: {}", response.status());
+    Ok(WebSocket::new(
+        WebsocketConnection::new(WebsocketMsgStream::Tls(ws_stream)),
+        Arc::new(Uuid::new_v4()),
+    ))
 }
