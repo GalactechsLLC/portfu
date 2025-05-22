@@ -132,7 +132,7 @@ pub async fn send_request<T: Into<SupportedBody>>(
 
 pub async fn new_websocket(url: &str, headers: Option<HeaderMap>) -> Result<WebSocket, Error> {
     debug!("Starting Websocket Connection to: {}", url);
-    let mut request = (&url)
+    let mut request = url
         .into_client_request()
         .map_err(|e| Error::new(ErrorKind::Other, format!("{:?}", e)))?;
     if let Some(headers) = headers {

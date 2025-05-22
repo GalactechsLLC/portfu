@@ -97,7 +97,7 @@ impl ToTokens for StaticFiles {
             })
             .collect();
         let static_file_group = quote! {
-            ServiceGroup {
+            ::portfu::pfcore::service::ServiceGroup {
                 services: vec![
                     #(#service_defs),*
                 ],
