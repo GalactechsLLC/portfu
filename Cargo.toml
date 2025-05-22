@@ -41,7 +41,7 @@ quote = "1.0.36"
 rand = "0.8.5"
 regex = "1.10.4"
 reqwest = {version="0.12.4", default-features = false, features = ["rustls-tls", "json", "stream"] }
-rustls = { version= "0.23.23", default-features = false, features = ["std", "ring"] }
+rustls = {version = "0.23.27" }
 rustls-pemfile = "2.1.2"
 rsa = { version = "0.9.6", features = ["std", "pem", "sha2"] }
 serde = { version = "1.0.203", features = ["derive"] }
@@ -53,8 +53,8 @@ struct-field-names-as-array = "0.3.0"
 syn = { version="2.0.66", features = ["extra-traits"]}
 time = { version = "0.3.36", features = ["serde-well-known"] }
 tokio = {version = "1.38.0", features=["rt-multi-thread", "sync", "signal", "macros", "process", "time", "fs", "net"]}
-tokio-rustls = "0.26.0"
-tokio-tungstenite = {version = "0.21.0", features = ["rustls-tls-webpki-roots", "rustls"] }
+tokio-rustls = { version = "0.26.2" }
+tokio-tungstenite = {version = "0.26.2", features = ["rustls", "rustls-tls-webpki-roots"] }
 tokio-util = "0.7.11"
 url = "2.5.0"
 uuid = {version = "1.8.0", features = ["v4", "serde"]}
