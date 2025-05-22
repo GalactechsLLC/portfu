@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use http::{HeaderName, HeaderValue};
+use log::error;
 use pfcore::wrappers::{WrapperFn, WrapperResult};
 use pfcore::ServiceData;
 
@@ -8,13 +9,13 @@ pub struct Cors {
     allow_credentials: bool,
     allowed_origins: Vec<String>,
     allowed_methods: Vec<String>,
-    allowed_headers: Vec<String>,
+    allowed_headers: Vec<HeaderName>,
 }
 impl Cors {
     pub fn new(
         allowed_origins: Vec<String>,
         allowed_methods: Vec<String>,
-        allowed_headers: Vec<String>,
+        allowed_headers: Vec<HeaderName>,
         allow_credentials: bool,
     ) -> Self {
         Self {
@@ -68,10 +69,8 @@ impl WrapperFn for Cors {
             );
         } else if let Some(headers) = data.request.request.headers() {
             if let Some(origin) = headers.get("origin") {
-                if self
-                    .allowed_origins
-                    .contains(&origin.to_str().unwrap_or_default().to_string())
-                {
+                let origin_str = origin.to_str().unwrap_or_default().to_owned();
+                if self.allowed_origins.contains(&origin_str) {
                     data.response.headers_mut().insert(
                         HeaderName::from_static("access-control-allow-origin"),
                         origin.clone(),
@@ -81,10 +80,29 @@ impl WrapperFn for Cors {
                             .headers_mut()
                             .insert(HeaderName::from_static("access-control-allow-methods"), val);
                     }
-                    if let Ok(val) = HeaderValue::from_str(&self.allowed_headers.join(",")) {
-                        data.response
-                            .headers_mut()
-                            .insert(HeaderName::from_static("access-control-allow-headers"), val);
+                    let mut allowed = vec![];
+                    for (k, _) in headers {
+                        if self.allowed_headers.contains(k) {
+                            allowed.push(k);
+                        }
+                    }
+                    if !allowed.is_empty() {
+                        let headers = allowed
+                            .into_iter()
+                            .map(|v| v.to_string())
+                            .collect::<Vec<String>>()
+                            .join(",");
+                        match HeaderValue::from_str(&headers) {
+                            Ok(val) => {
+                                data.response.headers_mut().insert(
+                                    HeaderName::from_static("access-control-allow-headers"),
+                                    val,
+                                );
+                            }
+                            Err(e) => {
+                                error!("Error parsing allowed headers: {headers} - {:?}", e);
+                            }
+                        }
                     }
                 }
             }
