@@ -1,14 +1,20 @@
 use crate::filters::{FilterFn, FilterResult};
 use crate::routes::Route;
+use crate::task::{Task, TaskFn};
 use crate::wrappers::{WrapperFn, WrapperResult};
-use crate::{ServiceData, ServiceHandler, ServiceRegister, ServiceRegistry};
+use crate::{
+    IntoStreamBody, ServiceData, ServiceHandler, ServiceRegister, ServiceRegistry, StreamingBody,
+};
 use futures_util::TryStreamExt;
-use http::request::Parts;
-use http::{Extensions, HeaderMap, HeaderValue, Method, Request, Response, Uri};
+use http::{
+    request, response, Extensions, HeaderMap, HeaderValue, Method, Request, Response, StatusCode,
+    Uri,
+};
 use http_body::Frame;
 use http_body_util::{BodyExt, BodyStream, Empty, Full, StreamBody};
 use hyper::body::{Body, Bytes, Incoming, SizeHint};
 use hyper::upgrade::OnUpgrade;
+use log::error;
 use once_cell::sync::Lazy;
 use std::io::{Error, ErrorKind};
 use std::mem::replace;
@@ -17,13 +23,16 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio_tungstenite::tungstenite::error::ProtocolError;
 use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
+use uuid::Uuid;
 
 #[derive(Debug)]
 pub struct ServiceBuilder {
     path: Route,
     name: Option<String>,
+    shared_state: Extensions,
     filters: Vec<Arc<dyn FilterFn + Sync + Send>>,
     wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
+    tasks: Vec<Arc<dyn TaskFn + Send + Sync>>,
     handler: Option<Arc<dyn ServiceHandler + Send + Sync>>,
 }
 impl ServiceBuilder {
@@ -33,33 +42,45 @@ impl ServiceBuilder {
             name: None,
             filters: vec![],
             wrappers: vec![],
+            tasks: vec![],
+            shared_state: Default::default(),
             handler: None,
         }
     }
-    pub fn name<S: AsRef<str>>(self, path: S) -> Self {
-        let mut s = self;
-        s.name = Some(path.as_ref().to_string());
-        s
+    pub fn name<S: AsRef<str>>(mut self, path: S) -> Self {
+        self.name = Some(path.as_ref().to_string());
+        self
     }
-    pub fn filter(self, filter: Arc<dyn FilterFn + Sync + Send>) -> Self {
-        let mut s = self;
-        s.filters.push(filter);
-        s
+    pub fn shared_state<T: Send + Sync + 'static>(mut self, shared_state: T) -> Self {
+        self.shared_state.insert(Arc::new(shared_state));
+        self
     }
-    pub fn wrap(self, wrappers: Arc<dyn WrapperFn + Sync + Send>) -> Self {
-        let mut s = self;
-        s.wrappers.push(wrappers);
-        s
+    pub fn extend_state(mut self, shared_state: Extensions) -> Self {
+        self.shared_state.extend(shared_state);
+        self
     }
-    pub fn handler(self, service_handler: Arc<dyn ServiceHandler + Send + Sync>) -> Self {
-        let mut s = self;
-        s.handler = Some(service_handler);
-        s
+    pub fn filter(mut self, filter: Arc<dyn FilterFn + Sync + Send>) -> Self {
+        self.filters.push(filter);
+        self
+    }
+    pub fn task(mut self, task: Arc<dyn TaskFn + Sync + Send>) -> Self {
+        self.tasks.push(task);
+        self
+    }
+    pub fn wrap(mut self, wrappers: Arc<dyn WrapperFn + Sync + Send>) -> Self {
+        self.wrappers.push(wrappers);
+        self
+    }
+    pub fn handler(mut self, service_handler: Arc<dyn ServiceHandler + Send + Sync>) -> Self {
+        self.handler = Some(service_handler);
+        self
     }
     pub fn build(self) -> Service {
         Service {
             path: Arc::new(self.path),
             name: self.name.unwrap_or_default(),
+            uuid: Uuid::new_v4(),
+            shared_state: self.shared_state,
             filters: self.filters,
             wrappers: self.wrappers,
             handler: self.handler,
@@ -70,13 +91,21 @@ impl ServiceBuilder {
 #[derive(Default)]
 pub struct ServiceGroup {
     pub services: Vec<Service>,
+    pub shared_state: Extensions,
     pub filters: Vec<Arc<dyn FilterFn + Sync + Send>>,
     pub wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
+    pub tasks: Vec<Arc<dyn TaskFn + Sync + Send>>,
 }
 impl ServiceRegister for ServiceGroup {
-    fn register(self, service_registry: &mut ServiceRegistry) {
+    fn register(self, service_registry: &mut ServiceRegistry, shared_state: Extensions) {
         for service in self.services {
-            service.register(service_registry);
+            service.register(service_registry, shared_state.clone());
+        }
+        for task in self.tasks {
+            service_registry.tasks.push(Arc::new(Task {
+                name: task.name().to_string(),
+                task_fn: task,
+            }));
         }
     }
 }
@@ -85,13 +114,22 @@ impl ServiceGroup {
         let mut service = service.into();
         service.filters.extend(self.filters.clone());
         service.wrappers.extend(self.wrappers.clone());
+        service.shared_state.extend(self.shared_state.clone());
         self.services.push(service);
+        self
+    }
+    pub fn shared_state<T: Send + Sync + 'static>(mut self, shared_state: T) -> Self {
+        self.shared_state.insert(Arc::new(shared_state));
         self
     }
     pub fn sub_group<T: Into<ServiceGroup>>(mut self, group: T) -> Self {
         let group = group.into();
+        self.shared_state.extend(group.shared_state.clone());
         for service in group.services {
             self = self.service(service);
+        }
+        for task in group.tasks {
+            self = self.task(task);
         }
         self
     }
@@ -103,12 +141,18 @@ impl ServiceGroup {
         self.wrappers.push(wrappers);
         self
     }
+    pub fn task(mut self, task: Arc<dyn TaskFn + Sync + Send>) -> Self {
+        self.tasks.push(task);
+        self
+    }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Service {
     pub path: Arc<Route>,
     pub name: String,
+    pub uuid: Uuid,
+    pub shared_state: Extensions,
     pub filters: Vec<Arc<dyn FilterFn + Sync + Send>>,
     pub wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
     pub handler: Option<Arc<dyn ServiceHandler + Send + Sync>>,
@@ -151,32 +195,43 @@ impl Service {
     pub fn name(&self) -> &str {
         self.name.as_str()
     }
+    pub fn uuid(&self) -> &Uuid {
+        &self.uuid
+    }
 }
 impl ServiceRegister for Service {
-    fn register(self, service_registry: &mut ServiceRegistry) {
+    fn register(mut self, service_registry: &mut ServiceRegistry, shared_state: Extensions) {
+        self.shared_state.extend(shared_state);
         service_registry.register(self)
     }
 }
 
 pub enum IncomingRequest {
-    Stream(Request<Incoming>),
+    Stream(Request<StreamingBody>),
     Sized(Request<Full<Bytes>>),
-    Consumed(Parts),
+    Consumed(request::Parts),
     Empty,
 }
-pub enum BodyType<'a> {
-    Stream(&'a mut Incoming),
+
+pub enum OutgoingResponse {
+    Stream(Response<StreamingBody>),
+    Sized(Response<Full<Bytes>>),
+    Consumed(response::Parts),
+    Empty(Response<()>),
+}
+pub enum RefBodyType<'a> {
+    Stream(&'a mut StreamingBody),
     Sized(&'a mut Full<Bytes>),
     Empty,
 }
 
-pub enum ConsumedBodyType {
-    Stream(Incoming),
+pub enum BodyType {
+    Stream(StreamingBody),
     Sized(Full<Bytes>),
     Empty,
 }
 
-impl Body for ConsumedBodyType {
+impl Body for BodyType {
     type Data = Bytes;
     type Error = String;
 
@@ -185,43 +240,43 @@ impl Body for ConsumedBodyType {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
         match self.get_mut() {
-            ConsumedBodyType::Stream(s) => Pin::new(s)
+            BodyType::Stream(s) => Pin::new(s)
                 .poll_frame(cx)
                 .map_err(|e| format!("Failed to Read from Stream Body: {e:?}")),
-            ConsumedBodyType::Sized(s) => Pin::new(s).poll_frame(cx).map_err(|_| {
+            BodyType::Sized(s) => Pin::new(s).poll_frame(cx).map_err(|_| {
                 String::new() //Should Never Happen, e in infallible
             }),
-            ConsumedBodyType::Empty => Poll::Ready(None),
+            BodyType::Empty => Poll::Ready(None),
         }
     }
 }
 
-impl From<ConsumedBodyType> for reqwest::Body {
-    fn from(value: ConsumedBodyType) -> reqwest::Body {
+impl From<BodyType> for reqwest::Body {
+    fn from(value: BodyType) -> reqwest::Body {
         match value {
-            ConsumedBodyType::Stream(value) => {
+            BodyType::Stream(value) => {
                 let body_stream = BodyStream::new(value);
                 let body_stream = body_stream.map_ok(|d| d.into_data().unwrap());
                 let body = StreamBody::new(body_stream);
                 reqwest::Body::wrap_stream(body)
             }
-            ConsumedBodyType::Sized(value) => {
+            BodyType::Sized(value) => {
                 let body_stream = BodyStream::new(value);
                 let body_stream = body_stream.map_ok(|d| d.into_data().unwrap());
                 let body = StreamBody::new(body_stream);
                 reqwest::Body::wrap_stream(body)
             }
-            ConsumedBodyType::Empty => reqwest::Body::default(),
+            BodyType::Empty => reqwest::Body::default(),
         }
     }
 }
 static DEFAULT_URI: Lazy<Uri> = Lazy::new(Uri::default);
 impl IncomingRequest {
-    pub async fn consume(self) -> Result<(Self, ConsumedBodyType), (Self, Error)> {
+    pub async fn consume(self) -> Result<(Self, BodyType), (Self, Error)> {
         match self {
             IncomingRequest::Sized(r) => {
                 let (parts, body) = r.into_parts();
-                let body = ConsumedBodyType::Sized(Full::new(match body.collect().await {
+                let body = BodyType::Sized(Full::new(match body.collect().await {
                     Ok(b) => b.to_bytes(),
                     Err(_) => {
                         return Err((
@@ -237,15 +292,10 @@ impl IncomingRequest {
             }
             IncomingRequest::Stream(r) => {
                 let (parts, body) = r.into_parts();
-                Ok((
-                    IncomingRequest::Consumed(parts),
-                    ConsumedBodyType::Stream(body),
-                ))
+                Ok((IncomingRequest::Consumed(parts), BodyType::Stream(body)))
             }
-            IncomingRequest::Consumed(parts) => {
-                Ok((Self::Consumed(parts), ConsumedBodyType::Empty))
-            }
-            IncomingRequest::Empty => Ok((Self::Empty, ConsumedBodyType::Empty)),
+            IncomingRequest::Consumed(parts) => Ok((Self::Consumed(parts), BodyType::Empty)),
+            IncomingRequest::Empty => Ok((Self::Empty, BodyType::Empty)),
         }
     }
     pub fn uri(&self) -> &Uri {
@@ -277,7 +327,7 @@ impl IncomingRequest {
             IncomingRequest::Sized(r) => r.method(),
             IncomingRequest::Stream(r) => r.method(),
             IncomingRequest::Consumed(r) => &r.method,
-            IncomingRequest::Empty => &Method::GET,
+            IncomingRequest::Empty => &Method::OPTIONS,
         }
     }
     pub fn size_hint(&self) -> SizeHint {
@@ -304,12 +354,12 @@ impl IncomingRequest {
             IncomingRequest::Empty => None,
         }
     }
-    pub fn body(&mut self) -> BodyType {
+    pub fn body(&mut self) -> RefBodyType {
         match self {
-            IncomingRequest::Sized(r) => BodyType::Sized(r.body_mut()),
-            IncomingRequest::Stream(r) => BodyType::Stream(r.body_mut()),
-            IncomingRequest::Consumed(_) => BodyType::Empty,
-            IncomingRequest::Empty => BodyType::Empty,
+            IncomingRequest::Sized(r) => RefBodyType::Sized(r.body_mut()),
+            IncomingRequest::Stream(r) => RefBodyType::Stream(r.body_mut()),
+            IncomingRequest::Consumed(_) => RefBodyType::Empty,
+            IncomingRequest::Empty => RefBodyType::Empty,
         }
     }
     pub fn is_upgrade_request(&self) -> bool {
@@ -329,12 +379,15 @@ impl IncomingRequest {
                 return Err(ProtocolError::MissingSecWebSocketVersionHeader);
             }
             let response = Response::builder()
-                .status(hyper::StatusCode::SWITCHING_PROTOCOLS)
+                .status(StatusCode::SWITCHING_PROTOCOLS)
                 .header(hyper::header::CONNECTION, "upgrade")
                 .header(hyper::header::UPGRADE, "websocket")
                 .header("Sec-WebSocket-Accept", &derive_accept_key(key.as_bytes()))
-                .body(Full::<Bytes>::from("switching to websocket protocol"))
-                .expect("bug: failed to build response");
+                .body(Full::default())
+                .map_err(|e| {
+                    error!("Failed to build WebSocket Response: {}", e);
+                    ProtocolError::HandshakeIncomplete
+                })?;
             match self {
                 IncomingRequest::Stream(request) => Ok((response, hyper::upgrade::on(request))),
                 IncomingRequest::Sized(request) => Ok((response, hyper::upgrade::on(request))),
@@ -349,6 +402,77 @@ impl IncomingRequest {
             }
         } else {
             Err(ProtocolError::MissingSecWebSocketKey)
+        }
+    }
+}
+
+impl OutgoingResponse {
+    pub fn headers_mut(&mut self) -> &mut HeaderMap {
+        match self {
+            OutgoingResponse::Stream(r) => r.headers_mut(),
+            OutgoingResponse::Sized(r) => r.headers_mut(),
+            OutgoingResponse::Consumed(r) => &mut r.headers,
+            OutgoingResponse::Empty(r) => r.headers_mut(),
+        }
+    }
+
+    pub fn status_mut(&mut self) -> &mut StatusCode {
+        match self {
+            OutgoingResponse::Stream(r) => r.status_mut(),
+            OutgoingResponse::Sized(r) => r.status_mut(),
+            OutgoingResponse::Consumed(r) => &mut r.status,
+            OutgoingResponse::Empty(r) => r.status_mut(),
+        }
+    }
+
+    pub fn status(&self) -> StatusCode {
+        match self {
+            OutgoingResponse::Stream(r) => r.status(),
+            OutgoingResponse::Sized(r) => r.status(),
+            OutgoingResponse::Consumed(r) => r.status,
+            OutgoingResponse::Empty(r) => r.status(),
+        }
+    }
+
+    pub fn set_body(&mut self, body: BodyType) {
+        fn handle_body(parts: response::Parts, body_type: BodyType) -> OutgoingResponse {
+            match body_type {
+                BodyType::Stream(b) => OutgoingResponse::Stream(Response::from_parts(parts, b)),
+                BodyType::Sized(b) => OutgoingResponse::Sized(Response::from_parts(parts, b)),
+                BodyType::Empty => OutgoingResponse::Empty(Response::from_parts(parts, ())),
+            }
+        }
+        match replace(self, OutgoingResponse::Empty(Response::new(()))) {
+            OutgoingResponse::Stream(r) => {
+                let (parts, _) = r.into_parts();
+                let _ = replace(self, handle_body(parts, body));
+            }
+            OutgoingResponse::Sized(r) => {
+                let (parts, _) = r.into_parts();
+                let _ = replace(self, handle_body(parts, body));
+            }
+            OutgoingResponse::Consumed(parts) => {
+                let _ = replace(self, handle_body(parts, body));
+            }
+            OutgoingResponse::Empty(r) => {
+                let (parts, _) = r.into_parts();
+                let _ = replace(self, handle_body(parts, body));
+            }
+        }
+    }
+    pub fn consume(self) -> (Self, BodyType) {
+        match self {
+            OutgoingResponse::Sized(r) => {
+                let (parts, body) = r.into_parts();
+                let body = BodyType::Sized(body);
+                (OutgoingResponse::Consumed(parts), body)
+            }
+            OutgoingResponse::Stream(r) => {
+                let (parts, body) = r.into_parts();
+                (OutgoingResponse::Consumed(parts), BodyType::Stream(body))
+            }
+            OutgoingResponse::Consumed(parts) => (Self::Consumed(parts), BodyType::Empty),
+            OutgoingResponse::Empty(r) => (Self::Empty(r), BodyType::Empty),
         }
     }
 }
@@ -405,58 +529,182 @@ impl ServiceRequest {
             None
         }
     }
-    pub fn consume(&mut self) -> Result<ConsumedBodyType, Error> {
+}
+
+pub struct ServiceResponse {
+    response: OutgoingResponse,
+}
+impl From<ServiceResponse> for Response<StreamingBody> {
+    fn from(value: ServiceResponse) -> Self {
+        match value.response {
+            OutgoingResponse::Stream(r) => {
+                let (parts, body) = r.into_parts();
+                Response::from_parts(parts, body)
+            }
+            OutgoingResponse::Sized(r) => {
+                let (parts, body) = r.into_parts();
+                Response::from_parts(parts, body.stream_body())
+            }
+            OutgoingResponse::Consumed(parts) => {
+                Response::from_parts(parts, Full::new(Bytes::new()).stream_body())
+            }
+            OutgoingResponse::Empty(r) => {
+                let (parts, _) = r.into_parts();
+                Response::from_parts(parts, Full::new(Bytes::new()).stream_body())
+            }
+        }
+    }
+}
+impl Default for ServiceResponse {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl ServiceResponse {
+    pub fn new() -> Self {
+        Self {
+            response: OutgoingResponse::Empty(Response::new(())),
+        }
+    }
+    pub fn set_response(&mut self, outgoing: OutgoingResponse) {
+        self.response = outgoing;
+    }
+    pub fn set_body(&mut self, body: BodyType) {
+        self.response.set_body(body)
+    }
+    pub fn headers_mut(&mut self) -> &mut HeaderMap {
+        self.response.headers_mut()
+    }
+    pub fn status_mut(&mut self) -> &mut StatusCode {
+        self.response.status_mut()
+    }
+    pub fn status(&self) -> StatusCode {
+        self.response.status()
+    }
+}
+pub trait MutBody {
+    fn consume(&mut self) -> BodyType;
+    fn set_body(&mut self, body: BodyType);
+}
+
+impl MutBody for ServiceRequest {
+    fn consume(&mut self) -> BodyType {
         match replace(&mut self.request, IncomingRequest::Empty) {
             IncomingRequest::Sized(r) => {
                 let (parts, body) = r.into_parts();
                 let _ = replace(&mut self.request, IncomingRequest::Consumed(parts));
-                Ok(ConsumedBodyType::Sized(body))
+                BodyType::Sized(body)
             }
             IncomingRequest::Stream(r) => {
                 let (parts, body) = r.into_parts();
                 let _ = replace(&mut self.request, IncomingRequest::Consumed(parts));
-                Ok(ConsumedBodyType::Stream(body))
+                BodyType::Stream(body)
             }
             IncomingRequest::Consumed(parts) => {
                 let _ = replace(&mut self.request, IncomingRequest::Consumed(parts));
-                Ok(ConsumedBodyType::Empty)
+                BodyType::Empty
             }
-            IncomingRequest::Empty => Ok(ConsumedBodyType::Empty),
+            IncomingRequest::Empty => BodyType::Empty,
         }
     }
-    pub fn set_body(&mut self, body: ConsumedBodyType) -> Result<ConsumedBodyType, Error> {
-        let (parts, old_body) = match replace(&mut self.request, IncomingRequest::Empty) {
+    fn set_body(&mut self, body: BodyType) {
+        let (parts, _) = match replace(&mut self.request, IncomingRequest::Empty) {
             IncomingRequest::Sized(r) => {
                 let (parts, body) = r.into_parts();
-                (parts, ConsumedBodyType::Sized(body))
+                (parts, BodyType::Sized(body))
             }
             IncomingRequest::Stream(r) => {
                 let (parts, body) = r.into_parts();
-                (parts, ConsumedBodyType::Stream(body))
+                (parts, BodyType::Stream(body))
             }
-            IncomingRequest::Consumed(parts) => (parts, ConsumedBodyType::Empty),
-            IncomingRequest::Empty => (Request::new(()).into_parts().0, ConsumedBodyType::Empty),
+            IncomingRequest::Consumed(parts) => (parts, BodyType::Empty),
+            IncomingRequest::Empty => (Request::new(()).into_parts().0, BodyType::Empty),
         };
         match body {
-            ConsumedBodyType::Sized(s) => {
+            BodyType::Sized(s) => {
                 let _ = replace(
                     &mut self.request,
                     IncomingRequest::Sized(Request::from_parts(parts, s)),
                 );
             }
-            ConsumedBodyType::Stream(s) => {
+            BodyType::Stream(s) => {
                 let _ = replace(
                     &mut self.request,
                     IncomingRequest::Stream(Request::from_parts(parts, s)),
                 );
             }
-            ConsumedBodyType::Empty => {
+            BodyType::Empty => {
                 let _ = replace(
                     &mut self.request,
                     IncomingRequest::Sized(Request::from_parts(parts, Full::new(Bytes::new()))),
                 );
             }
         }
-        Ok(old_body)
+    }
+}
+
+impl MutBody for ServiceResponse {
+    fn consume(&mut self) -> BodyType {
+        match replace(
+            &mut self.response,
+            OutgoingResponse::Empty(Response::new(())),
+        ) {
+            OutgoingResponse::Sized(r) => {
+                let (parts, body) = r.into_parts();
+                let _ = replace(&mut self.response, OutgoingResponse::Consumed(parts));
+                BodyType::Sized(body)
+            }
+            OutgoingResponse::Stream(r) => {
+                let (parts, body) = r.into_parts();
+                let _ = replace(&mut self.response, OutgoingResponse::Consumed(parts));
+                BodyType::Stream(body)
+            }
+            OutgoingResponse::Consumed(parts) => {
+                let _ = replace(&mut self.response, OutgoingResponse::Consumed(parts));
+                BodyType::Empty
+            }
+            OutgoingResponse::Empty(r) => {
+                let (parts, _) = r.into_parts();
+                let _ = replace(&mut self.response, OutgoingResponse::Consumed(parts));
+                BodyType::Empty
+            }
+        }
+    }
+    fn set_body(&mut self, body: BodyType) {
+        let (parts, _) = match replace(
+            &mut self.response,
+            OutgoingResponse::Empty(Response::new(())),
+        ) {
+            OutgoingResponse::Sized(r) => {
+                let (parts, body) = r.into_parts();
+                (parts, BodyType::Sized(body))
+            }
+            OutgoingResponse::Stream(r) => {
+                let (parts, body) = r.into_parts();
+                (parts, BodyType::Stream(body))
+            }
+            OutgoingResponse::Consumed(parts) => (parts, BodyType::Empty),
+            OutgoingResponse::Empty(r) => (r.into_parts().0, BodyType::Empty),
+        };
+        match body {
+            BodyType::Sized(s) => {
+                let _ = replace(
+                    &mut self.response,
+                    OutgoingResponse::Sized(Response::from_parts(parts, s)),
+                );
+            }
+            BodyType::Stream(s) => {
+                let _ = replace(
+                    &mut self.response,
+                    OutgoingResponse::Stream(Response::from_parts(parts, s)),
+                );
+            }
+            BodyType::Empty => {
+                let _ = replace(
+                    &mut self.response,
+                    OutgoingResponse::Sized(Response::from_parts(parts, Full::new(Bytes::new()))),
+                );
+            }
+        }
     }
 }

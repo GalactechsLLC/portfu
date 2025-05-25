@@ -1,18 +1,21 @@
-use crate::filters::{Filter, FilterFn, FilterResult};
-use crate::service::{IncomingRequest, ServiceRequest};
+use crate::filters::Filter;
+use crate::service::{BodyType, IncomingRequest, Service, ServiceRequest, ServiceResponse};
 use crate::signal::await_termination;
 use crate::ssl::load_ssl_certs;
 use crate::task::{Task, TaskFn};
-use crate::wrappers::{WrapperFn, WrapperResult};
-use crate::{IntoStreamBody, ServiceData, ServiceRegister, ServiceRegistry, ServiceResponse};
+use crate::wrappers::WrapperFn;
+use crate::{IntoStreamBody, ServiceData, ServiceRegister, ServiceRegistry, StreamingBody};
 use http::{Extensions, Request, Response, StatusCode};
-use http_body_util::{BodyExt, BodyStream, Empty, StreamBody};
-use hyper::body::Incoming;
+use http_body_util::Full;
+use hyper::body::{Bytes, Incoming};
 use hyper::server::conn::http1::Builder;
 use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
 use log::{error, info};
 use serde::{Deserialize, Serialize};
+use sha2::digest::Output;
+use sha2::{Digest, Sha256, Sha256VarCore};
+use std::env;
 use std::io::{Error, ErrorKind};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::str::FromStr;
@@ -20,6 +23,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
+use tokio::sync::RwLock;
 use tokio::task::JoinSet;
 use tokio::{select, spawn};
 use tokio_rustls::TlsAcceptor;
@@ -37,6 +41,7 @@ pub struct ServerConfig {
     pub host: String,
     pub port: u16,
     pub ssl_config: Option<SslConfig>,
+    pub client_ssl_config: Option<SslConfig>,
     pub keep_alive: bool,
     pub half_close: bool,
     pub preserve_header_case: bool,
@@ -48,6 +53,7 @@ impl Default for ServerConfig {
             host: "localhost".to_string(),
             port: 8080,
             ssl_config: None,
+            client_ssl_config: None,
             keep_alive: true,
             half_close: true,
             preserve_header_case: true,
@@ -56,28 +62,47 @@ impl Default for ServerConfig {
     }
 }
 
+#[derive(Copy, Clone, Hash, Eq, PartialEq, Debug)]
+pub struct PeerId(pub [u8; 32]);
+
+pub fn peer_hash(input: impl AsRef<[u8]>) -> PeerId {
+    let mut hasher = Sha256::new();
+    hasher.update(input);
+    let mut buf = [0u8; 32];
+    hasher.finalize_into(<&mut Output<Sha256VarCore>>::from(&mut buf));
+    PeerId(buf)
+}
+
 #[derive(Debug)]
 pub struct Server {
-    pub registry: Arc<ServiceRegistry>,
+    pub registry: Arc<RwLock<ServiceRegistry>>,
     pub config: ServerConfig,
     pub run: Arc<AtomicBool>,
-    pub shared_state: Arc<Extensions>,
-    filters: Vec<Arc<dyn FilterFn + Sync + Send>>,
-    tasks: Vec<Arc<Task>>,
-    wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
+    pub shared_state: Arc<RwLock<Extensions>>,
 }
 impl Server {
     pub async fn run(self) -> Result<(), Error> {
         let server = Arc::new(self);
+        {
+            let slf = server.clone();
+            server.shared_state.write().await.insert(slf);
+        }
         let socket_addr = Self::get_socket_addr(&server.config)?;
+        info!("Server Starting Up on {socket_addr}");
         let listener = TcpListener::bind(socket_addr).await?;
-        let tls_acceptor = Arc::new(match server.config.ssl_config.as_ref() {
-            Some(_) => {
-                let certs = load_ssl_certs(&server.config)?;
-                Some(TlsAcceptor::from(certs))
-            }
-            None => None,
-        });
+        //Check for various ways of using SSL
+        let tls_acceptor = if server.config.ssl_config.is_some()
+            || (env::var("PRIVATE_CA_CRT").ok().is_some()
+                && env::var("PRIVATE_CA_KEY").ok().is_some())
+            || (env::var("SSL_CERTS").ok().is_some()
+                && env::var("SSL_PRIVATE_KEY").ok().is_some()
+                && env::var("SSL_ROOT_CERTS").ok().is_some())
+        {
+            let certs = load_ssl_certs(&server.config)?;
+            Some(TlsAcceptor::from(certs))
+        } else {
+            None
+        };
         let mut http = Builder::new();
         http.half_close(server.config.half_close);
         http.keep_alive(server.config.keep_alive);
@@ -90,11 +115,11 @@ impl Server {
             server_run_handle.store(false, Ordering::Relaxed);
         });
         let mut background_tasks = JoinSet::new();
-        for task in server.tasks.iter().cloned() {
+        for task in server.registry.read().await.tasks.iter().cloned() {
             let state = server.shared_state.clone();
             info!("Spawning Task {}", task.name());
             background_tasks.spawn(async move {
-                if let Err(e) = task.task_fn.run(state).await {
+                if let Err(e) = task.task_fn.run(state.clone()).await {
                     error!("Error in background task: {e:?}");
                 }
             });
@@ -108,13 +133,20 @@ impl Server {
                             let tls_acceptor = tls_acceptor.clone();
                             let http = http.clone();
                             spawn(async move {
-                                let service = service_fn(move |req| {
-                                    let server = server.clone();
-                                    Self::connection_handler(server, req, address)
-                                });
                                 if let Some(acceptor) = tls_acceptor.as_ref() {
                                     match acceptor.accept(stream).await {
                                         Ok(stream) => {
+                                            let mut peer_id = None;
+                                            if let Some(certs) = stream.get_ref().1.peer_certificates() {
+                                                if !certs.is_empty() {
+                                                    peer_id = Some(peer_hash(&certs[0]));
+                                                }
+                                            }
+                                            let service = service_fn(move |req| {
+                                                let peer_id = Arc::new(peer_id);
+                                                let server = server.clone();
+                                                Self::connection_handler(server, req, address, peer_id)
+                                            });
                                             let connection = http.serve_connection(TokioIo::new(stream), service).with_upgrades();
                                             if let Err(err) = connection.await {
                                                 error!("Error serving tls connection: {:?}", err);
@@ -125,6 +157,10 @@ impl Server {
                                         }
                                     }
                                 } else {
+                                    let service = service_fn(move |req| {
+                                        let server = server.clone();
+                                        Self::connection_handler(server, req, address, Arc::new(None))
+                                    });
                                     let connection = http.serve_connection(TokioIo::new(stream), service).with_upgrades();
                                     if let Err(err) = connection.await {
                                         error!("Error serving connection: {:?}", err);
@@ -140,6 +176,7 @@ impl Server {
                 _ = tokio::time::sleep(Duration::from_millis(100)) => {}
             )
         }
+        info!("Server Exiting");
         background_tasks.shutdown().await;
         Ok(())
     }
@@ -166,104 +203,101 @@ impl Server {
         server: Arc<Self>,
         mut request: Request<Incoming>,
         address: SocketAddr,
-    ) -> Result<ServiceResponse, Error> {
+        peer_id: Arc<Option<PeerId>>,
+    ) -> Result<Response<StreamingBody>, Error> {
         request.extensions_mut().insert(address);
-        let mut response: ServiceResponse = Response::new(StreamBody::new(BodyStream::new(
-            Box::pin(Empty::new().map_err(|_| "Failed to Map Empty to Service Body")),
-        )));
-        let handle = if !server.filters.is_empty() {
-            let mut handle = true;
-            for f in server.filters.iter() {
-                if f.filter(&request).await != FilterResult::Allow {
-                    handle = false;
-                    break;
-                }
+        request.extensions_mut().insert(peer_id);
+        request.extensions_mut().insert(server.shared_state.clone()); //Put the Server Shared State in the Request Extensions
+        let mut response: ServiceResponse = ServiceResponse::new();
+        let mut handler = None;
+        let services: Vec<Arc<Service>> = server.registry.read().await.services.to_vec();
+        for service in services {
+            if service.handles(&request).await {
+                handler = Some(service.clone());
+                break;
             }
-            handle
-        } else {
-            true
-        };
-        if !handle {
-            *response.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
-            Ok(response)
-        } else {
-            let mut handler = None;
-            for service in server.registry.services.iter() {
-                if service.handles(&request).await {
-                    handler = Some(service.clone());
-                    break;
-                }
-            }
-            match handler {
-                Some(service) => {
-                    request
-                        .extensions_mut()
-                        .extend(server.shared_state.as_ref().clone());
-                    let mut service_data = ServiceData {
-                        server: server.clone(),
-                        request: ServiceRequest {
-                            request: IncomingRequest::Stream(request),
-                            path: service.path.clone(),
-                        },
-                        response,
-                    };
-                    for func in server.wrappers.iter() {
-                        match func.before(&mut service_data).await {
-                            WrapperResult::Continue => {}
-                            WrapperResult::Return => {
-                                return Ok(service_data.response);
-                            }
-                        }
-                    }
-                    service_data =
-                        service
-                            .handle(service_data)
-                            .await
-                            .unwrap_or_else(|(mut sd, e)| {
-                                error!(
-                                    "Service Error when Handling {} - {e:?}",
-                                    sd.request.request.uri()
-                                );
-                                *sd.response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                                *sd.response.body_mut() = format!("{:?}", e).stream_body();
-                                sd
-                            });
-                    for func in server.wrappers.iter() {
-                        match func.after(&mut service_data).await {
-                            WrapperResult::Continue => {}
-                            WrapperResult::Return => {
-                                return Ok(service_data.response);
-                            }
-                        }
-                    }
-                    Ok(service_data.response)
-                }
-                None => {
+        }
+        match handler {
+            Some(service) => handle_service(request, service, server.clone(), response).await,
+            None => {
+                if let Some(service) = server.registry.read().await.default_service.clone() {
+                    handle_service(request, service, server.clone(), response).await
+                } else {
                     *response.status_mut() = StatusCode::NOT_FOUND;
-                    Ok(response)
+                    Ok(response.into())
                 }
             }
         }
     }
 }
 
+pub async fn handle_service(
+    mut request: Request<Incoming>,
+    service: Arc<Service>,
+    server: Arc<Server>,
+    response: ServiceResponse,
+) -> Result<Response<StreamingBody>, Error> {
+    request
+        .extensions_mut()
+        .extend(service.shared_state.clone());
+    let mut service_data = ServiceData {
+        server: server.clone(),
+        request: ServiceRequest {
+            request: IncomingRequest::Stream(request.map(|b| b.stream_body())),
+            path: service.path.clone(),
+        },
+        response,
+    };
+    service_data = service
+        .handle(service_data)
+        .await
+        .unwrap_or_else(|(mut sd, e)| {
+            error!(
+                "Service Error when Handling {} - {e:?}",
+                sd.request.request.uri()
+            );
+            *sd.response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+            sd.response
+                .set_body(BodyType::Sized(Full::new(Bytes::from(format!("{:?}", e)))));
+            sd
+        });
+    Ok(service_data.response.into())
+}
+
 pub struct ServerBuilder {
     services: ServiceRegistry,
     config: ServerConfig,
     shared_state: Extensions,
-    filters: Vec<Arc<dyn FilterFn + Sync + Send>>,
-    tasks: Vec<Arc<Task>>,
-    wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
+    run_handle: Arc<AtomicBool>,
+}
+pub struct SharedState<T> {
+    inner: Arc<T>,
+}
+impl<T> From<T> for SharedState<T> {
+    fn from(value: T) -> Self {
+        SharedState {
+            inner: Arc::new(value),
+        }
+    }
+}
+impl<T> From<Arc<T>> for SharedState<T> {
+    fn from(inner: Arc<T>) -> Self {
+        SharedState { inner }
+    }
 }
 impl ServerBuilder {
     pub fn from_config(config: ServerConfig) -> Self {
         Self {
-            services: ServiceRegistry { services: vec![] },
+            services: ServiceRegistry {
+                services: vec![],
+                tasks: vec![],
+                wrappers: vec![],
+                filters: vec![],
+                default_service: None,
+            },
             config,
             shared_state: Extensions::default(),
-            filters: vec![],
-            tasks: vec![],
-            wrappers: vec![],
+            run_handle: Arc::new(AtomicBool::new(true)),
         }
     }
     pub fn host(self, host: String) -> Self {
@@ -283,49 +317,64 @@ impl ServerBuilder {
     }
     pub fn register<T: ServiceRegister>(self, service: T) -> Self {
         let mut s = self;
-        service.register(&mut s.services);
+        service.register(&mut s.services, s.shared_state.clone());
+        s
+    }
+    pub fn default_service(self, mut service: Service) -> Self {
+        let mut s = self;
+        service.shared_state.extend(s.shared_state.clone());
+        s.services.default_service = Some(Arc::new(service));
         s
     }
     pub fn filter(self, filter: Filter) -> Self {
         let mut s = self;
-        s.filters.push(Arc::new(filter));
+        s.services.filters.push(Arc::new(filter));
         s
     }
     pub fn wrap(self, wrapper: Arc<dyn WrapperFn + Sync + Send>) -> Self {
         let mut s = self;
-        s.wrappers.push(wrapper);
+        s.services.wrappers.push(wrapper);
         s
     }
     pub fn task<T: Into<Task>>(mut self, task: T) -> Self {
-        self.tasks.push(Arc::new(task.into()));
+        self.services.tasks.push(Arc::new(task.into()));
         self
     }
-    pub fn shared_state<T: Send + Sync + 'static>(self, shared_state: T) -> Self {
+    pub fn run_handle(mut self, run_handle: Arc<AtomicBool>) -> Self {
+        self.run_handle = run_handle;
+        self
+    }
+    pub fn shared_state<T: Send + Sync + 'static>(
+        self,
+        shared_state: impl Into<SharedState<T>>,
+    ) -> Self {
         let mut s = self;
-        s.shared_state.insert(Arc::new(shared_state));
+        let state: SharedState<T> = shared_state.into();
+        s.shared_state.insert(state.inner);
         s
     }
     pub fn build(self) -> Server {
         Server {
-            registry: Arc::new(self.services),
+            registry: Arc::new(RwLock::new(self.services)),
             config: self.config,
-            run: Arc::new(AtomicBool::new(true)),
-            shared_state: Arc::new(self.shared_state),
-            filters: self.filters,
-            tasks: self.tasks,
-            wrappers: self.wrappers,
+            run: self.run_handle,
+            shared_state: Arc::new(RwLock::new(self.shared_state)),
         }
     }
 }
 impl Default for ServerBuilder {
     fn default() -> Self {
         Self {
-            services: ServiceRegistry { services: vec![] },
+            services: ServiceRegistry {
+                services: vec![],
+                tasks: vec![],
+                filters: vec![],
+                wrappers: vec![],
+                default_service: None,
+            },
             config: ServerConfig::default(),
             shared_state: Extensions::default(),
-            filters: vec![],
-            tasks: vec![],
-            wrappers: vec![],
+            run_handle: Arc::new(AtomicBool::new(true)),
         }
     }
 }

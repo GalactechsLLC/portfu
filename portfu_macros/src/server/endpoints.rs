@@ -3,11 +3,38 @@ use crate::{extract_method_filters, parse_path_variables};
 use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
 use quote::{quote, ToTokens};
 use std::collections::HashSet;
-use syn::{parse_quote, punctuated::Punctuated, FnArg, LitStr, Pat, Path, Token, Type};
+use syn::{
+    parse_quote, punctuated::Punctuated, FnArg, GenericArgument, GenericParam, Generics, LitStr,
+    Pat, Path, PathArguments, Token, Type,
+};
 
 pub struct EndpointArgs {
     pub path: syn::LitStr,
     pub options: Punctuated<syn::MetaNameValue, Token![,]>,
+}
+
+#[derive(Copy, Clone)]
+pub enum OutputType {
+    Json,
+    Bytes,
+    None,
+}
+impl OutputType {
+    fn parse(output: &str) -> Result<Self, String> {
+        match output.to_ascii_lowercase().as_str() {
+            "json" => Ok(Self::Json),
+            "bytes" => Ok(Self::Bytes),
+            "none" => Ok(Self::None),
+            _ => Err(format!("Invalid Output Format: `{}`", output)),
+        }
+    }
+}
+impl TryFrom<&syn::LitStr> for OutputType {
+    type Error = syn::Error;
+    fn try_from(value: &syn::LitStr) -> Result<Self, Self::Error> {
+        Self::parse(value.value().as_str())
+            .map_err(|message| syn::Error::new_spanned(value, message))
+    }
 }
 
 impl syn::parse::Parse for EndpointArgs {
@@ -52,6 +79,7 @@ impl syn::parse::Parse for EndpointArgs {
 pub struct Endpoint {
     /// Name of the handler function being annotated.
     name: Ident,
+    generics: Generics,
     /// Args passed to routing macro.
     args: Args,
     /// AST of the handler function being annotated.
@@ -60,8 +88,9 @@ pub struct Endpoint {
     doc_attributes: Vec<syn::Attribute>,
 }
 impl Endpoint {
-    pub fn new(args: EndpointArgs, ast: syn::ItemFn, method: Option<Method>) -> syn::Result<Self> {
+    pub fn new(args: EndpointArgs, ast: syn::ItemFn, methods: Vec<Method>) -> syn::Result<Self> {
         let name = ast.sig.ident.clone();
+        let generics = ast.sig.generics.clone();
 
         // Try and pull out the doc comments so that we can reapply them to the generated struct.
         // Note that multi line doc comments are converted to multiple doc attributes.
@@ -72,7 +101,7 @@ impl Endpoint {
             .cloned()
             .collect();
 
-        let args = Args::new(args, method)?;
+        let args = Args::new(args, methods)?;
 
         if args.methods.is_empty() {
             return Err(syn::Error::new(
@@ -90,6 +119,7 @@ impl Endpoint {
 
         Ok(Self {
             name,
+            generics,
             args,
             ast,
             doc_attributes,
@@ -98,9 +128,10 @@ impl Endpoint {
 }
 
 impl ToTokens for Endpoint {
-    fn to_tokens(&self, output: &mut TokenStream2) {
+    fn to_tokens(&self, token_out: &mut TokenStream2) {
         let Self {
             name,
+            generics,
             ast,
             args,
             doc_attributes,
@@ -111,15 +142,88 @@ impl ToTokens for Endpoint {
             filters,
             wrappers,
             methods,
+            output,
+            eoutput,
         } = args;
         let resource_name = resource_name
             .as_ref()
             .map_or_else(|| name.to_string(), LitStr::value);
         let filters_name = format!("{resource_name}_filters");
         let method_filters = extract_method_filters(methods);
+        let mut additional_function_vars = vec![];
+        let (mut dyn_vars, path_vars) = parse_path_variables(path);
+        let mut has_generics = false;
+        let generic_vals: Vec<Ident> = generics
+            .params
+            .iter()
+            .map(|p| match p {
+                GenericParam::Lifetime(l) => {
+                    has_generics = true;
+                    l.lifetime.ident.clone()
+                }
+                GenericParam::Type(t) => {
+                    has_generics = true;
+                    t.ident.clone()
+                }
+                GenericParam::Const(_) => {
+                    panic!("CONST Generics not Supported Yet");
+                }
+            })
+            .collect();
+        let generic_lables = if has_generics {
+            quote! {
+                <#(#generic_vals),*>
+            }
+        } else {
+            quote! {}
+        };
+        let default_struct = if has_generics {
+            quote! {
+                impl #generics Default for #name #generic_lables {
+                    fn default() -> Self {
+                        Self {
+                            _phantom_data: Default::default()
+                        }
+                    }
+                }
+            }
+        } else {
+            quote! {
+                impl Default for #name {
+                    fn default() -> Self {
+                        Self {}
+                    }
+                }
+            }
+        };
+        let function_def = if has_generics {
+            let mut new_ast = ast.clone();
+            new_ast.sig.generics.params.clear();
+            quote! { #new_ast }
+        } else {
+            quote! { #ast }
+        };
+        let struct_def = if has_generics {
+            quote! {
+                pub struct #name #generics {
+                    _phantom_data: std::marker::PhantomData #generic_lables
+                }
+                impl #generics #name #generic_lables {
+                    #function_def
+                }
+            }
+        } else {
+            quote! {
+                pub struct #name;
+                impl #name {
+                    #function_def
+                }
+            }
+        };
         let registrations = quote! {
             let __resource = ::portfu::pfcore::service::ServiceBuilder::new(#path)
                 .name(#resource_name)
+                .extend_state(shared_state.clone())
                 #method_filters
                 #(.filter(::portfu::pfcore::filters::all(#filters_name, #filters)))*
                 #(.wrap(#wrappers))*
@@ -134,8 +238,6 @@ impl ToTokens for Endpoint {
                 #(.wrap(#wrappers))*
                 .handler(std::sync::Arc::new(service)).build()
         };
-        let mut additional_function_vars = vec![];
-        let (mut dyn_vars, path_vars) = parse_path_variables(path);
         for arg in ast.sig.inputs.iter() {
             let (ident_type, ident_val): (Type, Ident) = match arg {
                 FnArg::Receiver(_) => {
@@ -162,8 +264,39 @@ impl ToTokens for Endpoint {
             if let Type::Path(path) = &ident_type {
                 if let Some(segment) = path.path.segments.first() {
                     let response: Ident = Ident::new("Response", segment.ident.span());
+                    let headers: Ident = Ident::new("HeaderMap", segment.ident.span());
                     let service_data: Ident = Ident::new("ServiceData", segment.ident.span());
-                    if response == segment.ident {
+                    let state_ident: Ident = Ident::new("State", segment.ident.span());
+                    if state_ident == segment.ident {
+                        if let Some(_inner_type) = match &segment.arguments {
+                            PathArguments::None => panic!("State Inner Object Cannot be None"),
+                            PathArguments::AngleBracketed(args) => {
+                                if let Some(GenericArgument::Type(ty)) = args.args.first() {
+                                    Some(ty)
+                                } else {
+                                    continue;
+                                }
+                            }
+                            PathArguments::Parenthesized(args) => args.inputs.first(),
+                        } {
+                            dyn_vars.push(quote! {
+                                let #ident_val: #ident_type = match handle_data.request.get()
+                                    .cloned()
+                                    .map(|data| ::portfu::pfcore::State(data)).ok_or(
+                                        ::std::io::Error::new(::std::io::ErrorKind::NotFound, format!("Failed to find State of type {}", stringify!(#ident_type)))
+                                    ) {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        return Err((handle_data, e));
+                                    }
+                                };
+                            });
+                            additional_function_vars.push(quote! {
+                                #ident_val,
+                            });
+                        }
+                        continue;
+                    } else if response == segment.ident {
                         dyn_vars.push(quote! {
                             let #ident_val: &mut Response<Full<Bytes>> = &mut handle_data.response;
                         });
@@ -179,6 +312,14 @@ impl ToTokens for Endpoint {
                             #ident_val,
                         });
                         continue;
+                    } else if headers == segment.ident {
+                        dyn_vars.push(quote! {
+                            let #ident_val = &handle_data.request.request.headers();
+                        });
+                        additional_function_vars.push(quote! {
+                            #ident_val,
+                        });
+                        continue;
                     }
                 }
             }
@@ -186,6 +327,7 @@ impl ToTokens for Endpoint {
                 if let Type::Path(path) = &reference.elem.as_ref() {
                     if let Some(segment) = path.path.segments.first() {
                         let service_data: Ident = Ident::new("ServiceData", segment.ident.span());
+                        let option: Ident = Ident::new("Option", segment.ident.span());
                         if service_data == segment.ident {
                             dyn_vars.push(quote! {
                                 let #ident_val = &mut handle_data;
@@ -194,6 +336,52 @@ impl ToTokens for Endpoint {
                                 #ident_val,
                             });
                             continue;
+                        } else if option == segment.ident {
+                            if let PathArguments::AngleBracketed(angle_bracketed) =
+                                &segment.arguments
+                            {
+                                if let Some(GenericArgument::Type(inner_type)) =
+                                    angle_bracketed.args.first()
+                                {
+                                    if let Type::Path(inner_path) = inner_type {
+                                        if let Some(inner_segment) =
+                                            inner_path.path.segments.first()
+                                        {
+                                            let expected_type =
+                                                Ident::new("HeaderMap", inner_segment.ident.span());
+                                            if inner_segment.ident == expected_type {
+                                                dyn_vars.push(quote! {
+                                                    let #ident_val = &handle_data.request.request.headers();
+                                                });
+                                                additional_function_vars.push(quote! {
+                                                    #ident_val,
+                                                });
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                    if let Type::Reference(reference) = inner_type {
+                                        if let Type::Path(path) = &reference.elem.as_ref() {
+                                            if let Some(inner_segment) = path.path.segments.first()
+                                            {
+                                                let expected_type = Ident::new(
+                                                    "HeaderMap",
+                                                    inner_segment.ident.span(),
+                                                );
+                                                if inner_segment.ident == expected_type {
+                                                    dyn_vars.push(quote! {
+                                                        let #ident_val = &handle_data.request.request.headers();
+                                                    });
+                                                    additional_function_vars.push(quote! {
+                                                        #ident_val,
+                                                    });
+                                                    continue;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -203,7 +391,15 @@ impl ToTokens for Endpoint {
                     Ok(v) => v,
                     Err(e) => {
                         *handle_data.response.status_mut() = ::portfu::prelude::http::StatusCode::INTERNAL_SERVER_ERROR;
-                        *handle_data.response.body_mut() = ::portfu::prelude::hyper::body::Bytes::from(format!("Failed to extract {} as {}, {e:?}", stringify!(#ident_val), stringify!(#ident_type).replace(' ',""))).stream_body();
+                        handle_data.response.set_body(
+                            ::portfu::pfcore::service::BodyType::Stream(
+                                ::portfu::prelude::hyper::body::Bytes::from(
+                                    format!("Failed to extract {} as {}, {e:?}",
+                                        stringify!(#ident_val), stringify!(#ident_type).replace(' ',"")
+                                    )
+                                ).stream_body()
+                            )
+                        );
                         return Ok(handle_data);
                     }
                 };
@@ -212,22 +408,110 @@ impl ToTokens for Endpoint {
                 #ident_val,
             });
         }
+        let output_statement = match output {
+            OutputType::Json => {
+                quote! {
+                    match ::portfu::prelude::serde_json::to_vec(&t) {
+                        Ok(v) => {
+                            handle_data.response.headers_mut().insert(
+                                ::portfu::prelude::hyper::header::CONTENT_TYPE,
+                                ::portfu::prelude::hyper::header::HeaderValue::from_static("application/json")
+                            );
+                            handle_data.response.set_body(
+                                ::portfu::pfcore::service::BodyType::Stream(
+                                    v.stream_body()
+                                )
+                            );
+                        }
+                        Err(e) => {
+                            if handle_data.response.status() == ::portfu::prelude::hyper::StatusCode::OK {
+                                *handle_data.response.status_mut() = ::portfu::prelude::http::StatusCode::INTERNAL_SERVER_ERROR;
+                            }
+                            let err = format!("{e:?}");;
+                            let bytes: ::portfu::prelude::hyper::body::Bytes = err.into();
+                            handle_data.response.set_body(
+                                ::portfu::pfcore::service::BodyType::Stream(
+                                    bytes.stream_body()
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+            OutputType::Bytes => {
+                quote! {
+                    let bytes: ::portfu::prelude::hyper::body::Bytes = t.into();
+                    handle_data.response.set_body(
+                        ::portfu::pfcore::service::BodyType::Stream(
+                            bytes.stream_body()
+                        )
+                    );
+                }
+            }
+            OutputType::None => {
+                quote! {}
+            }
+        };
+        let err_output_statement = match eoutput {
+            OutputType::Json => {
+                quote! {
+                    match ::portfu::prelude::serde_json::to_vec(&e) {
+                        Ok(v) => {
+                            handle_data.response.headers_mut().insert(
+                                ::portfu::prelude::hyper::header::CONTENT_TYPE,
+                                ::portfu::prelude::hyper::header::HeaderValue::from_static("application/json")
+                            );
+                            let bytes: ::portfu::prelude::hyper::body::Bytes = v.into();
+                            handle_data.response.set_body(
+                                ::portfu::pfcore::service::BodyType::Stream(
+                                    bytes.stream_body()
+                                )
+                            )
+                        }
+                        Err(_) => {
+                            let err = format!("{e:?}");;
+                            let bytes: ::portfu::prelude::hyper::body::Bytes = err.into();
+                            handle_data.response.set_body(
+                                ::portfu::pfcore::service::BodyType::Stream(
+                                    bytes.stream_body()
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+            OutputType::Bytes => {
+                quote! {
+                    let err = format!("{e:?}");;
+                    let bytes: ::portfu::prelude::hyper::body::Bytes = err.into();
+                    handle_data.response.set_body(
+                        ::portfu::pfcore::service::BodyType::Stream(
+                            bytes.stream_body()
+                        )
+                    );
+                }
+            }
+            OutputType::None => {
+                quote! {}
+            }
+        };
         let stream = quote! {
             #(#doc_attributes)*
             #[allow(non_camel_case_types, missing_docs)]
-            pub struct #name;
-            impl ::portfu::pfcore::ServiceRegister for #name {
-                fn register(self, service_registry: &mut portfu::prelude::ServiceRegistry) {
+            #struct_def
+            #default_struct
+            impl #generics ::portfu::pfcore::ServiceRegister for #name #generic_lables {
+                fn register(self, service_registry: &mut portfu::prelude::ServiceRegistry, shared_state: portfu::prelude::http::Extensions) {
                     #registrations
                 }
             }
-            impl From<#name> for ::portfu::prelude::Service {
-                fn from(service: #name) -> Service {
+            impl #generics From<#name #generic_lables > for ::portfu::prelude::Service {
+                fn from(service: #name #generic_lables) -> ::portfu::prelude::Service {
                     #service_def
                 }
             }
             #[::portfu::prelude::async_trait::async_trait]
-            impl ::portfu::pfcore::ServiceHandler for #name {
+            impl #generics ::portfu::pfcore::ServiceHandler for #name #generic_lables {
                 fn name(&self) -> &str {
                     stringify!(#name)
                 }
@@ -236,25 +520,30 @@ impl ToTokens for Endpoint {
                     mut handle_data: ::portfu::prelude::ServiceData
                 ) -> Result<::portfu::prelude::ServiceData, (::portfu::prelude::ServiceData, ::std::io::Error)> {
                     use ::portfu::pfcore::IntoStreamBody;
-                    #ast
+                    if handle_data.request.request.method() == ::portfu::prelude::http::method::Method::OPTIONS {
+                        return Ok(handle_data)
+                    }
                     #(#dyn_vars)*
-                    match #name(#(#additional_function_vars)*).await {
+                    match Self::#name (#(#additional_function_vars)*).await {
                         Ok(t) => {
-                            let bytes: ::portfu::prelude::hyper::body::Bytes = t.into();
-                            *handle_data.response.body_mut() = bytes.stream_body();
+                            #output_statement
                             Ok(handle_data)
                         }
                         Err(e) => {
-                            let err = format!("{e:?}");
-                            let bytes: ::portfu::prelude::hyper::body::Bytes = err.into();
-                            *handle_data.response.body_mut() = bytes.stream_body();
+                            if handle_data.response.status() == ::portfu::prelude::hyper::StatusCode::OK {
+                                *handle_data.response.status_mut() = ::portfu::prelude::http::StatusCode::INTERNAL_SERVER_ERROR;
+                            }
+                            #err_output_statement
                             Ok(handle_data)
                         }
                     }
                 }
+                fn service_type(&self) -> ::portfu::prelude::ServiceType {
+                    ::portfu::prelude::ServiceType::API
+                }
             }
         };
-        output.extend(stream);
+        token_out.extend(stream);
     }
 }
 
@@ -264,20 +553,19 @@ struct Args {
     filters: Vec<Path>,
     wrappers: Vec<syn::Expr>,
     methods: HashSet<Method>,
+    output: OutputType,
+    eoutput: OutputType,
 }
 
 impl Args {
-    fn new(args: EndpointArgs, method: Option<Method>) -> syn::Result<Self> {
+    fn new(args: EndpointArgs, method: Vec<Method>) -> syn::Result<Self> {
         let mut resource_name = None;
         let mut filters = Vec::new();
         let mut wrappers = Vec::new();
-        let mut methods = HashSet::new();
-
-        let is_route_macro = method.is_none();
-        if let Some(method) = method {
-            methods.insert(method);
-        }
-
+        let mut methods = HashSet::from_iter(method);
+        let mut output = OutputType::Bytes;
+        let mut eoutput = OutputType::Bytes;
+        let mut e_output_set = false;
         for nv in args.options {
             if nv.path.is_ident("name") {
                 if let syn::Expr::Lit(syn::ExprLit {
@@ -286,6 +574,36 @@ impl Args {
                 }) = nv.value
                 {
                     resource_name = Some(lit);
+                } else {
+                    return Err(syn::Error::new_spanned(
+                        nv.value,
+                        "Attribute name expects literal string",
+                    ));
+                }
+            } else if nv.path.is_ident("output") {
+                if let syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(lit),
+                    ..
+                }) = nv.value
+                {
+                    output = OutputType::try_from(&lit)?;
+                    if !e_output_set {
+                        eoutput = output;
+                    }
+                } else {
+                    return Err(syn::Error::new_spanned(
+                        nv.value,
+                        "Attribute name expects literal string",
+                    ));
+                }
+            } else if nv.path.is_ident("eoutput") {
+                e_output_set = true;
+                if let syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(lit),
+                    ..
+                }) = nv.value
+                {
+                    eoutput = OutputType::try_from(&lit)?;
                 } else {
                     return Err(syn::Error::new_spanned(
                         nv.value,
@@ -319,12 +637,7 @@ impl Args {
                     ));
                 }
             } else if nv.path.is_ident("method") {
-                if !is_route_macro {
-                    return Err(syn::Error::new_spanned(
-                        &nv,
-                        "HTTP method forbidden here; to handle multiple methods, use `route` instead",
-                    ));
-                } else if let syn::Expr::Lit(syn::ExprLit {
+                if let syn::Expr::Lit(syn::ExprLit {
                     lit: syn::Lit::Str(lit),
                     ..
                 }) = nv.value.clone()
@@ -355,6 +668,8 @@ impl Args {
             filters,
             wrappers,
             methods,
+            output,
+            eoutput,
         })
     }
 }

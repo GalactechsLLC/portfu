@@ -3,9 +3,20 @@ use async_trait::async_trait;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
+#[derive(PartialEq, Eq, Copy, Clone)]
 pub enum WrapperResult {
     Continue,
     Return,
+}
+
+impl From<bool> for WrapperResult {
+    fn from(value: bool) -> Self {
+        if value {
+            WrapperResult::Continue
+        } else {
+            WrapperResult::Return
+        }
+    }
 }
 
 #[async_trait]
@@ -22,8 +33,8 @@ impl Debug for (dyn WrapperFn + Send + Sync + 'static) {
 
 #[derive(Clone, Debug)]
 pub struct Wrapper {
-    name: String,
-    wrapper_functions: Vec<Arc<dyn WrapperFn + Sync + Send>>,
+    pub name: String,
+    pub wrapper_functions: Vec<Arc<dyn WrapperFn + Sync + Send>>,
 }
 #[async_trait]
 impl WrapperFn for Wrapper {

@@ -41,7 +41,11 @@ macro_rules! method_macro {
                 Ok(ast) => ast,
                 Err(err) => return input_and_compile_error(input, err),
             };
-            match Endpoint::new(args, ast, Some(method::Method::$variant)) {
+            match Endpoint::new(
+                args,
+                ast,
+                vec![method::Method::$variant, method::Method::Options],
+            ) {
                 Ok(route) => route.into_token_stream().into(),
                 Err(err) => input_and_compile_error(input, err),
             }
@@ -181,14 +185,19 @@ fn extract_method_filters(methods: &HashSet<Method>) -> TokenStream2 {
         let other_method_guards: Vec<TokenStream2> = others
             .map(|method| {
                 quote! {
-                    .or(::portfu::filters::method::#method.clone())
+                    ::portfu::filters::method::#method.clone()
                 }
             })
             .collect();
         quote! {
             .filter(
-                ::portfu::filters::any(::portfu::filters::method::#first.clone())
-                    #(#other_method_guards)*
+                ::std::sync::Arc::new(::portfu::filters::any(
+                    String::new(),
+                    &[
+                        ::portfu::filters::method::#first.clone(),
+                        #(#other_method_guards),*
+                    ]
+                ))
             )
         }
     } else {

@@ -2,7 +2,7 @@ use crate::parse_path_variables;
 use crate::server::endpoints::EndpointArgs;
 use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{quote, ToTokens};
-use syn::{parse_quote, FnArg, LitStr, Pat, Path, Type};
+use syn::{parse_quote, FnArg, GenericArgument, LitStr, Pat, Path, PathArguments, Type};
 
 pub struct WebSocketRoute {
     /// Name of the handler function being annotated.
@@ -92,62 +92,93 @@ impl ToTokens for WebSocketRoute {
                     let body_ident: Ident = Ident::new("Body", segment.ident.span());
                     let state_ident: Ident = Ident::new("State", segment.ident.span());
                     let ws_ident: Ident = Ident::new("WebSocket", segment.ident.span());
+                    let headers: Ident = Ident::new("HeaderMap", segment.ident.span());
                     if body_ident == segment.ident {
                         panic!("Body Not Supported for Websocket");
                     } else if state_ident == segment.ident {
-                        dyn_vars.push(quote! {
-                            let #ident_val: #ident_type = match ::portfu::prelude::State::extract(&mut request).await {
-                                Some(v) => v,
-                                None => {
-                                    *response.status_mut() = ::portfu::prelude::http::StatusCode::INTERNAL_SERVER_ERROR;
-                                    let bytes =::portfu::prelude::hyper::body::Bytes::from(format!("Failed to find {}", stringify!(#ident_type).replace(' ',"")));
-                                    *handle_data.response.body_mut() = bytes.stream_body();
-                                    return Err(ServiceResponse {
-                                        request,
-                                        response
-                                    });
+                        if let Some(_inner_type) = match &segment.arguments {
+                            PathArguments::None => panic!("State Inner Object Cannot be None"),
+                            PathArguments::AngleBracketed(args) => {
+                                if let Some(GenericArgument::Type(ty)) = args.args.first() {
+                                    Some(ty)
+                                } else {
+                                    continue;
                                 }
-                            };
-                        });
-                        additional_function_vars.push(quote! {
-                            #ident_val,
-                        });
+                            }
+                            PathArguments::Parenthesized(args) => args.inputs.first(),
+                        } {
+                            dyn_vars.push(quote! {
+                                let #ident_val: #ident_type = match handle_data.request.get()
+                                    .cloned()
+                                    .map(|data| ::portfu::pfcore::State(data)).ok_or(
+                                        ::std::io::Error::new(::std::io::ErrorKind::NotFound, format!("Failed to find State of type {}", stringify!(#ident_type)))
+                                    ) {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        return Err((handle_data, e));
+                                    }
+                                };
+                            });
+                            additional_function_vars.push(quote! {
+                                #ident_val,
+                            });
+                        }
                         continue;
                     } else if ws_ident == segment.ident {
                         additional_function_vars.push(quote! {
                             websocket,
                         });
                         continue;
+                    } else if headers == segment.ident {
+                        additional_function_vars.push(quote! {
+                            headers,
+                        });
+                        continue;
                     }
                 }
             }
-            let function_name = &ast.sig.ident;
-            additional_function_vars.push(quote! {
-                match request.get() {
-                    Some(v) => v,
-                    None => {
-                        *response.status_mut() = ::portfu::prelude::http::StatusCode::INTERNAL_SERVER_ERROR;
-                        let bytes =::portfu::prelude::hyper::body::Bytes::from(format!("Failed to find {} for {}", stringify!(#ident_type).replace(' ',""), stringify!(#function_name)));
-                        *handle_data.response.body_mut() = bytes.stream_body();
-                        return Err(ServiceResponse {
-                            request,
-                            response
-                        });
+            dyn_vars.push(quote! {
+                let #ident_val: #ident_type = match ::portfu::pfcore::FromRequest::from_request(&mut handle_data.request, stringify!(#ident_val)).await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        *handle_data.response.status_mut() = ::portfu::prelude::http::StatusCode::INTERNAL_SERVER_ERROR;
+                        handle_data.response.set_body(
+                            ::portfu::pfcore::service::BodyType::Stream(
+                                ::portfu::prelude::hyper::body::Bytes::from(
+                                    format!("Failed to extract {} as {}, {e:?}",
+                                        stringify!(#ident_val), stringify!(#ident_type).replace(' ',"")
+                                    )
+                                ).stream_body()
+                            )
+                        );
+                        return Ok(handle_data);
                     }
-                },
+                };
+            });
+            additional_function_vars.push(quote! {
+                #ident_val,
             });
         }
         let stream = quote! {
             #(#doc_attributes)*
             #[allow(non_camel_case_types, missing_docs)]
             pub struct #name {
-                peers: ::portfu::prelude::Peers
+                pub peers: ::portfu::prelude::Peers
+            }
+            impl Default for #name {
+                fn default() -> Self {
+                    Self {
+                        peers: Default::default()
+                    }
+                }
             }
             impl ::portfu::pfcore::ServiceRegister for #name {
-                fn register(self, service_registry: &mut portfu::prelude::ServiceRegistry) {
+                fn register(self, service_registry: &mut portfu::prelude::ServiceRegistry, shared_state: portfu::prelude::http::Extensions) {
                     let __resource = ::portfu::pfcore::service::ServiceBuilder::new(#path)
                         .name(#resource_name)
+                        .extend_state(shared_state.clone())
                         .filter(::portfu::filters::method::GET.clone())
+                        .extend_state(shared_state.clone())
                         #(.filter(::portfu::pfcore::filters::fn_guard(#filters)))*
                         #(.wrap(#wrappers))*
                         .handler(std::sync::Arc::new(self)).build();
@@ -169,47 +200,85 @@ impl ToTokens for WebSocketRoute {
                 fn name(&self) -> &str {
                     stringify!(#name)
                 }
+                fn service_type(&self) -> ::portfu::prelude::ServiceType {
+                    ::portfu::prelude::ServiceType::API
+                }
                 async fn handle(
                     &self,
                     mut handle_data: ::portfu::prelude::ServiceData
                 ) -> Result<::portfu::prelude::ServiceData, (::portfu::prelude::ServiceData, ::std::io::Error)> {
                     use ::portfu::pfcore::IntoStreamBody;
+                    use ::portfu::prelude::futures_util::StreamExt;
+                    ::portfu::prelude::log::info!("Checking for Upgrade");
                     if handle_data.request.request.is_upgrade_request() {
                         #ast
                         #(#dyn_vars)*
-                        log::info!("Upgrading Websocket");
-                        let (response, websocket) = match handle_data.request.request.upgrade() {
-                            Ok((response, websocket)) => (response, websocket),
-                            Err(e) => {
-                                let bytes = ::portfu::prelude::hyper::body::Bytes::from("Failed to Upgrade Request");
-                                *handle_data.response.body_mut() = bytes.stream_body();
-                                return Ok::<::portfu::prelude::ServiceData, (::portfu::prelude::ServiceData, ::std::io::Error)>(handle_data);
+                        ::portfu::prelude::log::info!("Upgrading Websocket");
+                        let key = match handle_data.request.request.headers() {
+                            Some(header_map) => match header_map.get("Sec-WebSocket-Key") {
+                                Some(key) => key.clone(),
+                                None => {
+                                    return Err((handle_data, ::std::io::Error::new(::std::io::ErrorKind::Other, "Missing Sec-WebSocket-Key Header")));
+                                }
+                            }
+                            None => {
+                                return Err((handle_data, ::std::io::Error::new(::std::io::ErrorKind::Other, "No Headers in Request")));
                             }
                         };
+                        let response = match ::portfu::prelude::http::Response::builder()
+                            .status(::portfu::prelude::http::StatusCode::SWITCHING_PROTOCOLS)
+                            .header(::portfu::prelude::hyper::header::CONNECTION, "upgrade")
+                            .header(::portfu::prelude::hyper::header::UPGRADE, "websocket")
+                            .header("Sec-WebSocket-Accept", &::portfu::prelude::tokio_tungstenite::tungstenite::handshake::derive_accept_key(key.as_bytes()))
+                            .body(::portfu::prelude::http_body_util::Full::default()) {
+                            Ok(response) => response,
+                            Err(e) => {
+                                ::portfu::prelude::log::error!("Failed to build WebSocket Response: {}", e);
+                                return Err((handle_data, ::std::io::Error::new(::std::io::ErrorKind::Other, format!("{e:?}"))));
+                            }
+                        };
+                        ::portfu::prelude::log::info!("Got Past Request Upgrade");
                         let peers = self.peers.clone();
+                        let headers = handle_data.request.request.headers().cloned().unwrap_or_default();
+                        let websocket = match &mut handle_data.request.request {
+                            ::portfu::prelude::IncomingRequest::Stream(request) => Ok(::portfu::prelude::hyper::upgrade::on(request)),
+                            ::portfu::prelude::IncomingRequest::Sized(request) => Ok(::portfu::prelude::hyper::upgrade::on(request)),
+                            ::portfu::prelude::IncomingRequest::Consumed(parts) => Ok(
+                                ::portfu::prelude::hyper::upgrade::on(::portfu::prelude::http::Request::<::portfu::prelude::http_body_util::Empty<()>>::from_parts(
+                                    parts.clone(),
+                                    ::portfu::prelude::http_body_util::Empty::default(),
+                                )),
+                            ),
+                            ::portfu::prelude::IncomingRequest::Empty => Err(
+                                ::std::io::Error::new(::std::io::ErrorKind::Other, format!("Empty Socket Request"))
+                            ),
+                        };
                         ::tokio::spawn( async move {
-                            select! {
+                            ::tokio::select! {
                                 _ = async {
-                                    let websocket = match websocket.await {
-                                        Ok(ws) => ::portfu::prelude::tokio_tungstenite::WebSocketStream::from_raw_socket(
-                                            ::portfu::prelude::hyper_util::rt::tokio::TokioIo::new(ws),
-                                            ::portfu::prelude::tokio_tungstenite::tungstenite::protocol::Role::Server,
-                                            None
-                                        ).await,
-                                        Err(e) => {
-                                            log::error!("{e:?}");
-                                            return Ok::<(), ::std::io::Error>(());
-                                        }
-                                    };
-                                    let uuid = ::std::sync::Arc::new(::portfu::prelude::uuid::Uuid::new_v4());
-                                    let connection = ::std::sync::Arc::new(::portfu::prelude::WebsocketConnection::new(websocket));
+                                    let stream = websocket?.await.map_err(|e| {
+                                        ::portfu::prelude::log::error!("Failed to Upgrade Connection: {}", e);
+                                        ::std::io::Error::new(::std::io::ErrorKind::Other, format!("{e:?}"))
+                                    })?;
+                                    let stream = ::portfu::prelude::WebsocketMsgStream::TokioIo( ::portfu::prelude::tokio_tungstenite::WebSocketStream::from_raw_socket(
+                                        portfu::prelude::hyper_util::rt::TokioIo::new(stream),
+                                        ::portfu::prelude::tokio_tungstenite::tungstenite::protocol::Role::Server, None).await
+                                    );
+                                    let (write, read) = stream.split();
+                                    let connection = ::std::sync::Arc::new(::portfu::prelude::WebsocketConnection {
+                                        write: ::tokio::sync::RwLock::new(write),
+                                        read: ::tokio::sync::RwLock::new(read),
+                                    });
+                                    let uuid = ::std::sync::Arc::new( ::portfu::prelude::uuid::Uuid::new_v4());
                                     peers.write().await.insert(*uuid.as_ref(), connection.clone());
-                                    let websocket = ::portfu::prelude::WebSocket {
+                                    let mut websocket = ::portfu::prelude::WebSocket {
                                         connection,
                                         uuid: uuid.clone(),
-                                        peers: peers.clone()
+                                        peers: peers.clone(),
                                     };
-                                    let _ = #name(#(#additional_function_vars)*).await;
+                                    if let Err(e) = #name(#(#additional_function_vars)*).await {
+                                        ::portfu::prelude::log::error!("Websocket Exited: {e:?}");
+                                    }
                                     peers.write().await.remove(uuid.as_ref());
                                     Ok::<(), ::std::io::Error>(())
                                 } => {
@@ -220,13 +289,17 @@ impl ToTokens for WebSocketRoute {
                                 }
                             }
                         });
-                        log::info!("Sending Upgrade Response");
+                        ::portfu::prelude::log::debug!("Sending Upgrade Response");
                         let (parts, body) = response.into_parts();
-                        handle_data.response = Response::from_parts(parts, body.stream_body());
+                        handle_data.response.set_response(
+                            ::portfu::pfcore::service::OutgoingResponse::Stream(
+                                ::portfu::prelude::http::response::Response::from_parts(parts, body.stream_body())
+                            )
+                        );
                         Ok::<::portfu::prelude::ServiceData, (::portfu::prelude::ServiceData, ::std::io::Error)>(handle_data)
                     } else {
                         let bytes = ::portfu::prelude::hyper::body::Bytes::from("HTTP NOT SUPPORTED ON THIS ENDPOINT");
-                        *handle_data.response.body_mut() = bytes.stream_body();
+                        handle_data.response.set_body(::portfu::pfcore::service::BodyType::Stream(bytes.stream_body()));
                         Ok::<::portfu::prelude::ServiceData, (::portfu::prelude::ServiceData, ::std::io::Error)>(handle_data)
                     }
                 }
