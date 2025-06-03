@@ -1,7 +1,7 @@
 use portfu_admin::users::UserRole;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
-use std::io::{Error, ErrorKind};
+use std::io::Error;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::{env, fs};
@@ -129,7 +129,7 @@ impl TryFrom<&Path> for Config {
     type Error = Error;
     fn try_from(value: &Path) -> Result<Self, Self::Error> {
         serde_yaml::from_str::<Config>(&fs::read_to_string(value)?)
-            .map_err(|e| Error::new(ErrorKind::Other, format!("{:?}", e)))
+            .map_err(|e| Error::other(format!("{:?}", e)))
     }
 }
 impl TryFrom<&PathBuf> for Config {

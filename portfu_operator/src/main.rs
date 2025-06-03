@@ -9,7 +9,7 @@ use portfu_operator_lib::services::kube::KubeNamespace;
 use portfu_operator_lib::services::register_services;
 use simple_logger::SimpleLogger;
 use std::env;
-use std::io::{Error, ErrorKind};
+use std::io::Error;
 use std::str::FromStr;
 
 const DEFAULT_HOSTNAME: &str = "0.0.0.0";
@@ -28,7 +28,7 @@ async fn main() -> Result<(), Error> {
     let namespace = env::var("NAMESPACE").unwrap_or(kube::DEFAULT_NAMESPACE.to_string());
     let kube_client = Client::try_default()
         .await
-        .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?;
+        .map_err(|e| Error::other(format!("{e:?}")))?;
     info!("Starting Operator on {host}:{port}");
     let server = register_services(
         ServerBuilder::default()

@@ -85,7 +85,7 @@ impl<
             Err(e) => {
                 return match e {
                     sqlx::Error::RowNotFound => Ok(vec![]),
-                    _ => Err(Error::new(ErrorKind::Other, format!("{e:?}"))),
+                    _ => Err(Error::other(format!("{e:?}"))),
                 };
             }
         }
@@ -106,7 +106,7 @@ impl<
             Err(e) => {
                 return match e {
                     sqlx::Error::RowNotFound => Ok(None),
-                    _ => Err(Error::new(ErrorKind::Other, format!("{e:?}"))),
+                    _ => Err(Error::other(format!("{e:?}"))),
                 };
             }
         }
@@ -135,7 +135,7 @@ impl<
             Err(e) => {
                 return match e {
                     sqlx::Error::RowNotFound => Ok(vec![]),
-                    _ => Err(Error::new(ErrorKind::Other, format!("{e:?}"))),
+                    _ => Err(Error::other(format!("{e:?}"))),
                 };
             }
         }
@@ -185,7 +185,7 @@ impl<
                         format!("Failed to Rollback Transaction: {e:?}"),
                     )
                 })?;
-                Err(Error::new(ErrorKind::Other, format!("{e:?}")))
+                Err(Error::other(format!("{e:?}")))
             }
         }
     }
@@ -229,7 +229,7 @@ impl<
                             format!("Failed to Rollback Transaction: {e:?}"),
                         )
                     })?;
-                    Err(Error::new(ErrorKind::Other, "TOO MANY ROWS AFFECTED"))
+                    Err(Error::other("TOO MANY ROWS AFFECTED"))
                 } else {
                     transaction.commit().await.map_err(|e| {
                         Error::new(
@@ -247,7 +247,7 @@ impl<
                         format!("Failed to Rollback Transaction: {e:?}"),
                     )
                 })?;
-                Err(Error::new(ErrorKind::Other, format!("{e:?}")))
+                Err(Error::other(format!("{e:?}")))
             }
         }
     }
@@ -271,7 +271,7 @@ impl<
                             format!("Failed to Rollback Transaction: {e:?}"),
                         )
                     })?;
-                    Err(Error::new(ErrorKind::Other, "TOO MANY ROWS AFFECTED"))
+                    Err(Error::other("TOO MANY ROWS AFFECTED"))
                 } else {
                     Ok(Some(t))
                 }
@@ -283,7 +283,7 @@ impl<
                         format!("Failed to Rollback Transaction: {e:?}"),
                     )
                 })?;
-                Err(Error::new(ErrorKind::Other, format!("{e:?}")))
+                Err(Error::other(format!("{e:?}")))
             }
         }
     }

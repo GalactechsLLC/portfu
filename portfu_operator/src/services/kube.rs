@@ -11,7 +11,7 @@ use kube::{Api, Client};
 use portfu::macros::get;
 use portfu::pfcore::Json;
 use portfu::prelude::*;
-use std::io::{Error, ErrorKind};
+use std::io::Error;
 
 pub struct KubeNamespace(pub String);
 
@@ -23,7 +23,7 @@ pub async fn get_nodes(
     let api: Api<Node> = Api::all(client.as_ref().clone());
     api.list(&list_params.inner().unwrap_or_default().into())
         .await
-        .map_err(|e| Error::new(ErrorKind::Other, format!("Error Reading Node List: {e:?}")))
+        .map_err(|e| Error::other(format!("Error Reading Node List: {e:?}")))
 }
 
 #[get("/cluster/ingress", output = "Json", eoutput = "bytes")]
@@ -35,12 +35,7 @@ pub async fn get_ingress(
     let api: Api<Ingress> = Api::namespaced(client.as_ref().clone(), namespace.as_ref().0.as_ref());
     api.list(&list_params.inner().unwrap_or_default().into())
         .await
-        .map_err(|e| {
-            Error::new(
-                ErrorKind::Other,
-                format!("Error Reading Ingress List: {e:?}"),
-            )
-        })
+        .map_err(|e| Error::other(format!("Error Reading Ingress List: {e:?}")))
 }
 
 #[get("/cluster/services", output = "Json", eoutput = "bytes")]
@@ -53,12 +48,7 @@ pub async fn get_services(
         Api::namespaced(client.as_ref().clone(), namespace.as_ref().0.as_ref());
     api.list(&list_params.inner().unwrap_or_default().into())
         .await
-        .map_err(|e| {
-            Error::new(
-                ErrorKind::Other,
-                format!("Error Reading Service List: {e:?}"),
-            )
-        })
+        .map_err(|e| Error::other(format!("Error Reading Service List: {e:?}")))
 }
 
 #[get("/cluster/configs", output = "Json", eoutput = "bytes")]
@@ -71,12 +61,7 @@ pub async fn get_configs(
         Api::namespaced(client.as_ref().clone(), namespace.as_ref().0.as_ref());
     api.list(&list_params.inner().unwrap_or_default().into())
         .await
-        .map_err(|e| {
-            Error::new(
-                ErrorKind::Other,
-                format!("Error Reading Config Map List: {e:?}"),
-            )
-        })
+        .map_err(|e| Error::other(format!("Error Reading Config Map List: {e:?}")))
 }
 
 #[get("/cluster/volume_claims", output = "Json", eoutput = "bytes")]
@@ -89,12 +74,7 @@ pub async fn get_volume_claims(
         Api::namespaced(client.as_ref().clone(), namespace.as_ref().0.as_ref());
     api.list(&list_params.inner().unwrap_or_default().into())
         .await
-        .map_err(|e| {
-            Error::new(
-                ErrorKind::Other,
-                format!("Error Reading PersistentVolumeClaim List: {e:?}"),
-            )
-        })
+        .map_err(|e| Error::other(format!("Error Reading PersistentVolumeClaim List: {e:?}")))
 }
 
 #[get("/cluster/pods", output = "Json", eoutput = "bytes")]
@@ -106,7 +86,7 @@ pub async fn get_pods(
     let api: Api<Pod> = Api::namespaced(client.as_ref().clone(), namespace.as_ref().0.as_ref());
     api.list(&list_params.inner().unwrap_or_default().into())
         .await
-        .map_err(|e| Error::new(ErrorKind::Other, format!("Error Reading Pod List: {e:?}")))
+        .map_err(|e| Error::other(format!("Error Reading Pod List: {e:?}")))
 }
 
 #[get("/cluster/volumes", output = "Json", eoutput = "bytes")]
@@ -117,12 +97,7 @@ pub async fn get_volumes(
     let api: Api<PersistentVolume> = Api::all(client.as_ref().clone());
     api.list(&list_params.inner().unwrap_or_default().into())
         .await
-        .map_err(|e| {
-            Error::new(
-                ErrorKind::Other,
-                format!("Error Reading Volume List: {e:?}"),
-            )
-        })
+        .map_err(|e| Error::other(format!("Error Reading Volume List: {e:?}")))
 }
 
 #[get("/cluster/storage_classes", output = "Json", eoutput = "bytes")]
@@ -133,12 +108,7 @@ pub async fn get_storage_classes(
     let api: Api<StorageClass> = Api::all(client.as_ref().clone());
     api.list(&list_params.inner().unwrap_or_default().into())
         .await
-        .map_err(|e| {
-            Error::new(
-                ErrorKind::Other,
-                format!("Error Reading StorageClass List: {e:?}"),
-            )
-        })
+        .map_err(|e| Error::other(format!("Error Reading StorageClass List: {e:?}")))
 }
 
 #[get("/cluster/namespaces", output = "Json", eoutput = "bytes")]
@@ -149,12 +119,7 @@ pub async fn get_namespaces(
     let api: Api<Namespace> = Api::all(client.as_ref().clone());
     api.list(&list_params.inner().unwrap_or_default().into())
         .await
-        .map_err(|e| {
-            Error::new(
-                ErrorKind::Other,
-                format!("Error Reading Namespace List: {e:?}"),
-            )
-        })
+        .map_err(|e| Error::other(format!("Error Reading Namespace List: {e:?}")))
 }
 
 #[get("/cluster/deployments", output = "Json", eoutput = "bytes")]
@@ -165,10 +130,5 @@ pub async fn get_deployments(
     let api: Api<Deployment> = Api::all(client.as_ref().clone());
     api.list(&list_params.inner().unwrap_or_default().into())
         .await
-        .map_err(|e| {
-            Error::new(
-                ErrorKind::Other,
-                format!("Error Reading Deployment List: {e:?}"),
-            )
-        })
+        .map_err(|e| Error::other(format!("Error Reading Deployment List: {e:?}")))
 }

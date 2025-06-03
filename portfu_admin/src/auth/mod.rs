@@ -67,7 +67,7 @@ pub async fn basic_login<B: BasicAuth + Send + Sync + 'static>(
         Some(v) => v,
         None => match query.inner() {
             Some(v) => v,
-            None => return Err(Error::new(ErrorKind::Other, "No Auth Request Found")),
+            None => return Err(Error::other("No Auth Request Found")),
         },
     };
     let claims: Claims = login_handle

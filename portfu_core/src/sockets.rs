@@ -49,12 +49,9 @@ impl WebSocket {
         lazy(|ctx| match (*stream).poll_next_unpin(ctx) {
             Poll::Pending => Ok(None),
             Poll::Ready(None) => Err(Error::new(ErrorKind::ConnectionAborted, "Stream Closed")),
-            Poll::Ready(Some(v)) => v.map(Some).map_err(|e| {
-                Error::new(
-                    ErrorKind::Other,
-                    format!("Failed to Read Websocket Message: {e:?}"),
-                )
-            }),
+            Poll::Ready(Some(v)) => v
+                .map(Some)
+                .map_err(|e| Error::other(format!("Failed to Read Websocket Message: {e:?}"))),
         })
         .await
     }
@@ -66,21 +63,14 @@ impl WebSocket {
             .next()
             .await
             .transpose()
-            .map_err(|e| {
-                Error::new(
-                    ErrorKind::Other,
-                    format!("Failed to Read Next Websocket Message: {e:?}"),
-                )
-            })
+            .map_err(|e| Error::other(format!("Failed to Read Next Websocket Message: {e:?}")))
     }
     pub async fn send(&self, msg: Message) -> Result<(), Error> {
         let mut stream = self.connection.write.write().await;
-        stream.send(msg.clone()).await.map_err(|e| {
-            Error::new(
-                ErrorKind::Other,
-                format!("Failed to Send Websocket Message: {e:?}"),
-            )
-        })
+        stream
+            .send(msg.clone())
+            .await
+            .map_err(|e| Error::other(format!("Failed to Send Websocket Message: {e:?}")))
     }
     pub async fn send_to(&self, msg: Message, uuid: Uuid) -> Result<(), Error> {
         match self.peers.read().await.get(&uuid).cloned() {
@@ -90,12 +80,10 @@ impl WebSocket {
             )),
             Some(peer) => {
                 let mut stream = peer.write.write().await;
-                stream.send(msg).await.map_err(|e| {
-                    Error::new(
-                        ErrorKind::Other,
-                        format!("Failed to Send Websocket Message: {e:?}"),
-                    )
-                })
+                stream
+                    .send(msg)
+                    .await
+                    .map_err(|e| Error::other(format!("Failed to Send Websocket Message: {e:?}")))
             }
         }
     }
@@ -103,10 +91,9 @@ impl WebSocket {
         for msg in msgs {
             if let Err(e) = self.connection.write.write().await.feed(msg).await {
                 let _ = self.connection.write.write().await.flush().await;
-                return Err(Error::new(
-                    ErrorKind::Other,
-                    format!("Failed to Send Websocket Message: {e:?}"),
-                ));
+                return Err(Error::other(format!(
+                    "Failed to Send Websocket Message: {e:?}"
+                )));
             }
         }
         self.connection
@@ -115,40 +102,31 @@ impl WebSocket {
             .await
             .flush()
             .await
-            .map_err(|e| {
-                Error::new(
-                    ErrorKind::Other,
-                    format!("Failed to Send Websocket Message: {e:?}"),
-                )
-            })
+            .map_err(|e| Error::other(format!("Failed to Send Websocket Message: {e:?}")))
     }
     pub async fn broadcast(&self, msg: Message) -> Result<(), Error> {
         let mut stream = self.connection.write.write().await;
-        stream.send(msg.clone()).await.map_err(|e| {
-            Error::new(
-                ErrorKind::Other,
-                format!("Failed to Send Websocket Message: {e:?}"),
-            )
-        })?;
+        stream
+            .send(msg.clone())
+            .await
+            .map_err(|e| Error::other(format!("Failed to Send Websocket Message: {e:?}")))?;
         self.broadcast_others(msg).await
     }
     pub async fn broadcast_others(&self, msg: Message) -> Result<(), Error> {
         for peer in self.peers.read().await.values().cloned() {
             let mut stream = peer.write.write().await;
-            stream.send(msg.clone()).await.map_err(|e| {
-                Error::new(
-                    ErrorKind::Other,
-                    format!("Failed to Send Websocket Message: {e:?}"),
-                )
-            })?;
+            stream
+                .send(msg.clone())
+                .await
+                .map_err(|e| Error::other(format!("Failed to Send Websocket Message: {e:?}")))?;
         }
         Ok(())
     }
 }
 
 pub enum WebsocketMsgStream {
-    TokioIo(WebSocketStream<TokioIo<Upgraded>>),
-    Tls(WebSocketStream<MaybeTlsStream<TcpStream>>),
+    TokioIo(Box<WebSocketStream<TokioIo<Upgraded>>>),
+    Tls(Box<WebSocketStream<MaybeTlsStream<TcpStream>>>),
 }
 impl Stream for WebsocketMsgStream {
     type Item = Result<Message, tokio_tungstenite::tungstenite::error::Error>;

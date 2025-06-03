@@ -171,7 +171,7 @@ pub async fn find_configs(
     let cm_list = api
         .list(&lp)
         .await
-        .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?;
+        .map_err(|e| Error::other(format!("{e:?}")))?;
     let mut configs = vec![];
     for cm in cm_list {
         if let Some(s) = &cm.metadata.name {
@@ -199,7 +199,7 @@ pub async fn save_config(
         let patched = api
             .patch(name, &pp, &patch)
             .await
-            .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?;
+            .map_err(|e| Error::other(format!("{e:?}")))?;
         Ok(RuntimeConfigMap(patched))
     } else {
         Err(Error::new(
@@ -240,7 +240,7 @@ pub async fn create_namespace(
     let pp = PatchParams::apply("portfu-operator");
     api.patch(namespace, &pp, &patch)
         .await
-        .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))
+        .map_err(|e| Error::other(format!("{e:?}")))
 }
 
 #[allow(unused)]
@@ -286,7 +286,7 @@ pub async fn create_persistent_volume_claim(
     let pp = PatchParams::apply("portfu-operator");
     api.patch(&name, &pp, &patch)
         .await
-        .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))
+        .map_err(|e| Error::other(format!("{e:?}")))
 }
 
 #[allow(unused)]
@@ -333,7 +333,7 @@ pub async fn create_service(
     let pp = PatchParams::apply("portfu-operator");
     api.patch(&runtime_config.name, &pp, &patch)
         .await
-        .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))
+        .map_err(|e| Error::other(format!("{e:?}")))
 }
 
 #[allow(unused)]
@@ -426,7 +426,7 @@ pub async fn create_ingress(
     let pp = PatchParams::apply("portfu-operator");
     api.patch(&name, &pp, &patch)
         .await
-        .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))
+        .map_err(|e| Error::other(format!("{e:?}")))
 }
 
 #[allow(unused)]
@@ -439,7 +439,7 @@ pub async fn has_persistent_volume_claim(
     let api: Api<PersistentVolumeClaim> = Api::namespaced(client.clone(), namespace);
     api.get_opt(&volume_config.name)
         .await
-        .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))
+        .map_err(|e| Error::other(format!("{e:?}")))
 }
 
 #[allow(unused)]
@@ -452,7 +452,7 @@ pub async fn has_service(
     let api: Api<Service> = Api::namespaced(client.clone(), namespace);
     api.get_opt(&config.name)
         .await
-        .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))
+        .map_err(|e| Error::other(format!("{e:?}")))
 }
 
 #[allow(unused)]
@@ -466,7 +466,7 @@ pub async fn has_running_pod(
     let pod = api
         .get_opt(&config.name)
         .await
-        .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?;
+        .map_err(|e| Error::other(format!("{e:?}")))?;
     Ok(pod)
 }
 
@@ -481,7 +481,7 @@ pub async fn has_deployment(
     let deployment = api
         .get_opt(&config.name)
         .await
-        .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?;
+        .map_err(|e| Error::other(format!("{e:?}")))?;
     Ok(deployment)
 }
 
@@ -496,7 +496,7 @@ pub async fn has_ingress(
     let ingress = api
         .get_opt(&config.name)
         .await
-        .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?;
+        .map_err(|e| Error::other(format!("{e:?}")))?;
     Ok(ingress)
 }
 
@@ -550,7 +550,7 @@ pub async fn create_deployment(
         let deployment = api
             .patch(&config.name, &pp, &patch)
             .await
-            .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?;
+            .map_err(|e| Error::other(format!("{e:?}")))?;
         //Create the Services
         let _services =
             if let Some(i) = has_service(client.clone(), namespace.clone(), &config).await? {
@@ -576,7 +576,7 @@ pub async fn create_deployment(
 pub async fn test_save_config() -> Result<(), Error> {
     let client = Client::try_default()
         .await
-        .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?;
+        .map_err(|e| Error::other(format!("{e:?}")))?;
     let uuid = uuid::Uuid::new_v4();
     let namespace = create_namespace(client.clone(), None).await?;
     let patched = save_config(
@@ -626,7 +626,7 @@ pub async fn test_save_config() -> Result<(), Error> {
 pub async fn test_find_configs() -> Result<(), Error> {
     let client = Client::try_default()
         .await
-        .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?;
+        .map_err(|e| Error::other(format!("{e:?}")))?;
     let data = find_configs(client, Some("infrastructure".to_string())).await?;
     println!("Found: {}", data.len());
     Ok(())

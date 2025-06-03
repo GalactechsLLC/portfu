@@ -8,7 +8,7 @@ use pfcore::wrappers::{WrapperFn, WrapperResult};
 use pfcore::ServiceData;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
-use std::io::{Error, ErrorKind};
+use std::io::Error;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -275,12 +275,7 @@ pub async fn handle_unsized(data: &mut ServiceData, limit: usize) -> Result<Wrap
     let mut body = data.request.consume();
     let mut buffer = Vec::with_capacity(limit);
     while let Some(next) = body.frame().await {
-        let frame = next.map_err(|e| {
-            Error::new(
-                ErrorKind::Other,
-                format!("HTTP ERROR IN RATE_LIMITER: {e:?}"),
-            )
-        })?;
+        let frame = next.map_err(|e| Error::other(format!("HTTP ERROR IN RATE_LIMITER: {e:?}")))?;
         if let Some(chunk) = frame.data_ref() {
             if buffer.len() > limit || buffer.len() + chunk.len() > limit {
                 return Ok(create_error(

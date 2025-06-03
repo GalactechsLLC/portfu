@@ -164,23 +164,22 @@ pub fn generate_ca_signed_cert(
     cert_data: &[u8],
     key_data: &[u8],
 ) -> Result<(Vec<u8>, Vec<u8>), Error> {
-    let root_cert = Certificate::from_pem(cert_data)
-        .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?;
+    let root_cert = Certificate::from_pem(cert_data).map_err(|e| Error::other(format!("{e:?}")))?;
     let root_key = rsa::RsaPrivateKey::from_pkcs1_pem(&String::from_utf8_lossy(key_data))
         .or_else(|_| rsa::RsaPrivateKey::from_pkcs8_pem(&String::from_utf8_lossy(key_data)))
-        .map_err(|e| Error::new(ErrorKind::Other, format!("Failed to load Root Key: {e:?}")))?;
+        .map_err(|e| Error::other(format!("Failed to load Root Key: {e:?}")))?;
     let mut rng = rand::thread_rng();
-    let cert_key = rsa::RsaPrivateKey::new(&mut rng, 2048)
-        .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?;
+    let cert_key =
+        rsa::RsaPrivateKey::new(&mut rng, 2048).map_err(|e| Error::other(format!("{e:?}")))?;
     let pub_key = cert_key.to_public_key();
     let signing_key: SigningKey<Sha256> = SigningKey::new(root_key);
     let subject_pub_key = SubjectPublicKeyInfo::from_pem(
         pub_key
             .to_public_key_pem(LineEnding::default())
-            .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?
+            .map_err(|e| Error::other(format!("{e:?}")))?
             .as_bytes(),
     )
-    .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?;
+    .map_err(|e| Error::other(format!("{e:?}")))?;
     let mut cert = CertificateBuilder::new(
         Profile::Leaf {
             issuer: root_cert.tbs_certificate.issuer,
@@ -191,37 +190,35 @@ pub fn generate_ca_signed_cert(
         Validity {
             not_before: Time::UtcTime(
                 UtcTime::from_system_time(SystemTime::now().sub(Duration::from_secs(60 * 60 * 24)))
-                    .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?,
+                    .map_err(|e| Error::other(format!("{e:?}")))?,
             ),
             not_after: Time::UtcTime(
                 UtcTime::from_date_time(
                     DateTime::new(2049, 8, 2, 0, 0, 0)
-                        .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?,
+                        .map_err(|e| Error::other(format!("{e:?}")))?,
                 )
-                .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?,
+                .map_err(|e| Error::other(format!("{e:?}")))?,
             ),
         },
         Name::from_str("CN=Chia,O=Chia,OU=Organic Farming Division")
-            .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?,
+            .map_err(|e| Error::other(format!("{e:?}")))?,
         subject_pub_key,
         &signing_key,
     )
-    .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?;
+    .map_err(|e| Error::other(format!("{e:?}")))?;
     cert.add_extension(&SubjectAltName(vec![GeneralName::DnsName(
-        Ia5String::new("chia.net").map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?,
+        Ia5String::new("chia.net").map_err(|e| Error::other(format!("{e:?}")))?,
     )]))
-    .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?;
-    let cert = cert
-        .build()
-        .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?;
+    .map_err(|e| Error::other(format!("{e:?}")))?;
+    let cert = cert.build().map_err(|e| Error::other(format!("{e:?}")))?;
     Ok((
         cert.to_pem(LineEnding::default())
-            .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?
+            .map_err(|e| Error::other(format!("{e:?}")))?
             .as_bytes()
             .to_vec(),
         cert_key
             .to_pkcs8_pem(LineEnding::default())
-            .map_err(|e| Error::new(ErrorKind::Other, format!("{e:?}")))?
+            .map_err(|e| Error::other(format!("{e:?}")))?
             .as_bytes()
             .to_vec(),
     ))

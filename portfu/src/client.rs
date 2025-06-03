@@ -8,7 +8,7 @@ use pfcore::PinnedBody;
 use rustls::client::ClientConfig;
 use rustls::pki_types::ServerName;
 use rustls::RootCertStore;
-use std::io::{Error, ErrorKind};
+use std::io::Error;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -134,17 +134,17 @@ pub async fn new_websocket(url: &str, headers: Option<HeaderMap>) -> Result<WebS
     debug!("Starting Websocket Connection to: {}", url);
     let mut request = url
         .into_client_request()
-        .map_err(|e| Error::new(ErrorKind::Other, format!("{:?}", e)))?;
+        .map_err(|e| Error::other(format!("{:?}", e)))?;
     if let Some(headers) = headers {
         request.headers_mut().extend(headers.into_iter())
     }
     let (ws_stream, response) = match connect_async(request).await {
         Ok(result) => result,
-        Err(e) => return Err(Error::new(ErrorKind::Other, format!("{:?}", e))),
+        Err(e) => return Err(Error::other(format!("{:?}", e))),
     };
     debug!("Connected with HTTP status: {}", response.status());
     Ok(WebSocket::new(
-        WebsocketConnection::new(WebsocketMsgStream::Tls(ws_stream)),
+        WebsocketConnection::new(WebsocketMsgStream::Tls(Box::new(ws_stream))),
         Arc::new(Uuid::new_v4()),
     ))
 }
