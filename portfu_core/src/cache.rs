@@ -70,7 +70,7 @@ impl<K: Eq + PartialEq + Hash, V, const N: usize> CircularCache<K, V, N> {
         let mut hasher = DefaultHasher::new();
         key.hash(&mut hasher);
         let search_hash = hasher.finish();
-        self.hashes.iter().any(|k| *k == Some(search_hash))
+        self.hashes.contains(&Some(search_hash))
     }
     pub fn insert(&mut self, key: K, value: V) -> (Option<K>, Option<V>) {
         let index = if let Some(index) = &mut self.index {

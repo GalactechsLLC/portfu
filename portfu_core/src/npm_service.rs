@@ -68,15 +68,10 @@ impl TaskFn for NpmSinglePageApp {
             .build()
             .expect("Failed to create async context");
         let mut watcher = RecommendedWatcher::new(EventHandler { tx, runtime }, Config::default())
-            .map_err(|e| Error::new(ErrorKind::Other, format!("Failed to spawn watcher: {e:?}")))?;
+            .map_err(|e| Error::other(format!("Failed to spawn watcher: {e:?}")))?;
         watcher
             .watch(&self.src_directory, RecursiveMode::Recursive)
-            .map_err(|e| {
-                Error::new(
-                    ErrorKind::Other,
-                    format!("Failed to add src directory to watcher: {e:?}"),
-                )
-            })?;
+            .map_err(|e| Error::other(format!("Failed to add src directory to watcher: {e:?}")))?;
         match state.read().await.get::<Arc<Server>>().cloned() {
             None => Err(Error::new(
                 ErrorKind::NotFound,
