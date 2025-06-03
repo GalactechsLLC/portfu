@@ -262,7 +262,7 @@ impl ToTokens for WebSocketRoute {
                                     })?;
                                     let stream = ::portfu::prelude::WebsocketMsgStream::TokioIo( Box::new(::portfu::prelude::tokio_tungstenite::WebSocketStream::from_raw_socket(
                                         portfu::prelude::hyper_util::rt::TokioIo::new(stream),
-                                        ::portfu::prelude::tokio_tungstenite::tungstenite::protocol::Role::Server, None)).await
+                                        ::portfu::prelude::tokio_tungstenite::tungstenite::protocol::Role::Server, None).await)
                                     );
                                     let (write, read) = stream.split();
                                     let connection = ::std::sync::Arc::new(::portfu::prelude::WebsocketConnection {
