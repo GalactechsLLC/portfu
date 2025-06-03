@@ -33,6 +33,7 @@ use serde::Deserialize;
 use std::fmt::{Debug, Display, Formatter};
 use std::io::{Error, ErrorKind};
 use std::net::SocketAddr;
+use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -275,6 +276,13 @@ impl<T: Send + Sync + 'static> State<T> {
 }
 impl<T: Send + Sync + 'static> AsRef<T> for State<T> {
     fn as_ref(&self) -> &T {
+        self.0.as_ref()
+    }
+}
+
+impl<T: Send + Sync + 'static> Deref for State<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
         self.0.as_ref()
     }
 }
