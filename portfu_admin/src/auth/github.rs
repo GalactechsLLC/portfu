@@ -144,14 +144,14 @@ impl ServiceHandler for OAuthAuthHandler {
                 Ok(v) => match v.inner() {
                     Some(v) => v,
                     None => {
-                        return send_internal_error(data, "Failed to extract AuthRequest");
+                        return Ok(send_internal_error(data, "Failed to extract AuthRequest"));
                     }
                 },
                 Err(e) => {
-                    return send_internal_error(
+                    return Ok(send_internal_error(
                         data,
                         format!("Failed to extract Query as AuthRequest, {e:?}"),
-                    );
+                    ));
                 }
             },
             Some(v) => v,
@@ -159,7 +159,7 @@ impl ServiceHandler for OAuthAuthHandler {
         let session = if let Some(session) = data.request.get_mut::<Arc<RwLock<Session>>>() {
             session
         } else {
-            return send_internal_error(data, "Failed to Find Session to Auth");
+            return Ok(send_internal_error(data, "Failed to Find Session to Auth"));
         };
         let code = AuthorizationCode::new(body.code.clone());
         let _token_state = CsrfToken::new(body.state.clone());
@@ -171,7 +171,10 @@ impl ServiceHandler for OAuthAuthHandler {
         {
             token
         } else {
-            return redirect_to_url(data, self.config.on_failure_redirect.as_str());
+            return Ok(redirect_to_url(
+                data,
+                self.config.on_failure_redirect.as_str(),
+            ));
         };
         let token_val = format!("Bearer {}", token.access_token().secret());
         let client = reqwest::Client::builder().build().unwrap();
@@ -186,7 +189,10 @@ impl ServiceHandler for OAuthAuthHandler {
         {
             user_info.json().await.ok()
         } else {
-            return redirect_to_url(data, self.config.on_failure_redirect.as_str());
+            return Ok(redirect_to_url(
+                data,
+                self.config.on_failure_redirect.as_str(),
+            ));
         };
         let org_info: Option<Vec<Organization>> = if let Ok(org_info) = client
             .get("https://api.github.com/user/orgs")
@@ -199,7 +205,10 @@ impl ServiceHandler for OAuthAuthHandler {
         {
             org_info.json().await.ok()
         } else {
-            return redirect_to_url(data, self.config.on_failure_redirect.as_str());
+            return Ok(redirect_to_url(
+                data,
+                self.config.on_failure_redirect.as_str(),
+            ));
         };
         let mut claims: Claims = session.read().await.data.get().cloned().unwrap_or(Claims {
             aud: self.config.claims_audience.clone(),
@@ -240,10 +249,13 @@ impl ServiceHandler for OAuthAuthHandler {
                 .data
                 .remove::<OAuthLoginRedirectParams>()
             {
-                return redirect_to_url(data, redirect.redirect_url.as_str());
+                return Ok(redirect_to_url(data, redirect.redirect_url.as_str()));
             }
         }
-        redirect_to_url(data, self.config.on_success_redirect.as_str())
+        Ok(redirect_to_url(
+            data,
+            self.config.on_success_redirect.as_str(),
+        ))
     }
 
     fn service_type(&self) -> ServiceType {
