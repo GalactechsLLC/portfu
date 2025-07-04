@@ -25,7 +25,7 @@ impl OutputType {
             "json" => Ok(Self::Json),
             "bytes" => Ok(Self::Bytes),
             "none" => Ok(Self::None),
-            _ => Err(format!("Invalid Output Format: `{}`", output)),
+            _ => Err(format!("Invalid Output Format: `{output}`")),
         }
     }
 }

@@ -385,7 +385,7 @@ impl IncomingRequest {
                 .header("Sec-WebSocket-Accept", &derive_accept_key(key.as_bytes()))
                 .body(Full::default())
                 .map_err(|e| {
-                    error!("Failed to build WebSocket Response: {}", e);
+                    error!("Failed to build WebSocket Response: {e}");
                     ProtocolError::HandshakeIncomplete
                 })?;
             match self {

@@ -267,7 +267,7 @@ pub fn run_build<P: AsRef<std::path::Path>>(src_directory: P) -> Result<(), Erro
         error!("Failed to Find 'npm' or 'yarn', install either to manage nodejs projects");
     } else {
         let path = src_directory.as_ref();
-        info!("Building Node Project at: {:?}", path);
+        info!("Building Node Project at: {path:?}");
         let mut cmd = Command::new(if npm_exists { "npm" } else { "yarn" });
         cmd.current_dir(path);
         cmd.arg("run")

@@ -149,11 +149,11 @@ impl Server {
                                             });
                                             let connection = http.serve_connection(TokioIo::new(stream), service).with_upgrades();
                                             if let Err(err) = connection.await {
-                                                error!("Error serving tls connection: {:?}", err);
+                                                error!("Error serving tls connection: {err:?}");
                                             }
                                         }
                                         Err(e) => {
-                                            error!("Error accepting tls connection: {:?}", e);
+                                            error!("Error accepting tls connection: {e:?}");
                                         }
                                     }
                                 } else {
@@ -163,13 +163,13 @@ impl Server {
                                     });
                                     let connection = http.serve_connection(TokioIo::new(stream), service).with_upgrades();
                                     if let Err(err) = connection.await {
-                                        error!("Error serving connection: {:?}", err);
+                                        error!("Error serving connection: {err:?}");
                                     }
                                 };
                             });
                         }
                         Err(e) => {
-                            error!("Error accepting connection: {:?}", e);
+                            error!("Error accepting connection: {e:?}");
                         }
                     }
                 },
@@ -191,7 +191,7 @@ impl Server {
             .map_err(|e| {
                 Error::new(
                     ErrorKind::InvalidInput,
-                    format!("Failed to parse Host: {:?}", e),
+                    format!("Failed to parse Host: {e:?}"),
                 )
             })?,
             config.port,
@@ -258,7 +258,7 @@ pub async fn handle_service(
             );
             *sd.response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
             sd.response
-                .set_body(BodyType::Sized(Full::new(Bytes::from(format!("{:?}", e)))));
+                .set_body(BodyType::Sized(Full::new(Bytes::from(format!("{e:?}")))));
             sd
         });
     Ok(service_data.response.into())

@@ -97,16 +97,10 @@ impl ToTokens for WebSocketClient {
                         panic!("Invalid Input Type for Websocket Client {}", segment.ident);
                     }
                 } else {
-                    panic!(
-                        "Invalid Type({}) Found in Function Definition {}",
-                        ident_val, name
-                    );
+                    panic!("Invalid Type({ident_val}) Found in Function Definition {name}");
                 }
             } else {
-                panic!(
-                    "Invalid Type({}) Found in Function Definition {}",
-                    ident_val, name
-                );
+                panic!("Invalid Type({ident_val}) Found in Function Definition {name}");
             }
         }
         let stream = quote! {

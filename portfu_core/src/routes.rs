@@ -26,7 +26,7 @@ pub enum Route {
 }
 impl Route {
     pub fn new(input: String) -> Self {
-        let mut re = format!("{}^", REGEX_FLAGS);
+        let mut re = format!("{REGEX_FLAGS}^");
         let mut to_parse = input.as_str();
         let mut segments = Vec::new();
         let mut has_tail = false;
@@ -87,7 +87,7 @@ impl Route {
         const DEFAULT_PATTERN_TAIL: &str = ".*";
         let close_idx = input
             .find('}')
-            .unwrap_or_else(|| panic!(r#"pattern "{}" contains malformed dynamic segment"#, input));
+            .unwrap_or_else(|| panic!(r#"pattern "{input}" contains malformed dynamic segment"#));
         let (mut param, mut unprocessed) = input.split_at(close_idx + 1);
         let tail = unprocessed == "*";
         // remove outer curly brackets

@@ -129,7 +129,7 @@ impl TryFrom<&Path> for Config {
     type Error = Error;
     fn try_from(value: &Path) -> Result<Self, Self::Error> {
         serde_yaml::from_str::<Config>(&fs::read_to_string(value)?)
-            .map_err(|e| Error::other(format!("{:?}", e)))
+            .map_err(|e| Error::other(format!("{e:?}")))
     }
 }
 impl TryFrom<&PathBuf> for Config {

@@ -216,9 +216,9 @@ impl ServiceData {
     pub fn get_best_guess_public_ip(&self, address: &SocketAddr) -> String {
         if let Some(headers) = self.request.request.headers() {
             if let Some(real_ip) = headers.get("x-real-ip") {
-                format!("{:?}", real_ip)
+                format!("{real_ip:?}")
             } else if let Some(forwards) = headers.get("x-forwarded-for") {
-                format!("{:?}", forwards)
+                format!("{forwards:?}")
             } else {
                 address.ip().to_string()
             }

@@ -100,7 +100,7 @@ impl WrapperFn for Cors {
                                 );
                             }
                             Err(e) => {
-                                error!("Error parsing allowed headers: {headers} - {:?}", e);
+                                error!("Error parsing allowed headers: {headers} - {e:?}");
                             }
                         }
                     }

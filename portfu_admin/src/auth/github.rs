@@ -297,7 +297,7 @@ impl OAuthLoginBuilder {
             ))
             .oauthserver(oauthserver.clone())
             .auth_url(
-                AuthUrl::new(format!("https://{}/oauth/authorize", oauthserver))
+                AuthUrl::new(format!("https://{oauthserver}/oauth/authorize"))
                     .expect("Invalid authorization endpoint URL"),
             )
             .on_success_redirect(
@@ -316,10 +316,10 @@ impl OAuthLoginBuilder {
                     .unwrap_or(30usize * 60usize),
             )
             .token_url(
-                TokenUrl::new(format!("https://{}/oauth/access_token", oauthserver))
+                TokenUrl::new(format!("https://{oauthserver}/oauth/access_token"))
                     .expect("Invalid token endpoint URL"),
             )
-            .api_base_url(format!("https://{}/api/v4", oauthserver))
+            .api_base_url(format!("https://{oauthserver}/api/v4"))
             .allowed_organizations(
                 &env::var("OAUTH_ORGANIZATIONS")
                     .unwrap_or_default()

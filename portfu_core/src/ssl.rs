@@ -70,7 +70,7 @@ pub fn load_ssl_certs(config: &ServerConfig) -> Result<Arc<rustls::ServerConfig>
         root_cert_store.add(cert).map_err(|e| {
             Error::new(
                 ErrorKind::InvalidInput,
-                format!("Invalid Root Cert for Server: {:?}", e),
+                format!("Invalid Root Cert for Server: {e:?}"),
             )
         })?;
     }
@@ -85,14 +85,14 @@ pub fn load_ssl_certs(config: &ServerConfig) -> Result<Arc<rustls::ServerConfig>
         Arc::new(RsaSigningKey::new(&key).map_err(|e| {
             Error::new(
                 ErrorKind::InvalidInput,
-                format!("Private Key is not Valid SigningKey: {:?}", e),
+                format!("Private Key is not Valid SigningKey: {e:?}"),
             )
         })?),
     );
     resolver.add(name, cer_key).map_err(|e| {
         Error::new(
             ErrorKind::InvalidInput,
-            format!("Failed to add SSL Certs to Resolver: {:?}", e),
+            format!("Failed to add SSL Certs to Resolver: {e:?}"),
         )
     })?;
     match &config.client_ssl_config {
@@ -114,7 +114,7 @@ pub fn load_ssl_certs(config: &ServerConfig) -> Result<Arc<rustls::ServerConfig>
                 root_cert_store.add(cert).map_err(|e| {
                     Error::new(
                         ErrorKind::InvalidInput,
-                        format!("Invalid Root Cert for Server: {:?}", e),
+                        format!("Invalid Root Cert for Server: {e:?}"),
                     )
                 })?;
             }
@@ -123,7 +123,7 @@ pub fn load_ssl_certs(config: &ServerConfig) -> Result<Arc<rustls::ServerConfig>
                 Arc::new(RsaSigningKey::new(&key).map_err(|e| {
                     Error::new(
                         ErrorKind::InvalidInput,
-                        format!("Private Key is not Valid SigningKey: {:?}", e),
+                        format!("Private Key is not Valid SigningKey: {e:?}"),
                     )
                 })?),
             );
@@ -132,7 +132,7 @@ pub fn load_ssl_certs(config: &ServerConfig) -> Result<Arc<rustls::ServerConfig>
                 .map_err(|e| {
                     Error::new(
                         ErrorKind::InvalidInput,
-                        format!("Failed to add SSL Certs to Resolver: {:?}", e),
+                        format!("Failed to add SSL Certs to Resolver: {e:?}"),
                     )
                 })?;
             let resolver = Arc::new(resolver);

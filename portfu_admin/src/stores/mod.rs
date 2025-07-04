@@ -47,7 +47,7 @@ pub trait DatabaseEntry<DB: sqlx::Database, R: Row, P>: for<'r> FromRow<'r, R> {
     fn database() -> String;
     fn table() -> String;
     fn table_init(connection: PoolConnection<DB>) -> Result<(), Error> {
-        log::debug!("No Init defined: {:?}", connection);
+        log::debug!("No Init defined: {connection:?}");
         Ok(())
     }
 }

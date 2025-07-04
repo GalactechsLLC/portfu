@@ -108,7 +108,7 @@ pub async fn send_request<T: Into<SupportedBody>>(
     let body = body.into();
     let host = url.host().expect("uri has no host").to_string();
     let port = url.port_u16().unwrap_or(80);
-    let addr = format!("{}:{}", host, port);
+    let addr = format!("{host}:{port}");
     let mut root_cert_store = RootCertStore::empty();
     root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let config = ClientConfig::builder()
@@ -122,7 +122,7 @@ pub async fn send_request<T: Into<SupportedBody>>(
     let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await?;
     tokio::task::spawn(async move {
         if let Err(err) = conn.await {
-            error!("Connection failed: {:?}", err);
+            error!("Connection failed: {err:?}");
         }
     });
     let path = url.path();
@@ -131,16 +131,16 @@ pub async fn send_request<T: Into<SupportedBody>>(
 }
 
 pub async fn new_websocket(url: &str, headers: Option<HeaderMap>) -> Result<WebSocket, Error> {
-    debug!("Starting Websocket Connection to: {}", url);
+    debug!("Starting Websocket Connection to: {url}");
     let mut request = url
         .into_client_request()
-        .map_err(|e| Error::other(format!("{:?}", e)))?;
+        .map_err(|e| Error::other(format!("{e:?}")))?;
     if let Some(headers) = headers {
         request.headers_mut().extend(headers.into_iter())
     }
     let (ws_stream, response) = match connect_async(request).await {
         Ok(result) => result,
-        Err(e) => return Err(Error::other(format!("{:?}", e))),
+        Err(e) => return Err(Error::other(format!("{e:?}"))),
     };
     debug!("Connected with HTTP status: {}", response.status());
     Ok(WebSocket::new(

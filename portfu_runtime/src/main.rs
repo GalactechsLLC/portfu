@@ -55,7 +55,7 @@ async fn main() -> Result<(), std::io::Error> {
                                 user_datastore: PostgresDataStore::new(pg_pool),
                             });
                     }
-                    panic!("Postgres database support is not enabled: {}", db_url);
+                    panic!("Postgres database support is not enabled: {db_url}");
                 }
             },
             None => {
