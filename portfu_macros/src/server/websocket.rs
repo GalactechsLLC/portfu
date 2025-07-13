@@ -209,11 +209,11 @@ impl ToTokens for WebSocketRoute {
                 ) -> Result<::portfu::prelude::ServiceData, (::portfu::prelude::ServiceData, ::std::io::Error)> {
                     use ::portfu::pfcore::IntoStreamBody;
                     use ::portfu::prelude::futures_util::StreamExt;
-                    ::portfu::prelude::log::info!("Checking for Upgrade");
+                    ::portfu::prelude::log::debug!("Checking for Upgrade");
                     if handle_data.request.request.is_upgrade_request() {
                         #ast
                         #(#dyn_vars)*
-                        ::portfu::prelude::log::info!("Upgrading Websocket");
+                        ::portfu::prelude::log::debug!("Upgrading Websocket");
                         let key = match handle_data.request.request.headers() {
                             Some(header_map) => match header_map.get("Sec-WebSocket-Key") {
                                 Some(key) => key.clone(),
@@ -237,7 +237,7 @@ impl ToTokens for WebSocketRoute {
                                 return Err((handle_data, ::std::io::Error::new(::std::io::ErrorKind::Other, format!("{e:?}"))));
                             }
                         };
-                        ::portfu::prelude::log::info!("Got Past Request Upgrade");
+                        ::portfu::prelude::log::debug!("Got Past Request Upgrade");
                         let peers = self.peers.clone();
                         let headers = handle_data.request.request.headers().cloned().unwrap_or_default();
                         let websocket = match &mut handle_data.request.request {
