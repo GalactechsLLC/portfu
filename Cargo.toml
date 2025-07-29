@@ -41,7 +41,7 @@ quote = "1.0.36"
 rand = "0.8.5"
 regex = "1.10.4"
 reqwest = {version="0.12.4", default-features = false, features = ["rustls-tls", "json", "stream"] }
-rustls = {version = "0.23.30" }
+rustls = {version = "0.23.29" }
 rustls-pemfile = "2.1.2"
 rsa = { version = "0.9.6", features = ["std", "pem", "sha2"] }
 serde = { version = "1.0.203", features = ["derive"] }
