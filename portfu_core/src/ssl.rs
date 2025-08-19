@@ -335,7 +335,10 @@ impl ResolvesServerCertUsingSniWithDefault {
 impl ResolvesServerCert for ResolvesServerCertUsingSniWithDefault {
     fn resolve(&self, client_hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
         if let Some(name) = client_hello.server_name() {
-            self.by_name.get(name).cloned()
+            self.by_name
+                .get(name)
+                .cloned()
+                .or_else(|| self.by_name.values().next().cloned())
         } else {
             self.by_name.values().next().cloned()
         }
