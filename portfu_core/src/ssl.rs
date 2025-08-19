@@ -1,4 +1,4 @@
-use crate::server::ServerConfig;
+use crate::server::{ServerConfig};
 use log::error;
 use rand::Rng;
 use rsa::pkcs1::DecodeRsaPrivateKey;
@@ -36,17 +36,28 @@ use x509_cert::Certificate;
 
 pub fn load_ssl_certs(config: &ServerConfig) -> Result<Arc<rustls::ServerConfig>, Error> {
     default_provider().install_default().unwrap_or_default();
+    let mut root_cert_store = RootCertStore::empty();
+    let mut resolver = ResolvesServerCertUsingSniWithDefault::new();
     let (certs, key, root_certs) = if let Some(ssl_info) = &config.ssl_config {
+
         (
             load_certs(ssl_info.certs.as_bytes())?,
             load_private_key(ssl_info.key.as_bytes())?,
             load_certs(ssl_info.root_certs.as_bytes())?,
         )
-    } else if let (Some(crt), Some(key)) = (
+    } else if let (Some(crt), Some(key), Some(domain), Some(name)) = (
         env::var("PRIVATE_CA_CRT").ok(),
         env::var("PRIVATE_CA_KEY").ok(),
+        env::var("SSL_DOMAIN").ok(),
+        env::var("SSL_CRT_NAME").ok(),
     ) {
-        let (cert_bytes, key_bytes) = generate_ca_signed_cert(crt.as_bytes(), key.as_bytes())?;
+        let (cert_bytes, key_bytes) = generate_ca_signed_cert(
+            crt.as_bytes(),
+            key.as_bytes(),
+            &domain,
+            Name::from_str(&name)
+                .map_err(|e| Error::other(format!("{e:?}")))?,
+        )?;
         (
             load_certs(&cert_bytes)?,
             load_private_key(&key_bytes)?,
@@ -65,7 +76,6 @@ pub fn load_ssl_certs(config: &ServerConfig) -> Result<Arc<rustls::ServerConfig>
     } else {
         return Err(Error::new(ErrorKind::InvalidInput, "Invalid SSL Config"));
     };
-    let mut root_cert_store = RootCertStore::empty();
     for cert in root_certs {
         root_cert_store.add(cert).map_err(|e| {
             Error::new(
@@ -74,7 +84,6 @@ pub fn load_ssl_certs(config: &ServerConfig) -> Result<Arc<rustls::ServerConfig>
             )
         })?;
     }
-    let mut resolver = ResolvesServerCertUsingSniWithDefault::new();
     let name = config
         .ssl_config
         .as_ref()
@@ -163,6 +172,8 @@ pub fn load_private_key(bytes: &[u8]) -> Result<PrivateKeyDer<'static>, Error> {
 pub fn generate_ca_signed_cert(
     cert_data: &[u8],
     key_data: &[u8],
+    dns_name: &str,
+    name: Name
 ) -> Result<(Vec<u8>, Vec<u8>), Error> {
     let root_cert = Certificate::from_pem(cert_data).map_err(|e| Error::other(format!("{e:?}")))?;
     let root_key = rsa::RsaPrivateKey::from_pkcs1_pem(&String::from_utf8_lossy(key_data))
@@ -200,14 +211,13 @@ pub fn generate_ca_signed_cert(
                 .map_err(|e| Error::other(format!("{e:?}")))?,
             ),
         },
-        Name::from_str("CN=Chia,O=Chia,OU=Organic Farming Division")
-            .map_err(|e| Error::other(format!("{e:?}")))?,
+        name,
         subject_pub_key,
         &signing_key,
     )
     .map_err(|e| Error::other(format!("{e:?}")))?;
     cert.add_extension(&SubjectAltName(vec![GeneralName::DnsName(
-        Ia5String::new("chia.net").map_err(|e| Error::other(format!("{e:?}")))?,
+        Ia5String::new(dns_name).map_err(|e| Error::other(format!("{e:?}")))?,
     )]))
     .map_err(|e| Error::other(format!("{e:?}")))?;
     let cert = cert.build().map_err(|e| Error::other(format!("{e:?}")))?;
