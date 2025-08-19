@@ -152,7 +152,7 @@ impl WrapperFn for RateLimiter {
         };
         if recent_count >= requests_per_second_limit {
             warn!(
-                "Rate limiting: {remote}, {}",
+                "Rate limiting (TooManyRequests): {remote}, {}",
                 data.request.request.uri().path()
             );
             create_error(
@@ -172,6 +172,10 @@ impl WrapperFn for RateLimiter {
                         let size_hint = stream.body().size_hint();
                         if let Some(size) = size_hint.exact() {
                             if size > size_limit {
+                                warn!(
+                                    "Rate limiting (PayloadTooLarge): {remote}, {}",
+                                    data.request.request.uri().path()
+                                );
                                 create_error(
                                     data,
                                     format!("Payload Too large {size}, Limit is {size_limit}"),
@@ -181,6 +185,10 @@ impl WrapperFn for RateLimiter {
                                 WrapperResult::Continue
                             }
                         } else if size_hint.lower() > size_limit {
+                            warn!(
+                                "Rate limiting (PayloadTooLarge): {remote}, {}",
+                                data.request.request.uri().path()
+                            );
                             create_error(
                                 data,
                                 format!(
@@ -191,6 +199,10 @@ impl WrapperFn for RateLimiter {
                             )
                         } else if let Some(size) = size_hint.upper() {
                             if size > size_limit {
+                                warn!(
+                                    "Rate limiting (PayloadTooLarge): {remote}, {}",
+                                    data.request.request.uri().path()
+                                );
                                 create_error(
                                     data,
                                     format!("Payload Too large {size}, Limit is {size_limit}"),
@@ -200,7 +212,7 @@ impl WrapperFn for RateLimiter {
                                 WrapperResult::Continue
                             }
                         } else {
-                            match handle_unsized(data, size_limit as usize).await {
+                            match handle_unsized(data, size_limit as usize, remote).await {
                                 Ok(r) => r,
                                 Err(e) => create_error(
                                     data,
@@ -214,6 +226,10 @@ impl WrapperFn for RateLimiter {
                         let size_hint = sized.body().size_hint();
                         if let Some(size) = size_hint.exact() {
                             if size > size_limit {
+                                warn!(
+                                    "Rate limiting (PayloadTooLarge): {remote}, {}",
+                                    data.request.request.uri().path()
+                                );
                                 create_error(
                                     data,
                                     format!("Payload Too large {size}, Limit is {size_limit}"),
@@ -223,6 +239,10 @@ impl WrapperFn for RateLimiter {
                                 WrapperResult::Continue
                             }
                         } else if size_hint.lower() > size_limit {
+                            warn!(
+                                "Rate limiting (PayloadTooLarge): {remote}, {}",
+                                data.request.request.uri().path()
+                            );
                             create_error(
                                 data,
                                 format!(
@@ -233,6 +253,10 @@ impl WrapperFn for RateLimiter {
                             )
                         } else if let Some(size) = size_hint.upper() {
                             if size > size_limit {
+                                warn!(
+                                    "Rate limiting (PayloadTooLarge): {remote}, {}",
+                                    data.request.request.uri().path()
+                                );
                                 create_error(
                                     data,
                                     format!("Payload Too large {size}, Limit is {size_limit}"),
@@ -271,13 +295,21 @@ pub fn create_error(data: &mut ServiceData, error: String, status: StatusCode) -
 }
 
 #[inline]
-pub async fn handle_unsized(data: &mut ServiceData, limit: usize) -> Result<WrapperResult, Error> {
+pub async fn handle_unsized(
+    data: &mut ServiceData,
+    limit: usize,
+    remote: String,
+) -> Result<WrapperResult, Error> {
     let mut body = data.request.consume();
     let mut buffer = Vec::with_capacity(limit);
     while let Some(next) = body.frame().await {
         let frame = next.map_err(|e| Error::other(format!("HTTP ERROR IN RATE_LIMITER: {e:?}")))?;
         if let Some(chunk) = frame.data_ref() {
             if buffer.len() > limit || buffer.len() + chunk.len() > limit {
+                warn!(
+                    "Rate limiting (PayloadTooLarge): {remote}, {}",
+                    data.request.request.uri().path()
+                );
                 return Ok(create_error(
                     data,
                     format!("Stream Payload Too large, Limit is {limit}"),
