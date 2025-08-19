@@ -1,4 +1,4 @@
-use crate::server::{ServerConfig};
+use crate::server::ServerConfig;
 use log::error;
 use rand::Rng;
 use rsa::pkcs1::DecodeRsaPrivateKey;
@@ -39,7 +39,6 @@ pub fn load_ssl_certs(config: &ServerConfig) -> Result<Arc<rustls::ServerConfig>
     let mut root_cert_store = RootCertStore::empty();
     let mut resolver = ResolvesServerCertUsingSniWithDefault::new();
     let (certs, key, root_certs) = if let Some(ssl_info) = &config.ssl_config {
-
         (
             load_certs(ssl_info.certs.as_bytes())?,
             load_private_key(ssl_info.key.as_bytes())?,
@@ -55,8 +54,7 @@ pub fn load_ssl_certs(config: &ServerConfig) -> Result<Arc<rustls::ServerConfig>
             crt.as_bytes(),
             key.as_bytes(),
             &domain,
-            Name::from_str(&name)
-                .map_err(|e| Error::other(format!("{e:?}")))?,
+            Name::from_str(&name).map_err(|e| Error::other(format!("{e:?}")))?,
         )?;
         (
             load_certs(&cert_bytes)?,
@@ -173,7 +171,7 @@ pub fn generate_ca_signed_cert(
     cert_data: &[u8],
     key_data: &[u8],
     dns_name: &str,
-    name: Name
+    name: Name,
 ) -> Result<(Vec<u8>, Vec<u8>), Error> {
     let root_cert = Certificate::from_pem(cert_data).map_err(|e| Error::other(format!("{e:?}")))?;
     let root_key = rsa::RsaPrivateKey::from_pkcs1_pem(&String::from_utf8_lossy(key_data))
