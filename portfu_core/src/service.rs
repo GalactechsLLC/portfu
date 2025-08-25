@@ -354,7 +354,7 @@ impl IncomingRequest {
             IncomingRequest::Empty => None,
         }
     }
-    pub fn body(&mut self) -> RefBodyType {
+    pub fn body(&mut self) -> RefBodyType<'_> {
         match self {
             IncomingRequest::Sized(r) => RefBodyType::Sized(r.body_mut()),
             IncomingRequest::Stream(r) => RefBodyType::Stream(r.body_mut()),

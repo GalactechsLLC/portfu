@@ -1,4 +1,4 @@
-mod cache;
+pub mod cache;
 pub mod memory;
 #[cfg(feature = "postgres")]
 pub mod postgres;

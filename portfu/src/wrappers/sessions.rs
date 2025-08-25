@@ -31,7 +31,10 @@ impl Default for SessionWrapper {
 }
 
 impl SessionWrapper {
-    async fn create_session_cookie(&self, data: &ServiceData) -> (Cookie, Arc<RwLock<Session>>) {
+    async fn create_session_cookie(
+        &self,
+        data: &ServiceData,
+    ) -> (Cookie<'static>, Arc<RwLock<Session>>) {
         let address: &SocketAddr = data.request.get().unwrap();
         let salt = data.get_best_guess_public_ip(address);
         let client_session_id = Uuid::new_v4();
@@ -49,7 +52,7 @@ impl SessionWrapper {
             last_update: Instant::now(),
         }));
         SESSIONS.insert(server_session_id, session.clone());
-        (cookie, session)
+        (cookie.into_owned(), session)
     }
     pub async fn get_session(
         &self,
@@ -75,7 +78,7 @@ impl SessionWrapper {
         }
     }
 }
-pub fn get_session_cookie_from_request(data: &ServiceData) -> Option<Cookie> {
+pub fn get_session_cookie_from_request(data: &ServiceData) -> Option<Cookie<'static>> {
     let mut session_cookie = None;
     if let Some(headers) = data.request.request.headers() {
         'outer: for value in headers.get_all(header::COOKIE) {
@@ -84,7 +87,7 @@ pub fn get_session_cookie_from_request(data: &ServiceData) -> Option<Cookie> {
                     let mut split_cookies = Cookie::split_parse(val);
                     while let Some(Ok(cookie)) = split_cookies.next() {
                         if cookie.name() == SESSION_HEADER {
-                            session_cookie = Some(cookie);
+                            session_cookie = Some(cookie.into_owned());
                             break 'outer;
                         }
                     }
