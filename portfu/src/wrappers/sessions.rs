@@ -34,7 +34,7 @@ impl SessionWrapper {
     async fn create_session_cookie(
         &self,
         data: &ServiceData,
-    ) -> (Cookie<'_>, Arc<RwLock<Session>>) {
+    ) -> (Cookie<'static>, Arc<RwLock<Session>>) {
         let address: &SocketAddr = data.request.get().unwrap();
         let salt = data.get_best_guess_public_ip(address);
         let client_session_id = Uuid::new_v4();
@@ -52,7 +52,7 @@ impl SessionWrapper {
             last_update: Instant::now(),
         }));
         SESSIONS.insert(server_session_id, session.clone());
-        (cookie, session)
+        (cookie.into_owned(), session)
     }
     pub async fn get_session(
         &self,
