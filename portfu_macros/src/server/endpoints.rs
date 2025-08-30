@@ -263,9 +263,6 @@ impl ToTokens for Endpoint {
             };
             if let Type::Path(path) = &ident_type {
                 if let Some(segment) = path.path.segments.first() {
-                    let response: Ident = Ident::new("Response", segment.ident.span());
-                    let headers: Ident = Ident::new("HeaderMap", segment.ident.span());
-                    let service_data: Ident = Ident::new("ServiceData", segment.ident.span());
                     let state_ident: Ident = Ident::new("State", segment.ident.span());
                     if state_ident == segment.ident {
                         if let Some(_inner_type) = match &segment.arguments {
@@ -296,38 +293,17 @@ impl ToTokens for Endpoint {
                             });
                         }
                         continue;
-                    } else if response == segment.ident {
-                        dyn_vars.push(quote! {
-                            let #ident_val: &mut Response<Full<Bytes>> = &mut handle_data.response;
-                        });
-                        additional_function_vars.push(quote! {
-                            #ident_val,
-                        });
-                        continue;
-                    } else if service_data == segment.ident {
-                        dyn_vars.push(quote! {
-                            let #ident_val = &mut handle_data;
-                        });
-                        additional_function_vars.push(quote! {
-                            #ident_val,
-                        });
-                        continue;
-                    } else if headers == segment.ident {
-                        dyn_vars.push(quote! {
-                            let #ident_val = &handle_data.request.request.headers();
-                        });
-                        additional_function_vars.push(quote! {
-                            #ident_val,
-                        });
-                        continue;
                     }
                 }
-            }
-            if let Type::Reference(reference) = &ident_type {
+            } else if let Type::Reference(reference) = &ident_type {
                 if let Type::Path(path) = &reference.elem.as_ref() {
                     if let Some(segment) = path.path.segments.first() {
                         let service_data: Ident = Ident::new("ServiceData", segment.ident.span());
-                        let option: Ident = Ident::new("Option", segment.ident.span());
+                        let request_headers: Ident =
+                            Ident::new("RequestHeaders", segment.ident.span());
+                        let response_headers: Ident =
+                            Ident::new("ResponseHeaders", segment.ident.span());
+                        let response: Ident = Ident::new("ServiceResponse", segment.ident.span());
                         if service_data == segment.ident {
                             dyn_vars.push(quote! {
                                 let #ident_val = &mut handle_data;
@@ -336,52 +312,48 @@ impl ToTokens for Endpoint {
                                 #ident_val,
                             });
                             continue;
-                        } else if option == segment.ident {
-                            if let PathArguments::AngleBracketed(angle_bracketed) =
-                                &segment.arguments
-                            {
-                                if let Some(GenericArgument::Type(inner_type)) =
-                                    angle_bracketed.args.first()
-                                {
-                                    if let Type::Path(inner_path) = inner_type {
-                                        if let Some(inner_segment) =
-                                            inner_path.path.segments.first()
-                                        {
-                                            let expected_type =
-                                                Ident::new("HeaderMap", inner_segment.ident.span());
-                                            if inner_segment.ident == expected_type {
-                                                dyn_vars.push(quote! {
-                                                    let #ident_val = &handle_data.request.request.headers();
-                                                });
-                                                additional_function_vars.push(quote! {
-                                                    #ident_val,
-                                                });
-                                                continue;
-                                            }
-                                        }
-                                    }
-                                    if let Type::Reference(reference) = inner_type {
-                                        if let Type::Path(path) = &reference.elem.as_ref() {
-                                            if let Some(inner_segment) = path.path.segments.first()
-                                            {
-                                                let expected_type = Ident::new(
-                                                    "HeaderMap",
-                                                    inner_segment.ident.span(),
-                                                );
-                                                if inner_segment.ident == expected_type {
-                                                    dyn_vars.push(quote! {
-                                                        let #ident_val = &handle_data.request.request.headers();
-                                                    });
-                                                    additional_function_vars.push(quote! {
-                                                        #ident_val,
-                                                    });
-                                                    continue;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
+                        } else if response == segment.ident {
+                            if reference.mutability.is_some() {
+                                dyn_vars.push(quote! {
+                                    let #ident_val = &mut handle_data.response;
+                                });
+                            } else {
+                                dyn_vars.push(quote! {
+                                    let #ident_val = &handle_data.response;
+                                });
                             }
+                            additional_function_vars.push(quote! {
+                                #ident_val,
+                            });
+                            continue;
+                        } else if request_headers == segment.ident {
+                            if reference.mutability.is_some() {
+                                dyn_vars.push(quote! {
+                                    let #ident_val: &mut ::portfu::pfcore::service::RequestHeaders = handle_data.request.request.headers_mut();
+                                });
+                            } else {
+                                dyn_vars.push(quote! {
+                                    let #ident_val: &::portfu::pfcore::service::RequestHeaders = handle_data.request.request.headers();
+                                });
+                            }
+                            additional_function_vars.push(quote! {
+                                #ident_val,
+                            });
+                            continue;
+                        } else if response_headers == segment.ident {
+                            if reference.mutability.is_some() {
+                                dyn_vars.push(quote! {
+                                    let #ident_val: &mut ::portfu::pfcore::service::ResponseHeaders = handle_data.response.headers_mut();
+                                });
+                            } else {
+                                dyn_vars.push(quote! {
+                                    let #ident_val: &::portfu::pfcore::service::ResponseHeaders = handle_data.response.headers();
+                                });
+                            }
+                            additional_function_vars.push(quote! {
+                                #ident_val,
+                            });
+                            continue;
                         }
                     }
                 }

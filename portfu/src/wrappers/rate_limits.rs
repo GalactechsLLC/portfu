@@ -275,7 +275,7 @@ impl WrapperFn for RateLimiter {
                         }
                     }
                     IncomingRequest::Consumed(_) => WrapperResult::Continue,
-                    IncomingRequest::Empty => WrapperResult::Continue,
+                    IncomingRequest::Empty(_) => WrapperResult::Continue,
                 }
             } else {
                 WrapperResult::Continue

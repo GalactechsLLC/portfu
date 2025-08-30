@@ -214,14 +214,10 @@ pub struct ServiceData {
 }
 impl ServiceData {
     pub fn get_best_guess_public_ip(&self, address: &SocketAddr) -> String {
-        if let Some(headers) = self.request.request.headers() {
-            if let Some(real_ip) = headers.get("x-real-ip") {
-                format!("{real_ip:?}")
-            } else if let Some(forwards) = headers.get("x-forwarded-for") {
-                format!("{forwards:?}")
-            } else {
-                address.ip().to_string()
-            }
+        if let Some(real_ip) = self.request.request.headers().get("x-real-ip") {
+            format!("{real_ip:?}")
+        } else if let Some(forwards) = self.request.request.headers().get("x-forwarded-for") {
+            format!("{forwards:?}")
         } else {
             address.ip().to_string()
         }

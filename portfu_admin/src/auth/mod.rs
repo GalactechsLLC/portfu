@@ -75,7 +75,6 @@ pub async fn basic_login<B: BasicAuth + Send + Sync + 'static>(
         .as_ref()
         .login(body.username, body.password, session.0.clone())
         .await?;
-    session.0.write().await.data.insert(claims.clone());
     encode(
         &Header::default(),
         &claims,
@@ -131,25 +130,23 @@ macro_rules! user_role_macro {
                             return WrapperResult::Continue;
                         }
                     } else {
-                        if let Some(headers) = data.request.request.headers() {
-                            if let Some(jwt_header) = headers.get("USER_JWT") {
-                                if let Ok(str_val) = jwt_header.to_str() {
-                                    match decode::<Claims>(
-                                        str_val,
-                                        &DecodingKey::from_secret(CURRENT_SECRET.as_bytes()),
-                                        &*VALIDATIONS,
-                                    ) {
-                                        Ok(token_data) => {
-                                            let res =
-                                                (token_data.claims.rol >= UserRole::$object).into();
-                                            session.write().await.data.insert(token_data.claims);
-                                            return res;
-                                        }
-                                        Err(e) => {
-                                            error!("Error Parsing JWT Token: {e:?}");
-                                        }
-                                    };
-                                }
+                        if let Some(jwt_header) = data.request.request.headers().get("USER_JWT") {
+                            if let Ok(str_val) = jwt_header.to_str() {
+                                match decode::<Claims>(
+                                    str_val,
+                                    &DecodingKey::from_secret(CURRENT_SECRET.as_bytes()),
+                                    &*VALIDATIONS,
+                                ) {
+                                    Ok(token_data) => {
+                                        let res =
+                                            (token_data.claims.rol >= UserRole::$object).into();
+                                        session.write().await.data.insert(token_data.claims);
+                                        return res;
+                                    }
+                                    Err(e) => {
+                                        error!("Error Parsing JWT Token: {e:?}");
+                                    }
+                                };
                             }
                         }
                     }

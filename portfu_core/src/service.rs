@@ -206,11 +206,14 @@ impl ServiceRegister for Service {
     }
 }
 
+pub type RequestHeaders = HeaderMap<HeaderValue>;
+pub type ResponseHeaders = HeaderMap<HeaderValue>;
+
 pub enum IncomingRequest {
     Stream(Request<StreamingBody>),
     Sized(Request<Full<Bytes>>),
     Consumed(request::Parts),
-    Empty,
+    Empty(HeaderMap<HeaderValue>),
 }
 
 pub enum OutgoingResponse {
@@ -295,7 +298,7 @@ impl IncomingRequest {
                 Ok((IncomingRequest::Consumed(parts), BodyType::Stream(body)))
             }
             IncomingRequest::Consumed(parts) => Ok((Self::Consumed(parts), BodyType::Empty)),
-            IncomingRequest::Empty => Ok((Self::Empty, BodyType::Empty)),
+            IncomingRequest::Empty(headers) => Ok((Self::Empty(headers), BodyType::Empty)),
         }
     }
     pub fn uri(&self) -> &Uri {
@@ -303,23 +306,23 @@ impl IncomingRequest {
             IncomingRequest::Sized(r) => r.uri(),
             IncomingRequest::Stream(r) => r.uri(),
             IncomingRequest::Consumed(r) => &r.uri,
-            IncomingRequest::Empty => &DEFAULT_URI,
+            IncomingRequest::Empty(_) => &DEFAULT_URI,
         }
     }
-    pub fn headers(&self) -> Option<&HeaderMap<HeaderValue>> {
+    pub fn headers(&self) -> &HeaderMap<HeaderValue> {
         match &self {
-            IncomingRequest::Sized(r) => Some(r.headers()),
-            IncomingRequest::Stream(r) => Some(r.headers()),
-            IncomingRequest::Consumed(r) => Some(&r.headers),
-            IncomingRequest::Empty => None,
+            IncomingRequest::Sized(r) => r.headers(),
+            IncomingRequest::Stream(r) => r.headers(),
+            IncomingRequest::Consumed(r) => &r.headers,
+            IncomingRequest::Empty(headers) => headers,
         }
     }
-    pub fn headers_mut(&mut self) -> Option<&mut HeaderMap<HeaderValue>> {
+    pub fn headers_mut(&mut self) -> &mut HeaderMap<HeaderValue> {
         match self {
-            IncomingRequest::Sized(r) => Some(r.headers_mut()),
-            IncomingRequest::Stream(r) => Some(r.headers_mut()),
-            IncomingRequest::Consumed(r) => Some(&mut r.headers),
-            IncomingRequest::Empty => None,
+            IncomingRequest::Sized(r) => r.headers_mut(),
+            IncomingRequest::Stream(r) => r.headers_mut(),
+            IncomingRequest::Consumed(r) => &mut r.headers,
+            IncomingRequest::Empty(headers) => headers,
         }
     }
     pub fn method(&self) -> &Method {
@@ -327,7 +330,7 @@ impl IncomingRequest {
             IncomingRequest::Sized(r) => r.method(),
             IncomingRequest::Stream(r) => r.method(),
             IncomingRequest::Consumed(r) => &r.method,
-            IncomingRequest::Empty => &Method::OPTIONS,
+            IncomingRequest::Empty(_) => &Method::OPTIONS,
         }
     }
     pub fn size_hint(&self) -> SizeHint {
@@ -335,7 +338,7 @@ impl IncomingRequest {
             IncomingRequest::Sized(r) => r.size_hint(),
             IncomingRequest::Stream(r) => r.size_hint(),
             IncomingRequest::Consumed(_) => SizeHint::with_exact(0),
-            IncomingRequest::Empty => SizeHint::with_exact(0),
+            IncomingRequest::Empty(_) => SizeHint::with_exact(0),
         }
     }
     pub fn extensions(&self) -> Option<&Extensions> {
@@ -343,7 +346,7 @@ impl IncomingRequest {
             IncomingRequest::Sized(r) => Some(r.extensions()),
             IncomingRequest::Stream(r) => Some(r.extensions()),
             IncomingRequest::Consumed(r) => Some(&r.extensions),
-            IncomingRequest::Empty => None,
+            IncomingRequest::Empty(_) => None,
         }
     }
     pub fn extensions_mut(&mut self) -> Option<&mut Extensions> {
@@ -351,57 +354,55 @@ impl IncomingRequest {
             IncomingRequest::Sized(r) => Some(r.extensions_mut()),
             IncomingRequest::Stream(r) => Some(r.extensions_mut()),
             IncomingRequest::Consumed(r) => Some(&mut r.extensions),
-            IncomingRequest::Empty => None,
+            IncomingRequest::Empty(_) => None,
         }
     }
-    pub fn body(&mut self) -> RefBodyType {
+    pub fn body(&mut self) -> RefBodyType<'_> {
         match self {
             IncomingRequest::Sized(r) => RefBodyType::Sized(r.body_mut()),
             IncomingRequest::Stream(r) => RefBodyType::Stream(r.body_mut()),
             IncomingRequest::Consumed(_) => RefBodyType::Empty,
-            IncomingRequest::Empty => RefBodyType::Empty,
+            IncomingRequest::Empty(_) => RefBodyType::Empty,
         }
     }
     pub fn is_upgrade_request(&self) -> bool {
-        if let Some(headers) = self.headers() {
-            header_contains_value(headers, hyper::header::CONNECTION, "Upgrade")
-                && header_contains_value(headers, hyper::header::UPGRADE, "websocket")
-        } else {
-            false
-        }
+        header_contains_value(self.headers(), hyper::header::CONNECTION, "Upgrade")
+            && header_contains_value(self.headers(), hyper::header::UPGRADE, "websocket")
     }
     pub fn upgrade(&mut self) -> Result<(Response<Full<Bytes>>, OnUpgrade), ProtocolError> {
-        if let Some(headers) = self.headers() {
-            let key = headers
-                .get("Sec-WebSocket-Key")
-                .ok_or(ProtocolError::MissingSecWebSocketKey)?;
-            if headers.get("Sec-WebSocket-Version").map(|v| v.as_bytes()) != Some(b"13") {
-                return Err(ProtocolError::MissingSecWebSocketVersionHeader);
-            }
-            let response = Response::builder()
-                .status(StatusCode::SWITCHING_PROTOCOLS)
-                .header(hyper::header::CONNECTION, "upgrade")
-                .header(hyper::header::UPGRADE, "websocket")
-                .header("Sec-WebSocket-Accept", &derive_accept_key(key.as_bytes()))
-                .body(Full::default())
-                .map_err(|e| {
-                    error!("Failed to build WebSocket Response: {e}");
-                    ProtocolError::HandshakeIncomplete
-                })?;
-            match self {
-                IncomingRequest::Stream(request) => Ok((response, hyper::upgrade::on(request))),
-                IncomingRequest::Sized(request) => Ok((response, hyper::upgrade::on(request))),
-                IncomingRequest::Consumed(parts) => Ok((
-                    response,
-                    hyper::upgrade::on(Request::<Empty<()>>::from_parts(
-                        parts.clone(),
-                        Empty::default(),
-                    )),
+        let key = self
+            .headers()
+            .get("Sec-WebSocket-Key")
+            .ok_or(ProtocolError::MissingSecWebSocketKey)?;
+        if self
+            .headers()
+            .get("Sec-WebSocket-Version")
+            .map(|v| v.as_bytes())
+            != Some(b"13")
+        {
+            return Err(ProtocolError::MissingSecWebSocketVersionHeader);
+        }
+        let response = Response::builder()
+            .status(StatusCode::SWITCHING_PROTOCOLS)
+            .header(hyper::header::CONNECTION, "upgrade")
+            .header(hyper::header::UPGRADE, "websocket")
+            .header("Sec-WebSocket-Accept", &derive_accept_key(key.as_bytes()))
+            .body(Full::default())
+            .map_err(|e| {
+                error!("Failed to build WebSocket Response: {e}");
+                ProtocolError::HandshakeIncomplete
+            })?;
+        match self {
+            IncomingRequest::Stream(request) => Ok((response, hyper::upgrade::on(request))),
+            IncomingRequest::Sized(request) => Ok((response, hyper::upgrade::on(request))),
+            IncomingRequest::Consumed(parts) => Ok((
+                response,
+                hyper::upgrade::on(Request::<Empty<()>>::from_parts(
+                    parts.clone(),
+                    Empty::default(),
                 )),
-                IncomingRequest::Empty => Err(ProtocolError::InvalidCloseSequence), //maye a different error? Should not ever happen
-            }
-        } else {
-            Err(ProtocolError::MissingSecWebSocketKey)
+            )),
+            IncomingRequest::Empty(_) => Err(ProtocolError::InvalidCloseSequence), //maye a different error? Should not ever happen
         }
     }
 }
@@ -589,7 +590,7 @@ pub trait MutBody {
 
 impl MutBody for ServiceRequest {
     fn consume(&mut self) -> BodyType {
-        match replace(&mut self.request, IncomingRequest::Empty) {
+        match replace(&mut self.request, IncomingRequest::Empty(HeaderMap::new())) {
             IncomingRequest::Sized(r) => {
                 let (parts, body) = r.into_parts();
                 let _ = replace(&mut self.request, IncomingRequest::Consumed(parts));
@@ -604,11 +605,12 @@ impl MutBody for ServiceRequest {
                 let _ = replace(&mut self.request, IncomingRequest::Consumed(parts));
                 BodyType::Empty
             }
-            IncomingRequest::Empty => BodyType::Empty,
+            IncomingRequest::Empty(_) => BodyType::Empty,
         }
     }
     fn set_body(&mut self, body: BodyType) {
-        let (parts, _) = match replace(&mut self.request, IncomingRequest::Empty) {
+        let (parts, _) = match replace(&mut self.request, IncomingRequest::Empty(HeaderMap::new()))
+        {
             IncomingRequest::Sized(r) => {
                 let (parts, body) = r.into_parts();
                 (parts, BodyType::Sized(body))
@@ -618,7 +620,11 @@ impl MutBody for ServiceRequest {
                 (parts, BodyType::Stream(body))
             }
             IncomingRequest::Consumed(parts) => (parts, BodyType::Empty),
-            IncomingRequest::Empty => (Request::new(()).into_parts().0, BodyType::Empty),
+            IncomingRequest::Empty(headers) => {
+                let mut new_parts = Request::new(()).into_parts().0;
+                new_parts.headers = headers;
+                (new_parts, BodyType::Empty)
+            }
         };
         match body {
             BodyType::Sized(s) => {

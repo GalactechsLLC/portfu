@@ -67,41 +67,39 @@ impl WrapperFn for Cors {
                 HeaderName::from_static("access-control-allow-headers"),
                 HeaderValue::from_static("*"),
             );
-        } else if let Some(headers) = data.request.request.headers() {
-            if let Some(origin) = headers.get("origin") {
-                let origin_str = origin.to_str().unwrap_or_default().to_owned();
-                if self.allowed_origins.contains(&origin_str) {
-                    data.response.headers_mut().insert(
-                        HeaderName::from_static("access-control-allow-origin"),
-                        origin.clone(),
-                    );
-                    if let Ok(val) = HeaderValue::from_str(&self.allowed_methods.join(",")) {
-                        data.response
-                            .headers_mut()
-                            .insert(HeaderName::from_static("access-control-allow-methods"), val);
+        } else if let Some(origin) = data.request.request.headers().get("origin") {
+            let origin_str = origin.to_str().unwrap_or_default().to_owned();
+            if self.allowed_origins.contains(&origin_str) {
+                data.response.headers_mut().insert(
+                    HeaderName::from_static("access-control-allow-origin"),
+                    origin.clone(),
+                );
+                if let Ok(val) = HeaderValue::from_str(&self.allowed_methods.join(",")) {
+                    data.response
+                        .headers_mut()
+                        .insert(HeaderName::from_static("access-control-allow-methods"), val);
+                }
+                let mut allowed = vec![];
+                for (k, _) in data.request.request.headers() {
+                    if self.allowed_headers.contains(k) {
+                        allowed.push(k);
                     }
-                    let mut allowed = vec![];
-                    for (k, _) in headers {
-                        if self.allowed_headers.contains(k) {
-                            allowed.push(k);
+                }
+                if !allowed.is_empty() {
+                    let headers = allowed
+                        .into_iter()
+                        .map(|v| v.to_string())
+                        .collect::<Vec<String>>()
+                        .join(",");
+                    match HeaderValue::from_str(&headers) {
+                        Ok(val) => {
+                            data.response.headers_mut().insert(
+                                HeaderName::from_static("access-control-allow-headers"),
+                                val,
+                            );
                         }
-                    }
-                    if !allowed.is_empty() {
-                        let headers = allowed
-                            .into_iter()
-                            .map(|v| v.to_string())
-                            .collect::<Vec<String>>()
-                            .join(",");
-                        match HeaderValue::from_str(&headers) {
-                            Ok(val) => {
-                                data.response.headers_mut().insert(
-                                    HeaderName::from_static("access-control-allow-headers"),
-                                    val,
-                                );
-                            }
-                            Err(e) => {
-                                error!("Error parsing allowed headers: {headers} - {e:?}");
-                            }
+                        Err(e) => {
+                            error!("Error parsing allowed headers: {headers} - {e:?}");
                         }
                     }
                 }

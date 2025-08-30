@@ -92,7 +92,7 @@ impl ToTokens for WebSocketRoute {
                     let body_ident: Ident = Ident::new("Body", segment.ident.span());
                     let state_ident: Ident = Ident::new("State", segment.ident.span());
                     let ws_ident: Ident = Ident::new("WebSocket", segment.ident.span());
-                    let headers: Ident = Ident::new("HeaderMap", segment.ident.span());
+                    let headers: Ident = Ident::new("RequestHeaders", segment.ident.span());
                     if body_ident == segment.ident {
                         panic!("Body Not Supported for Websocket");
                     } else if state_ident == segment.ident {
@@ -134,6 +134,32 @@ impl ToTokens for WebSocketRoute {
                             headers,
                         });
                         continue;
+                    }
+                }
+            } else if let Type::Reference(reference) = &ident_type {
+                if let Type::Path(path) = &reference.elem.as_ref() {
+                    if let Some(segment) = path.path.segments.first() {
+                        let request_headers: Ident =
+                            Ident::new("RequestHeaders", segment.ident.span());
+                        let response_headers: Ident =
+                            Ident::new("ResponseHeaders", segment.ident.span());
+                        if request_headers == segment.ident {
+                            dyn_vars.push(quote! {
+                                let #ident_val = &handle_data.request.request.headers();
+                            });
+                            additional_function_vars.push(quote! {
+                                #ident_val,
+                            });
+                            continue;
+                        } else if response_headers == segment.ident {
+                            dyn_vars.push(quote! {
+                                let #ident_val = &handle_data.response.headers();
+                            });
+                            additional_function_vars.push(quote! {
+                                #ident_val,
+                            });
+                            continue;
+                        }
                     }
                 }
             }
@@ -214,15 +240,10 @@ impl ToTokens for WebSocketRoute {
                         #ast
                         #(#dyn_vars)*
                         ::portfu::prelude::log::debug!("Upgrading Websocket");
-                        let key = match handle_data.request.request.headers() {
-                            Some(header_map) => match header_map.get("Sec-WebSocket-Key") {
-                                Some(key) => key.clone(),
-                                None => {
-                                    return Err((handle_data, ::std::io::Error::new(::std::io::ErrorKind::Other, "Missing Sec-WebSocket-Key Header")));
-                                }
-                            }
+                        let key = match handle_data.request.request.headers().get("Sec-WebSocket-Key") {
+                            Some(key) => key.clone(),
                             None => {
-                                return Err((handle_data, ::std::io::Error::new(::std::io::ErrorKind::Other, "No Headers in Request")));
+                                return Err((handle_data, ::std::io::Error::new(::std::io::ErrorKind::Other, "Missing Sec-WebSocket-Key Header")));
                             }
                         };
                         let response = match ::portfu::prelude::http::Response::builder()
@@ -239,7 +260,6 @@ impl ToTokens for WebSocketRoute {
                         };
                         ::portfu::prelude::log::debug!("Got Past Request Upgrade");
                         let peers = self.peers.clone();
-                        let headers = handle_data.request.request.headers().cloned().unwrap_or_default();
                         let websocket = match &mut handle_data.request.request {
                             ::portfu::prelude::IncomingRequest::Stream(request) => Ok(::portfu::prelude::hyper::upgrade::on(request)),
                             ::portfu::prelude::IncomingRequest::Sized(request) => Ok(::portfu::prelude::hyper::upgrade::on(request)),
@@ -249,7 +269,7 @@ impl ToTokens for WebSocketRoute {
                                     ::portfu::prelude::http_body_util::Empty::default(),
                                 )),
                             ),
-                            ::portfu::prelude::IncomingRequest::Empty => Err(
+                            ::portfu::prelude::IncomingRequest::Empty(_) => Err(
                                 ::std::io::Error::new(::std::io::ErrorKind::Other, format!("Empty Socket Request"))
                             ),
                         };
