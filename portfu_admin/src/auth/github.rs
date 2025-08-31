@@ -3,6 +3,7 @@ use crate::services::{redirect_to_url, send_internal_error};
 use crate::users::UserRole;
 use http::HeaderValue;
 use hyper::{header, StatusCode};
+use log::warn;
 use oauth2::basic::BasicClient;
 use oauth2::reqwest::async_http_client;
 use oauth2::{
@@ -135,6 +136,11 @@ impl ServiceHandler for OAuthAuthHandler {
         &self,
         mut data: portfu::prelude::ServiceData,
     ) -> Result<ServiceData, (ServiceData, Error)> {
+        let session = if let Some(session) = data.request.get::<Arc<RwLock<Session>>>() {
+            session.clone()
+        } else {
+            return Ok(send_internal_error(data, "Failed to Find Session to Auth"));
+        };
         let body: Option<AuthRequest> = match Json::from_request(&mut data.request, "").await {
             Ok(json) => json.inner(),
             Err(_) => None,
@@ -155,11 +161,6 @@ impl ServiceHandler for OAuthAuthHandler {
                 }
             },
             Some(v) => v,
-        };
-        let session = if let Some(session) = data.request.get_mut::<Arc<RwLock<Session>>>() {
-            session
-        } else {
-            return Ok(send_internal_error(data, "Failed to Find Session to Auth"));
         };
         let code = AuthorizationCode::new(body.code.clone());
         let _token_state = CsrfToken::new(body.state.clone());
@@ -189,6 +190,7 @@ impl ServiceHandler for OAuthAuthHandler {
         {
             user_info.json().await.ok()
         } else {
+            warn!("Failed to Load User Info");
             return Ok(redirect_to_url(
                 data,
                 self.config.on_failure_redirect.as_str(),
@@ -205,6 +207,7 @@ impl ServiceHandler for OAuthAuthHandler {
         {
             org_info.json().await.ok()
         } else {
+            warn!("Failed to Load Org Info");
             return Ok(redirect_to_url(
                 data,
                 self.config.on_failure_redirect.as_str(),
@@ -239,18 +242,13 @@ impl ServiceHandler for OAuthAuthHandler {
             claims.eml = user_info.email.unwrap_or_default();
         }
         session.write().await.data.insert(claims);
-        if let Ok(session) = State::<RwLock<Session>>::from_request(&mut data.request, "")
+        if let Some(redirect) = session
+            .write()
             .await
-            .map(|q| q.inner())
+            .data
+            .remove::<OAuthLoginRedirectParams>()
         {
-            if let Some(redirect) = session
-                .write()
-                .await
-                .data
-                .remove::<OAuthLoginRedirectParams>()
-            {
-                return Ok(redirect_to_url(data, redirect.redirect_url.as_str()));
-            }
+            return Ok(redirect_to_url(data, redirect.redirect_url.as_str()));
         }
         Ok(redirect_to_url(
             data,
