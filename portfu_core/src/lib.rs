@@ -32,9 +32,10 @@ use once_cell::sync::Lazy;
 use serde::Deserialize;
 use std::fmt::{Debug, Display, Formatter};
 use std::io::{Error, ErrorKind};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::ops::Deref;
 use std::pin::Pin;
+use std::str::FromStr;
 use std::sync::Arc;
 
 pub enum ServiceType {
@@ -216,13 +217,93 @@ impl ServiceData {
     pub fn get_best_guess_public_ip(&self, address: &SocketAddr) -> String {
         let remote = if let Some(real_ip) = self.request.request.headers().get("x-real-ip") {
             format!("{real_ip:?}")
-        } else if let Some(forwards) = self.request.request.headers().get("x-forwarded-for") {
-            format!("{forwards:?}")
         } else {
             address.ip().to_string()
         };
         info!("Found Remote IP: {remote}");
-        remote
+        if is_cloudflare(&remote) {
+            if let Some(real_ip) = self.request.request.headers().get("cf-connecting-ip") {
+                let ip = format!("{real_ip:?}");
+                info!("Detected Cloudflare: Real IP: {ip}");
+                ip
+            } else {
+                address.ip().to_string()
+            }
+        } else {
+            remote
+        }
+    }
+}
+
+pub fn is_cloudflare(remote_address: &str) -> bool {
+    let ip = match IpAddr::from_str(remote_address) {
+        Ok(ip) => ip,
+        Err(_) => return false,
+    };
+
+    const CLOUDFLARE_CIDRS: &[&str] = &[
+        // IPv4
+        "173.245.48.0/20",
+        "103.21.244.0/22",
+        "103.22.200.0/22",
+        "103.31.4.0/22",
+        "141.101.64.0/18",
+        "108.162.192.0/18",
+        "190.93.240.0/20",
+        "188.114.96.0/20",
+        "197.234.240.0/22",
+        "198.41.128.0/17",
+        "162.158.0.0/15",
+        "104.16.0.0/13",
+        "104.24.0.0/14",
+        "172.64.0.0/13",
+        "131.0.72.0/22",
+        // IPv6
+        "2400:cb00::/32",
+        "2606:4700::/32",
+        "2803:f800::/32",
+        "2405:b500::/32",
+        "2405:8100::/32",
+        "2a06:98c0::/29",
+        "2c0f:f248::/32",
+    ];
+
+    CLOUDFLARE_CIDRS.iter().any(|cidr| match parse_cidr(cidr) {
+        Some((base, prefix)) => ip_in_prefix(&ip, &base, prefix),
+        None => false,
+    })
+}
+
+fn parse_cidr(cidr: &str) -> Option<(IpAddr, u8)> {
+    let (addr_str, prefix_str) = cidr.split_once('/')?;
+    let addr = IpAddr::from_str(addr_str).ok()?;
+    let prefix_len = prefix_str.parse().ok()?;
+    Some((addr, prefix_len))
+}
+
+fn ip_in_prefix(ip: &IpAddr, base: &IpAddr, prefix_len: u8) -> bool {
+    match (ip, base) {
+        (IpAddr::V4(ip), IpAddr::V4(base)) => {
+            let ip = u32::from_be_bytes(ip.octets());
+            let base = u32::from_be_bytes(base.octets());
+            let mask = if prefix_len == 0 {
+                0
+            } else {
+                u32::MAX << (32 - prefix_len)
+            };
+            (ip & mask) == (base & mask)
+        }
+        (IpAddr::V6(ip), IpAddr::V6(base)) => {
+            let ip = u128::from_be_bytes(ip.octets());
+            let base = u128::from_be_bytes(base.octets());
+            let mask = if prefix_len == 0 {
+                0
+            } else {
+                u128::MAX << (128 - prefix_len)
+            };
+            (ip & mask) == (base & mask)
+        }
+        _ => false, // mismatch between IPv4 and IPv6
     }
 }
 

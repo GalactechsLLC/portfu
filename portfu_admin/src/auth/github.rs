@@ -139,6 +139,7 @@ impl ServiceHandler for OAuthAuthHandler {
         let session = if let Some(session) = data.request.get::<Arc<RwLock<Session>>>() {
             session.clone()
         } else {
+            warn!("Failed to Find session to auth");
             return Ok(send_internal_error(data, "Failed to Find Session to Auth"));
         };
         let body: Option<AuthRequest> = match Json::from_request(&mut data.request, "").await {
@@ -150,10 +151,12 @@ impl ServiceHandler for OAuthAuthHandler {
                 Ok(v) => match v.inner() {
                     Some(v) => v,
                     None => {
+                        warn!("Failed to Extract Request");
                         return Ok(send_internal_error(data, "Failed to extract AuthRequest"));
                     }
                 },
                 Err(e) => {
+                    warn!("Failed to Extract Query");
                     return Ok(send_internal_error(
                         data,
                         format!("Failed to extract Query as AuthRequest, {e:?}"),
@@ -172,6 +175,7 @@ impl ServiceHandler for OAuthAuthHandler {
         {
             token
         } else {
+            warn!("Failed to Get Auth Token");
             return Ok(redirect_to_url(
                 data,
                 self.config.on_failure_redirect.as_str(),
@@ -496,13 +500,13 @@ impl OAuthLoginBuilder {
             claims_expire_time: 0,
         });
         let login_service = ServiceBuilder::new("/github/login")
-            .name("index")
+            .name("github_login")
             .handler(Arc::new(OAuthLoginHandler {
                 config: config.clone(),
             }))
             .build();
         let auth_service = ServiceBuilder::new("/github/auth")
-            .name("index")
+            .name("github_auth")
             .handler(Arc::new(OAuthAuthHandler {
                 config: config.clone(),
             }))
