@@ -27,7 +27,7 @@ use http_body::Frame;
 use http_body_util::Full;
 use http_body_util::{BodyExt, BodyStream, StreamBody};
 use hyper::body::{Bytes, Incoming};
-use log::trace;
+use log::{info, trace};
 use once_cell::sync::Lazy;
 use serde::Deserialize;
 use std::fmt::{Debug, Display, Formatter};
@@ -214,13 +214,15 @@ pub struct ServiceData {
 }
 impl ServiceData {
     pub fn get_best_guess_public_ip(&self, address: &SocketAddr) -> String {
-        if let Some(real_ip) = self.request.request.headers().get("x-real-ip") {
+        let remote = if let Some(real_ip) = self.request.request.headers().get("x-real-ip") {
             format!("{real_ip:?}")
         } else if let Some(forwards) = self.request.request.headers().get("x-forwarded-for") {
             format!("{forwards:?}")
         } else {
             address.ip().to_string()
-        }
+        };
+        info!("Found Remote IP: {remote}");
+        remote
     }
 }
 

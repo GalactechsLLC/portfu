@@ -17,15 +17,18 @@ pub static SESSIONS: Lazy<Arc<DashMap<String, Arc<RwLock<Session>>>>> = Lazy::ne
 pub struct Session {
     pub data: Extensions,
     pub last_update: Instant,
+    pub id: Uuid,
 }
 
 pub struct SessionWrapper {
     pub session_duration: Duration,
+    pub secure: bool,
 }
 impl Default for SessionWrapper {
     fn default() -> Self {
         Self {
             session_duration: Duration::from_secs(60 * 30), //30 minutes
+            secure: true,
         }
     }
 }
@@ -43,13 +46,14 @@ impl SessionWrapper {
         let server_session_id = hex::encode(hasher.finalize().as_slice());
         let cookie = Cookie::build((SESSION_HEADER, client_session_id.to_string()))
             .path("/")
-            // .secure(true)
+            .secure(self.secure)
             .http_only(true)
             .same_site(cookie::SameSite::Lax)
             .build();
         let session = Arc::new(RwLock::new(Session {
             data: Extensions::new(),
             last_update: Instant::now(),
+            id: client_session_id,
         }));
         SESSIONS.insert(server_session_id, session.clone());
         (cookie.into_owned(), session)
