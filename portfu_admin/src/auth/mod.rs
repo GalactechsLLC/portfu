@@ -1,7 +1,7 @@
 use crate::users::UserRole;
 use http::StatusCode;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
-use log::info;
+use log::debug;
 use portfu::macros::{get, post};
 use portfu::pfcore::wrappers::{Wrapper, WrapperFn, WrapperResult};
 use portfu::pfcore::{Json, Query};
@@ -39,9 +39,9 @@ pub trait BasicAuth {
 #[get("/auth/jwt")]
 pub async fn get_jwt(data: &mut ServiceData) -> Result<String, Error> {
     if let Some(session) = data.request.get::<Arc<RwLock<Session>>>() {
-        info!("Found Session: {}", session.read().await.id);
+        debug!("Found Session: {}", session.read().await.id);
         if let Some(claims) = session.read().await.data.get::<Claims>() {
-            info!("Found Claims for Session: {}", session.read().await.id);
+            debug!("Found Claims for Session: {}", session.read().await.id);
             return encode(
                 &Header::default(),
                 claims,

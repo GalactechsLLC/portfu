@@ -27,7 +27,7 @@ use http_body::Frame;
 use http_body_util::Full;
 use http_body_util::{BodyExt, BodyStream, StreamBody};
 use hyper::body::{Bytes, Incoming};
-use log::{info, trace};
+use log::{debug, trace};
 use once_cell::sync::Lazy;
 use serde::Deserialize;
 use std::fmt::{Debug, Display, Formatter};
@@ -220,11 +220,12 @@ impl ServiceData {
         } else {
             address.ip().to_string()
         };
-        info!("Found Remote IP: {remote}");
+        debug!("Found Remote IP: {remote}");
         if is_cloudflare(&remote) {
+            debug!("Detected Cloudflare");
             if let Some(real_ip) = self.request.request.headers().get("cf-connecting-ip") {
                 let ip = format!("{real_ip:?}");
-                info!("Detected Cloudflare: Real IP: {ip}");
+                debug!("Cloudflare: Real IP: {ip}");
                 ip
             } else {
                 address.ip().to_string()
