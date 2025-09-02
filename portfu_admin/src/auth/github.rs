@@ -13,7 +13,7 @@ use oauth2::{
 use octocrab::models::orgs::Organization;
 use octocrab::models::Author;
 use portfu::pfcore::service::{ServiceBuilder, ServiceGroup};
-use portfu::pfcore::{FromRequest, Json, Query, ServiceData, ServiceHandler, ServiceType, State};
+use portfu::pfcore::{FromRequest, Json, Query, ServiceData, ServiceHandler, ServiceType};
 use portfu::prelude::async_trait;
 use portfu::wrappers::sessions::Session;
 use serde::{Deserialize, Serialize};
@@ -187,7 +187,7 @@ impl ServiceHandler for OAuthAuthHandler {
             return Ok(send_internal_error(data, "Invalid Csrf Token"));
         }
         let verifier = if let Some(verifier) = session.read().await.data.get::<Verifier>() {
-            PkceCodeVerifier(verifier.0.clone())
+            PkceCodeVerifier::new(verifier.0.clone())
         } else {
             warn!("Failed to Find Verifier");
             return Ok(send_internal_error(data, "Failed to Find Verifier"));
