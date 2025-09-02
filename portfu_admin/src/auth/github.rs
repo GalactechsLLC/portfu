@@ -7,8 +7,8 @@ use log::warn;
 use oauth2::basic::BasicClient;
 use oauth2::reqwest::async_http_client;
 use oauth2::{
-    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, PkceCodeChallenge, RedirectUrl,
-    Scope, TokenResponse, TokenUrl,
+    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, PkceCodeChallenge,
+    PkceCodeVerifier, RedirectUrl, Scope, TokenResponse, TokenUrl,
 };
 use octocrab::models::orgs::Organization;
 use octocrab::models::Author;
@@ -70,6 +70,9 @@ pub struct OAuthLoginHandler {
     config: Arc<OAuthConfig>,
 }
 
+#[derive(Clone)]
+struct Verifier(String);
+
 #[derive(Deserialize, Serialize, Clone)]
 pub struct OAuthLoginRedirectParams {
     redirect_url: String,
@@ -93,8 +96,19 @@ impl ServiceHandler for OAuthLoginHandler {
         } else {
             None
         };
+        let session = if let Some(session) = data.request.get::<Arc<RwLock<Session>>>() {
+            session.clone()
+        } else {
+            warn!("Failed to Find session to auth");
+            return Ok(send_internal_error(data, "Failed to Find Session to Auth"));
+        };
         // Create a PKCE code verifier and SHA-256 encode it as a code challenge.
-        let (pkce_code_challenge, _pkce_code_verifier) = PkceCodeChallenge::new_random_sha256();
+        let (pkce_code_challenge, pkce_code_verifier) = PkceCodeChallenge::new_random_sha256();
+        session
+            .write()
+            .await
+            .data
+            .insert(Verifier(pkce_code_verifier.secret().to_string()));
         // Generate the authorization URL to which we'll redirect the user.
         let client = &self.config.client;
         let auth_request = client
@@ -104,14 +118,10 @@ impl ServiceHandler for OAuthLoginHandler {
             // Set the PKCE code challenge.
             .set_pkce_challenge(pkce_code_challenge);
         if let Some(redirect_params) = redirect_params {
-            if let Ok(session) = State::<RwLock<Session>>::from_request(&mut data.request, "")
-                .await
-                .map(|q| q.inner())
-            {
-                session.write().await.data.insert(redirect_params);
-            }
+            session.write().await.data.insert(redirect_params);
         }
-        let (auth_url, _csrf_token) = auth_request.url();
+        let (auth_url, csrf_token) = auth_request.url();
+        session.write().await.data.insert(csrf_token);
         *data.response.status_mut() = StatusCode::FOUND;
         data.response.headers_mut().insert(
             header::LOCATION,
@@ -165,21 +175,39 @@ impl ServiceHandler for OAuthAuthHandler {
             },
             Some(v) => v,
         };
+        let existing_token = if let Some(session) = session.read().await.data.get::<CsrfToken>() {
+            session.clone()
+        } else {
+            warn!("Failed to Find Csrf Token");
+            return Ok(send_internal_error(data, "Failed to Find Csrf Token"));
+        };
+        let token_state = CsrfToken::new(body.state.clone());
+        if existing_token.secret() != token_state.secret() {
+            warn!("Invalid Csrf Token");
+            return Ok(send_internal_error(data, "Invalid Csrf Token"));
+        }
+        let verifier = if let Some(verifier) = session.read().await.data.get::<Verifier>() {
+            PkceCodeVerifier(verifier.0.clone())
+        } else {
+            warn!("Failed to Find Verifier");
+            return Ok(send_internal_error(data, "Failed to Find Verifier"));
+        };
         let code = AuthorizationCode::new(body.code.clone());
-        let _token_state = CsrfToken::new(body.state.clone());
         let client = &self.config.client;
-        let token = if let Ok(token) = client
+        let token = match client
             .exchange_code(code)
+            .set_pkce_verifier(verifier)
             .request_async(async_http_client)
             .await
         {
-            token
-        } else {
-            warn!("Failed to Get Auth Token");
-            return Ok(redirect_to_url(
-                data,
-                self.config.on_failure_redirect.as_str(),
-            ));
+            Ok(token) => token,
+            Err(e) => {
+                warn!("Failed to Get Auth Token: {e:?}");
+                return Ok(redirect_to_url(
+                    data,
+                    self.config.on_failure_redirect.as_str(),
+                ));
+            }
         };
         let token_val = format!("Bearer {}", token.access_token().secret());
         let client = reqwest::Client::builder().build().unwrap();
@@ -219,7 +247,8 @@ impl ServiceHandler for OAuthAuthHandler {
         };
         let mut claims: Claims = session.read().await.data.get().cloned().unwrap_or(Claims {
             aud: self.config.claims_audience.clone(),
-            exp: self.config.claims_expire_time, //30 * 60, //30 Minutes
+            exp: OffsetDateTime::now_utc().unix_timestamp() as usize
+                + self.config.claims_expire_time, //30 * 60, //30 Minutes
             iat: OffsetDateTime::now_utc().unix_timestamp() as usize,
             iss: self.config.claims_issuer.clone(),
             nbf: OffsetDateTime::now_utc().unix_timestamp() as usize,
@@ -493,11 +522,11 @@ impl OAuthLoginBuilder {
             on_failure_redirect: self
                 .on_failure_redirect
                 .unwrap_or_else(|| String::from("/")),
-            claims_audience: "".to_string(),
-            claims_issuer: "".to_string(),
+            claims_audience: self.claims_audience.unwrap_or(String::new()),
+            claims_issuer: self.claims_issuer.unwrap_or(String::new()),
             allowed_users: self.allowed_users,
             admin_users: self.admin_users,
-            claims_expire_time: 0,
+            claims_expire_time: self.claims_expire_time.unwrap_or(0),
         });
         let login_service = ServiceBuilder::new("/github/login")
             .name("github_login")
