@@ -522,8 +522,8 @@ impl OAuthLoginBuilder {
             on_failure_redirect: self
                 .on_failure_redirect
                 .unwrap_or_else(|| String::from("/")),
-            claims_audience: self.claims_audience.unwrap_or(String::new()),
-            claims_issuer: self.claims_issuer.unwrap_or(String::new()),
+            claims_audience: self.claims_audience.unwrap_or_default(),
+            claims_issuer: self.claims_issuer.unwrap_or_default(),
             allowed_users: self.allowed_users,
             admin_users: self.admin_users,
             claims_expire_time: self.claims_expire_time.unwrap_or(0),

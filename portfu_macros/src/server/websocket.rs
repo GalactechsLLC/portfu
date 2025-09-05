@@ -130,36 +130,13 @@ impl ToTokens for WebSocketRoute {
                         });
                         continue;
                     } else if headers == segment.ident {
+                        dyn_vars.push(quote! {
+                            let #ident_val: ::portfu::pfcore::service::RequestHeaders = handle_data.request.request.headers().clone();
+                        });
                         additional_function_vars.push(quote! {
                             headers,
                         });
                         continue;
-                    }
-                }
-            } else if let Type::Reference(reference) = &ident_type {
-                if let Type::Path(path) = &reference.elem.as_ref() {
-                    if let Some(segment) = path.path.segments.first() {
-                        let request_headers: Ident =
-                            Ident::new("RequestHeaders", segment.ident.span());
-                        let response_headers: Ident =
-                            Ident::new("ResponseHeaders", segment.ident.span());
-                        if request_headers == segment.ident {
-                            dyn_vars.push(quote! {
-                                let #ident_val = &handle_data.request.request.headers();
-                            });
-                            additional_function_vars.push(quote! {
-                                #ident_val,
-                            });
-                            continue;
-                        } else if response_headers == segment.ident {
-                            dyn_vars.push(quote! {
-                                let #ident_val = &handle_data.response.headers();
-                            });
-                            additional_function_vars.push(quote! {
-                                #ident_val,
-                            });
-                            continue;
-                        }
                     }
                 }
             }
