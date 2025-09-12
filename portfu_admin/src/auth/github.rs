@@ -314,80 +314,113 @@ pub struct OAuthLoginBuilder {
     pub admin_users: Vec<u64>,
 }
 impl OAuthLoginBuilder {
-    pub fn from_env() -> Self {
-        let oauthserver =
-            env::var("OAUTH_SERVER").expect("Missing the OAUTH_SERVER environment variable.");
-        OAuthLoginBuilder::new()
-            .client_id(ClientId::new(
-                env::var("OAUTH_CLIENT_ID")
-                    .expect("Missing the OAUTH_CLIENT_ID environment variable."),
-            ))
-            .client_secret(ClientSecret::new(
-                env::var("OAUTH_CLIENT_SECRET")
-                    .expect("Missing the OAUTH_CLIENT_SECRET environment variable."),
-            ))
-            .oauthserver(oauthserver.clone())
-            .auth_url(
-                AuthUrl::new(format!("https://{oauthserver}/oauth/authorize"))
-                    .expect("Invalid authorization endpoint URL"),
-            )
-            .on_success_redirect(
-                env::var("OAUTH_SUCCESS_URL").unwrap_or_else(|_| String::from("/")),
-            )
-            .on_failure_redirect(
-                env::var("OAUTH_FAILURE_URL").unwrap_or_else(|_| String::from("/")),
-            )
-            .claims_issuer(env::var("OAUTH_ISSUER").unwrap_or_else(|_| String::from("localhost")))
-            .claims_audience(
-                env::var("OAUTH_AUDIENCE").unwrap_or_else(|_| String::from("localhost")),
-            )
-            .claims_expire_time(
-                env::var("OAUTH_EXPIRE_TIME")
-                    .map(|s| s.parse().unwrap_or(30usize * 60usize))
-                    .unwrap_or(30usize * 60usize),
-            )
-            .token_url(
-                TokenUrl::new(format!("https://{oauthserver}/oauth/access_token"))
-                    .expect("Invalid token endpoint URL"),
-            )
-            .api_base_url(format!("https://{oauthserver}/api/v4"))
-            .allowed_organizations(
-                &env::var("OAUTH_ORGANIZATIONS")
-                    .unwrap_or_default()
-                    .split(',')
-                    .try_fold(vec![], |mut a, v| {
-                        a.push(v.parse()?);
-                        Ok::<Vec<u64>, ParseIntError>(a)
-                    })
-                    .unwrap_or_default(),
-            )
-            .allowed_users(
-                &env::var("OAUTH_USERS")
-                    .unwrap_or_default()
-                    .split(',')
-                    .try_fold(vec![], |mut a, v| {
-                        a.push(v.parse()?);
-                        Ok::<Vec<u64>, ParseIntError>(a)
-                    })
-                    .unwrap_or_default(),
-            )
-            .admin_users(
-                &env::var("OAUTH_ADMINS")
-                    .unwrap_or_default()
-                    .split(',')
-                    .try_fold(vec![], |mut a, v| {
-                        a.push(v.parse()?);
-                        Ok::<Vec<u64>, ParseIntError>(a)
-                    })
-                    .unwrap_or_default(),
-            )
-            .redirect_url(
-                RedirectUrl::new(
-                    env::var("OAUTH_REDIRECT_URL")
-                        .expect("Missing the OAUTH_REDIRECT_URL environment variable."),
+    pub fn from_env() -> Option<Self> {
+        let oauthserver = match env::var("OAUTH_SERVER") {
+            Ok(server) => server,
+            Err(e) => {
+                warn!("Failed to load OAUTH_SERVER: {}", e);
+                return None;
+            }
+        };
+        let client_id = match env::var("OAUTH_CLIENT_ID") {
+            Ok(s) => ClientId::new(s),
+            Err(e) => {
+                warn!("Failed to load OAUTH_CLIENT_ID: {}", e);
+                return None;
+            }
+        };
+        let client_secret = match env::var("OAUTH_CLIENT_SECRET") {
+            Ok(s) => ClientSecret::new(s),
+            Err(e) => {
+                warn!("Failed to load OAUTH_CLIENT_SECRET: {}", e);
+                return None;
+            }
+        };
+        let auth_url = match AuthUrl::new(format!("https://{oauthserver}/oauth/authorize")) {
+            Ok(u) => u,
+            Err(e) => {
+                warn!("Failed to parse AuthUrl: {}", e);
+                return None;
+            }
+        };
+        let token_url = match TokenUrl::new(format!("https://{oauthserver}/oauth/access_token")) {
+            Ok(u) => u,
+            Err(e) => {
+                warn!("Failed to parse TokenUrl: {}", e);
+                return None;
+            }
+        };
+        let redirect_str = match env::var("OAUTH_REDIRECT_URL") {
+            Ok(server) => server,
+            Err(e) => {
+                warn!("Failed to load OAUTH_REDIRECT_URL: {}", e);
+                return None;
+            }
+        };
+        let redirect_url = match RedirectUrl::new(redirect_str) {
+            Ok(u) => u,
+            Err(e) => {
+                warn!("Failed to parse RedirectUrl: {}", e);
+                return None;
+            }
+        };
+        Some(
+            OAuthLoginBuilder::new()
+                .client_id(client_id)
+                .client_secret(client_secret)
+                .oauthserver(oauthserver.clone())
+                .auth_url(auth_url)
+                .on_success_redirect(
+                    env::var("OAUTH_SUCCESS_URL").unwrap_or_else(|_| String::from("/")),
                 )
-                .expect("Invalid redirect URL"),
-            )
+                .on_failure_redirect(
+                    env::var("OAUTH_FAILURE_URL").unwrap_or_else(|_| String::from("/")),
+                )
+                .claims_issuer(
+                    env::var("OAUTH_ISSUER").unwrap_or_else(|_| String::from("localhost")),
+                )
+                .claims_audience(
+                    env::var("OAUTH_AUDIENCE").unwrap_or_else(|_| String::from("localhost")),
+                )
+                .claims_expire_time(
+                    env::var("OAUTH_EXPIRE_TIME")
+                        .map(|s| s.parse().unwrap_or(30usize * 60usize))
+                        .unwrap_or(30usize * 60usize),
+                )
+                .token_url(token_url)
+                .api_base_url(format!("https://{oauthserver}/api/v4"))
+                .allowed_organizations(
+                    &env::var("OAUTH_ORGANIZATIONS")
+                        .unwrap_or_default()
+                        .split(',')
+                        .try_fold(vec![], |mut a, v| {
+                            a.push(v.parse()?);
+                            Ok::<Vec<u64>, ParseIntError>(a)
+                        })
+                        .unwrap_or_default(),
+                )
+                .allowed_users(
+                    &env::var("OAUTH_USERS")
+                        .unwrap_or_default()
+                        .split(',')
+                        .try_fold(vec![], |mut a, v| {
+                            a.push(v.parse()?);
+                            Ok::<Vec<u64>, ParseIntError>(a)
+                        })
+                        .unwrap_or_default(),
+                )
+                .admin_users(
+                    &env::var("OAUTH_ADMINS")
+                        .unwrap_or_default()
+                        .split(',')
+                        .try_fold(vec![], |mut a, v| {
+                            a.push(v.parse()?);
+                            Ok::<Vec<u64>, ParseIntError>(a)
+                        })
+                        .unwrap_or_default(),
+                )
+                .redirect_url(redirect_url),
+        )
     }
     pub fn new() -> Self {
         Default::default()
