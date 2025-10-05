@@ -30,7 +30,7 @@ pub trait FilterFn {
     fn name(&self) -> &str;
     async fn filter(&self, request: &Request<Incoming>) -> FilterResult;
 }
-impl Debug for (dyn FilterFn + Send + Sync + 'static) {
+impl Debug for dyn FilterFn + Send + Sync + 'static {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.name())
     }

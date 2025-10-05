@@ -64,7 +64,7 @@ pub trait ServiceHandler {
         EditResult::NotEditable
     }
 }
-impl Debug for (dyn ServiceHandler + Send + Sync + 'static) {
+impl Debug for dyn ServiceHandler + Send + Sync + 'static {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.name())
     }
