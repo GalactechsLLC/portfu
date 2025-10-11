@@ -25,7 +25,7 @@ pub trait WrapperFn {
     async fn before(&self, data: &mut ServiceData) -> WrapperResult;
     async fn after(&self, data: &mut ServiceData) -> WrapperResult;
 }
-impl Debug for (dyn WrapperFn + Send + Sync + 'static) {
+impl Debug for dyn WrapperFn + Send + Sync + 'static {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.name())
     }

@@ -17,7 +17,7 @@ pub trait TaskFn {
     async fn run(&self, state: Arc<RwLock<Extensions>>) -> Result<(), Error>;
 }
 
-impl Debug for (dyn TaskFn + Send + Sync + 'static) {
+impl Debug for dyn TaskFn + Send + Sync + 'static {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.name())
     }

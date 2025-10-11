@@ -264,11 +264,14 @@ pub async fn handle_service(
     Ok(service_data.response.into())
 }
 
+pub type DelayedRegistry = Vec<Box<dyn FnOnce(&mut ServiceRegistry, Extensions)>>;
+
 pub struct ServerBuilder {
     services: ServiceRegistry,
     config: ServerConfig,
     shared_state: Extensions,
     run_handle: Arc<AtomicBool>,
+    delayed_registry: DelayedRegistry,
 }
 pub struct SharedState<T> {
     inner: Arc<T>,
@@ -288,16 +291,8 @@ impl<T> From<Arc<T>> for SharedState<T> {
 impl ServerBuilder {
     pub fn from_config(config: ServerConfig) -> Self {
         Self {
-            services: ServiceRegistry {
-                services: vec![],
-                tasks: vec![],
-                wrappers: vec![],
-                filters: vec![],
-                default_service: None,
-            },
             config,
-            shared_state: Extensions::default(),
-            run_handle: Arc::new(AtomicBool::new(true)),
+            ..Default::default()
         }
     }
     pub fn host(self, host: String) -> Self {
@@ -318,6 +313,13 @@ impl ServerBuilder {
     pub fn register<T: ServiceRegister>(self, service: T) -> Self {
         let mut s = self;
         service.register(&mut s.services, s.shared_state.clone());
+        s
+    }
+    pub fn delay_register<T: 'static + ServiceRegister>(self, service: T) -> Self {
+        let mut s = self;
+        s.delayed_registry.push(Box::new(move |reg, shared| {
+            service.register(reg, shared); // consumes the concrete `service`
+        }));
         s
     }
     pub fn default_service(self, mut service: Service) -> Self {
@@ -355,7 +357,10 @@ impl ServerBuilder {
         s.shared_state.insert(state.inner);
         s
     }
-    pub fn build(self) -> Server {
+    pub fn build(mut self) -> Server {
+        for f in self.delayed_registry {
+            f(&mut self.services, self.shared_state.clone());
+        }
         Server {
             registry: Arc::new(RwLock::new(self.services)),
             config: self.config,
@@ -377,6 +382,7 @@ impl Default for ServerBuilder {
             config: ServerConfig::default(),
             shared_state: Extensions::default(),
             run_handle: Arc::new(AtomicBool::new(true)),
+            delayed_registry: vec![],
         }
     }
 }

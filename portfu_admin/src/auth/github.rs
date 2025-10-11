@@ -53,6 +53,14 @@ pub struct UserData {
 }
 
 #[derive(Default, Clone, Deserialize)]
+struct EmailEntry {
+    email: String,
+    primary: bool,
+    verified: bool,
+    visibility: Option<String>,
+}
+
+#[derive(Default, Clone, Deserialize)]
 pub struct AuthRequest {
     code: String,
     state: String,
@@ -113,9 +121,9 @@ impl ServiceHandler for OAuthLoginHandler {
         let client = &self.config.client;
         let auth_request = client
             .authorize_url(CsrfToken::new_random)
-            // Set the desired scopes.
-            .add_scope(Scope::new("read:user user:email read:org".to_string()))
-            // Set the PKCE code challenge.
+            .add_scope(Scope::new("read:user".into()))
+            .add_scope(Scope::new("user:email".into()))
+            .add_scope(Scope::new("read:org".into()))
             .set_pkce_challenge(pkce_code_challenge);
         if let Some(redirect_params) = redirect_params {
             session.write().await.data.insert(redirect_params);
@@ -271,8 +279,60 @@ impl ServiceHandler for OAuthAuthHandler {
             } else if self.config.allowed_users.contains(&user_info.id.0) {
                 claims.rol = UserRole::User;
             }
+            if let Ok(emails) = client
+                .get("https://api.github.com/user/emails")
+                .header("Authorization", &token_val)
+                .header("Accept", "application/vnd.github+json")
+                .header("User-Agent", "portfu-login-service")
+                .header("X-GitHub-Api-Version", "2022-11-28")
+                .send()
+                .await
+            {
+                match emails.json().await {
+                    Ok(_emails) => {
+                        let emails: Vec<EmailEntry> = _emails;
+                        let mut email = None;
+                        for entry in emails {
+                            if entry.primary && entry.verified {
+                                email = Some(entry);
+                                break;
+                            } else if entry.verified
+                                && (email.is_none()
+                                    || (email.is_some()
+                                        && !email
+                                            .as_ref()
+                                            .expect("Just Checked Email is Some")
+                                            .verified))
+                            {
+                                email = Some(entry);
+                            } else if entry.primary
+                                && (email.is_none()
+                                    || (email.is_some()
+                                        && !email
+                                            .as_ref()
+                                            .expect("Just Checked Email is Some")
+                                            .verified))
+                            {
+                                email = Some(entry);
+                            } else {
+                                email = Some(entry);
+                            }
+                        }
+                        claims.eml = email.map(|v| v.email).unwrap_or_default();
+                    }
+                    Err(e) => {
+                        warn!("Failed to Parse Emails Response: {e:?}");
+                        return Ok(redirect_to_url(
+                            data,
+                            self.config.on_failure_redirect.as_str(),
+                        ));
+                    }
+                }
+            } else {
+                warn!("Failed to Load User Emails");
+                claims.eml = user_info.email.unwrap_or_default();
+            }
             claims.sub = user_info.id.to_string();
-            claims.eml = user_info.email.unwrap_or_default();
         }
         session.write().await.data.insert(claims);
         if let Some(redirect) = session
