@@ -100,6 +100,15 @@ pub fn get_session_cookie_from_request(data: &ServiceData) -> Option<Cookie<'_>>
     }
     session_cookie
 }
+pub async fn get_session_from_request(data: &ServiceData) -> Option<Arc<RwLock<Session>>> {
+    let cookie = get_session_cookie_from_request(data)?;
+    let address: &SocketAddr = data.request.get().unwrap();
+    let salt = data.get_best_guess_public_ip(address);
+    let mut hasher = Sha256::new();
+    hasher.update([cookie.value_trimmed().as_bytes(), salt.as_bytes()].concat());
+    let server_session_id = hex::encode(hasher.finalize().as_slice());
+    SESSIONS.get(&server_session_id).map(|v| v.value().clone())
+}
 #[async_trait]
 impl WrapperFn for SessionWrapper {
     fn name(&self) -> &str {

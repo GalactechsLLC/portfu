@@ -42,6 +42,7 @@ pub struct OAuthConfig {
     pub allowed_organizations: Vec<u64>,
     pub allowed_users: Vec<u64>,
     pub admin_users: Vec<u64>,
+    pub callbacks: Vec<OAuthCallbackFn>,
 }
 
 #[derive(Default, Clone, Deserialize)]
@@ -57,7 +58,6 @@ struct EmailEntry {
     email: String,
     primary: bool,
     verified: bool,
-    visibility: Option<String>,
 }
 
 #[derive(Default, Clone, Deserialize)]
@@ -66,12 +66,38 @@ pub struct AuthRequest {
     state: String,
 }
 
-pub type CallbackFn =
-    Pin<Box<dyn Fn(usize) -> Box<dyn Future<Output = Result<(), Error>>> + Send + Sync + 'static>>;
+pub enum CallbackResult {
+    Continue(ServiceData),
+    Return(ServiceData),
+}
+
+pub type ErrCallbackFn = Pin<
+    Box<
+        dyn Fn(
+                ServiceData,
+            )
+                -> Pin<Box<dyn Future<Output = Result<CallbackResult, (ServiceData, Error)>> + Send>>
+            + Send
+            + Sync
+            + 'static,
+    >,
+>;
+pub type CallbackFn = Pin<
+    Box<
+        dyn Fn(
+                Claims,
+                ServiceData,
+            )
+                -> Pin<Box<dyn Future<Output = Result<CallbackResult, (ServiceData, Error)>> + Send>>
+            + Send
+            + Sync
+            + 'static,
+    >,
+>;
 
 pub enum OAuthCallbackFn {
     OnSuccess(CallbackFn),
-    OnFailure(CallbackFn),
+    OnFailure(ErrCallbackFn),
 }
 
 pub struct OAuthLoginHandler {
@@ -145,6 +171,66 @@ impl ServiceHandler for OAuthLoginHandler {
 pub struct OAuthAuthHandler {
     config: Arc<OAuthConfig>,
 }
+impl OAuthAuthHandler {
+    pub async fn handle_error(
+        &self,
+        mut data: ServiceData,
+        error: &str,
+    ) -> Result<ServiceData, (ServiceData, Error)> {
+        for callback in &self.config.callbacks {
+            if let OAuthCallbackFn::OnFailure(err_fn) = callback {
+                match (*err_fn)(data).await? {
+                    CallbackResult::Continue(d) => {
+                        data = d;
+                    }
+                    CallbackResult::Return(data) => {
+                        return Ok(data);
+                    }
+                }
+            }
+        }
+        Ok(send_internal_error(data, error))
+    }
+    pub async fn handle_failure(
+        &self,
+        mut data: ServiceData,
+        url: &str,
+    ) -> Result<ServiceData, (ServiceData, Error)> {
+        for callback in &self.config.callbacks {
+            if let OAuthCallbackFn::OnFailure(err_fn) = callback {
+                match (*err_fn)(data).await? {
+                    CallbackResult::Continue(d) => {
+                        data = d;
+                    }
+                    CallbackResult::Return(data) => {
+                        return Ok(data);
+                    }
+                }
+            }
+        }
+        Ok(redirect_to_url(data, url))
+    }
+    pub async fn handle_success(
+        &self,
+        mut data: ServiceData,
+        claims: Claims,
+        url: &str,
+    ) -> Result<ServiceData, (ServiceData, Error)> {
+        for callback in &self.config.callbacks {
+            if let OAuthCallbackFn::OnSuccess(callback) = callback {
+                match callback(claims.clone(), data).await? {
+                    CallbackResult::Continue(d) => {
+                        data = d;
+                    }
+                    CallbackResult::Return(data) => {
+                        return Ok(data);
+                    }
+                }
+            }
+        }
+        Ok(redirect_to_url(data, url))
+    }
+}
 #[async_trait::async_trait]
 impl ServiceHandler for OAuthAuthHandler {
     fn name(&self) -> &str {
@@ -158,7 +244,9 @@ impl ServiceHandler for OAuthAuthHandler {
             session.clone()
         } else {
             warn!("Failed to Find session to auth");
-            return Ok(send_internal_error(data, "Failed to Find Session to Auth"));
+            return self
+                .handle_error(data, "Failed to Find Session to Auth")
+                .await;
         };
         let body: Option<AuthRequest> = match Json::from_request(&mut data.request, "").await {
             Ok(json) => json.inner(),
@@ -170,15 +258,19 @@ impl ServiceHandler for OAuthAuthHandler {
                     Some(v) => v,
                     None => {
                         warn!("Failed to Extract Request");
-                        return Ok(send_internal_error(data, "Failed to extract AuthRequest"));
+                        return self
+                            .handle_error(data, "Failed to extract AuthRequest")
+                            .await;
                     }
                 },
                 Err(e) => {
                     warn!("Failed to Extract Query");
-                    return Ok(send_internal_error(
-                        data,
-                        format!("Failed to extract Query as AuthRequest, {e:?}"),
-                    ));
+                    return self
+                        .handle_error(
+                            data,
+                            &format!("Failed to extract Query as AuthRequest, {e:?}"),
+                        )
+                        .await;
                 }
             },
             Some(v) => v,
@@ -187,18 +279,18 @@ impl ServiceHandler for OAuthAuthHandler {
             session.clone()
         } else {
             warn!("Failed to Find Csrf Token");
-            return Ok(send_internal_error(data, "Failed to Find Csrf Token"));
+            return self.handle_error(data, "Failed to Find Csrf Token").await;
         };
         let token_state = CsrfToken::new(body.state.clone());
         if existing_token.secret() != token_state.secret() {
             warn!("Invalid Csrf Token");
-            return Ok(send_internal_error(data, "Invalid Csrf Token"));
+            return self.handle_error(data, "Invalid Csrf Token").await;
         }
         let verifier = if let Some(verifier) = session.read().await.data.get::<Verifier>() {
             PkceCodeVerifier::new(verifier.0.clone())
         } else {
             warn!("Failed to Find Verifier");
-            return Ok(send_internal_error(data, "Failed to Find Verifier"));
+            return self.handle_error(data, "Failed to Find Verifier").await;
         };
         let code = AuthorizationCode::new(body.code.clone());
         let client = &self.config.client;
@@ -211,10 +303,9 @@ impl ServiceHandler for OAuthAuthHandler {
             Ok(token) => token,
             Err(e) => {
                 warn!("Failed to Get Auth Token: {e:?}");
-                return Ok(redirect_to_url(
-                    data,
-                    self.config.on_failure_redirect.as_str(),
-                ));
+                return self
+                    .handle_failure(data, self.config.on_failure_redirect.as_str())
+                    .await;
             }
         };
         let token_val = format!("Bearer {}", token.access_token().secret());
@@ -231,10 +322,9 @@ impl ServiceHandler for OAuthAuthHandler {
             user_info.json().await.ok()
         } else {
             warn!("Failed to Load User Info");
-            return Ok(redirect_to_url(
-                data,
-                self.config.on_failure_redirect.as_str(),
-            ));
+            return self
+                .handle_failure(data, self.config.on_failure_redirect.as_str())
+                .await;
         };
         let org_info: Option<Vec<Organization>> = if let Ok(org_info) = client
             .get("https://api.github.com/user/orgs")
@@ -248,10 +338,9 @@ impl ServiceHandler for OAuthAuthHandler {
             org_info.json().await.ok()
         } else {
             warn!("Failed to Load Org Info");
-            return Ok(redirect_to_url(
-                data,
-                self.config.on_failure_redirect.as_str(),
-            ));
+            return self
+                .handle_failure(data, self.config.on_failure_redirect.as_str())
+                .await;
         };
         let mut claims: Claims = session.read().await.data.get().cloned().unwrap_or(Claims {
             aud: self.config.claims_audience.clone(),
@@ -322,10 +411,9 @@ impl ServiceHandler for OAuthAuthHandler {
                     }
                     Err(e) => {
                         warn!("Failed to Parse Emails Response: {e:?}");
-                        return Ok(redirect_to_url(
-                            data,
-                            self.config.on_failure_redirect.as_str(),
-                        ));
+                        return self
+                            .handle_failure(data, self.config.on_failure_redirect.as_str())
+                            .await;
                     }
                 }
             } else {
@@ -334,19 +422,19 @@ impl ServiceHandler for OAuthAuthHandler {
             }
             claims.sub = user_info.id.to_string();
         }
-        session.write().await.data.insert(claims);
+        session.write().await.data.insert(claims.clone());
         if let Some(redirect) = session
             .write()
             .await
             .data
             .remove::<OAuthLoginRedirectParams>()
         {
-            return Ok(redirect_to_url(data, redirect.redirect_url.as_str()));
+            return self
+                .handle_success(data, claims, redirect.redirect_url.as_str())
+                .await;
         }
-        Ok(redirect_to_url(
-            data,
-            self.config.on_success_redirect.as_str(),
-        ))
+        self.handle_success(data, claims, self.config.on_success_redirect.as_str())
+            .await
     }
 
     fn service_type(&self) -> ServiceType {
@@ -619,6 +707,7 @@ impl OAuthLoginBuilder {
             claims_issuer: self.claims_issuer.unwrap_or_default(),
             allowed_users: self.allowed_users,
             admin_users: self.admin_users,
+            callbacks: self.callbacks,
             claims_expire_time: self.claims_expire_time.unwrap_or(0),
         });
         let login_service = ServiceBuilder::new("/github/login")

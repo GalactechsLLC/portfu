@@ -213,3 +213,55 @@ impl From<String> for UserRole {
         Self::from_str(&s).unwrap_or(UserRole::None)
     }
 }
+impl From<i64> for UserRole {
+    fn from(s: i64) -> Self {
+        match s {
+            0 => UserRole::User,
+            10 => UserRole::Viewer,
+            20 => UserRole::Contributor,
+            30 => UserRole::Editor,
+            40 => UserRole::Manager,
+            50 => UserRole::Admin,
+            i64::MAX => UserRole::SuperAdmin,
+            _ => UserRole::None,
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, Eq, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
+#[repr(i64)]
+pub enum UserStatus {
+    #[default]
+    Deleted = -1,
+    Inactive = 0,
+    Active = 1,
+    Suspended = 2,
+}
+impl Display for UserStatus {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UserStatus::Deleted => f.write_str("Deleted"),
+            UserStatus::Inactive => f.write_str("Inactive"),
+            UserStatus::Active => f.write_str("Active"),
+            UserStatus::Suspended => f.write_str("Suspended"),
+        }
+    }
+}
+impl FromStr for UserStatus {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "deleted" => Ok(UserStatus::Deleted),
+            "inactive" => Ok(UserStatus::Inactive),
+            "active" => Ok(UserStatus::Active),
+            "suspended" => Ok(UserStatus::Suspended),
+            _ => Err(format!("{s} is not a valid UserStatus")),
+        }
+    }
+}
+impl From<String> for UserStatus {
+    fn from(s: String) -> Self {
+        Self::from_str(&s).unwrap_or(UserStatus::Deleted)
+    }
+}
