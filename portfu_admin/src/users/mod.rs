@@ -248,20 +248,22 @@ impl Display for UserStatus {
         }
     }
 }
-impl FromStr for UserStatus {
-    type Err = String;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "deleted" => Ok(UserStatus::Deleted),
-            "inactive" => Ok(UserStatus::Inactive),
-            "active" => Ok(UserStatus::Active),
-            "suspended" => Ok(UserStatus::Suspended),
-            _ => Err(format!("{s} is not a valid UserStatus")),
-        }
+
+impl TryFrom<i64> for UserStatus {
+    type Error = &'static str;
+    fn try_from(v: i64) -> Result<Self, Self::Error> {
+        Ok(match v {
+            -1 => UserStatus::Deleted,
+            0 => UserStatus::Inactive,
+            1 => UserStatus::Active,
+            2 => UserStatus::Suspended,
+            _ => return Err("invalid UserStatus"),
+        })
     }
 }
-impl From<String> for UserStatus {
-    fn from(s: String) -> Self {
-        Self::from_str(&s).unwrap_or(UserStatus::Deleted)
+
+impl From<UserStatus> for i64 {
+    fn from(s: UserStatus) -> Self {
+        s as i64
     }
 }
