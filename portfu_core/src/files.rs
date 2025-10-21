@@ -7,6 +7,7 @@ use http::{HeaderValue, StatusCode};
 use http_body::Frame;
 use http_body_util::{BodyStream, StreamBody};
 use hyper::body::Bytes;
+use log::{debug, info};
 use mime_guess::from_path;
 use std::collections::HashMap;
 use std::io::Error;
@@ -246,6 +247,7 @@ impl ServiceHandler for StaticFile {
     }
     async fn handle(&self, mut data: ServiceData) -> Result<ServiceData, (ServiceData, Error)> {
         let bytes: Bytes = self.file_contents.into();
+        debug!("mime type: {}, path: {}", self.mime, self.name);
         if let Ok(val) = HeaderValue::from_str(&self.mime) {
             data.response.headers_mut().insert(CONTENT_TYPE, val);
         }

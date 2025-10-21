@@ -11,7 +11,7 @@ use hyper::body::{Bytes, Incoming};
 use hyper::server::conn::http1::Builder;
 use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
-use log::{error, info};
+use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
 use sha2::digest::Output;
 use sha2::{Digest, Sha256, Sha256VarCore};
@@ -217,6 +217,7 @@ impl Server {
                 break;
             }
         }
+        debug!("got request: {}, {}", request.uri(), handler.is_some());
         match handler {
             Some(service) => handle_service(request, service, server.clone(), response).await,
             None => {

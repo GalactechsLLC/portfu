@@ -166,7 +166,7 @@ fn read_file(root: &'_ Path, starting_path: &'_ Path, file_map: &'_ mut HashMap<
     }).unwrap();
     new_root.extend(path);
     file_map.insert(
-        new_root.to_string_lossy().to_string(),
-        starting_path.to_string_lossy().to_string(),
+        new_root.to_string_lossy().replace("\\", "/"),
+        starting_path.to_string_lossy().replace("\\", "/"),
     );
 }
