@@ -53,7 +53,7 @@ impl ToTokens for StaticFiles {
             .map(|(key, value)| {
                 let file_len = Path::new(value).metadata().unwrap().len() as usize;
                 let key_name = key
-                    .replace(['/', '.', ')', '(', '-', ' ', '+'], "_")
+                    .replace(['/', '\\', '.', ')', '(', '-', ' ', '+'], "_")
                     .replace('@', "_at_")
                     .replace("__", "_");
                 let static_bytes_name = format_ident!("STATIC_FILE{}", key_name);
