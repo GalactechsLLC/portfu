@@ -3,7 +3,7 @@ use crate::services::{redirect_to_url, send_internal_error};
 use crate::users::UserRole;
 use http::HeaderValue;
 use hyper::{header, StatusCode};
-use log::warn;
+use log::{debug, warn};
 use oauth2::basic::BasicClient;
 use oauth2::reqwest::async_http_client;
 use oauth2::{
@@ -383,6 +383,7 @@ impl ServiceHandler for OAuthAuthHandler {
                         let mut email = None;
                         for entry in emails {
                             if entry.primary && entry.verified {
+                                debug!("New Verified Primary Found");
                                 email = Some(entry);
                                 break;
                             } else if entry.verified
@@ -393,6 +394,7 @@ impl ServiceHandler for OAuthAuthHandler {
                                             .expect("Just Checked Email is Some")
                                             .verified))
                             {
+                                debug!("Verified Found");
                                 email = Some(entry);
                             } else if entry.primary
                                 && (email.is_none()
@@ -402,9 +404,12 @@ impl ServiceHandler for OAuthAuthHandler {
                                             .expect("Just Checked Email is Some")
                                             .verified))
                             {
+                                debug!("Unverified Primary Found");
+                                email = Some(entry);
+                            } else if email.is_none() {
                                 email = Some(entry);
                             } else {
-                                email = Some(entry);
+                                continue;
                             }
                         }
                         claims.eml = email.map(|v| v.email).unwrap_or_default();
