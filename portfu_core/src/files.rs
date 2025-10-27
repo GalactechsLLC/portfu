@@ -7,7 +7,7 @@ use http::{HeaderValue, StatusCode};
 use http_body::Frame;
 use http_body_util::{BodyStream, StreamBody};
 use hyper::body::Bytes;
-use log::{debug, info};
+use log::debug;
 use mime_guess::from_path;
 use std::collections::HashMap;
 use std::io::Error;
