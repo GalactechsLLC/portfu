@@ -6,30 +6,30 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 #[derive(Debug)]
-pub struct Task {
+pub struct ServerThreadImpl {
     pub name: String,
-    pub task_fn: Arc<dyn TaskFn + Sync + Send>,
+    pub handle: Arc<dyn ServerThread + Sync + Send>,
 }
 
 #[async_trait]
-pub trait TaskFn {
+pub trait ServerThread {
     fn name(&self) -> &str;
     async fn run(&self, state: Arc<RwLock<Extensions>>) -> Result<(), Error>;
 }
 
-impl Debug for dyn TaskFn + Send + Sync + 'static {
+impl Debug for dyn ServerThread + Send + Sync + 'static {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.name())
     }
 }
 
 #[async_trait]
-impl TaskFn for Task {
+impl ServerThread for ServerThreadImpl {
     fn name(&self) -> &str {
         self.name.as_str()
     }
 
     async fn run(&self, state: Arc<RwLock<Extensions>>) -> Result<(), Error> {
-        self.task_fn.run(state).await
+        self.handle.run(state).await
     }
 }

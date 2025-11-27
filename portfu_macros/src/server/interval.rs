@@ -123,17 +123,17 @@ impl ToTokens for Interval {
             #(#doc_attributes)*
             #[allow(non_camel_case_types, missing_docs)]
             pub struct #name;
-            impl From<#name> for ::portfu::pfcore::task::Task {
-                fn from(interval: #name) -> ::portfu::pfcore::task::Task {
-                    use ::portfu::pfcore::task::TaskFn;
-                    ::portfu::pfcore::task::Task {
+            impl From<#name> for ::portfu::pfcore::runtime::thread::ServerThreadImpl {
+                fn from(interval: #name) -> ::portfu::pfcore::runtime::thread::ServerThreadImpl {
+                    use ::portfu::pfcore::runtime::thread::ServerThread;
+                    ::portfu::pfcore::runtime::thread::ServerThreadImpl {
                         name: interval.name().to_string(),
-                        task_fn: ::std::sync::Arc::new(interval)
+                        handle: ::std::sync::Arc::new(interval)
                     }
                 }
             }
             #[::portfu::prelude::async_trait::async_trait]
-            impl ::portfu::pfcore::task::TaskFn for #name {
+            impl ::portfu::pfcore::runtime::thread::ServerThread for #name {
                 fn name(&self) -> &str {
                     stringify!(#name)
                 }
@@ -152,7 +152,7 @@ impl ToTokens for Interval {
                                     ::portfu::prelude::log::error!("Error in Interval {} - {e:?} ", stringify!(#name));
                                 }
                             }
-                            _ = ::portfu::pfcore::signal::await_termination() => {
+                            _ = ::portfu::pfcore::utils::signal::await_termination() => {
                                 break;
                             }
                         }

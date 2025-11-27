@@ -3,7 +3,7 @@ use http::{HeaderMap, Method, Request, Response, Uri};
 use http_body_util::{BodyStream, Empty, Full, StreamBody};
 use hyper::body::{Body, Bytes, Frame, Incoming, SizeHint};
 use log::{debug, error};
-use pfcore::service::BodyType;
+use pfcore::services::body::BodyType;
 use pfcore::PinnedBody;
 use rustls::client::ClientConfig;
 use rustls::pki_types::ServerName;

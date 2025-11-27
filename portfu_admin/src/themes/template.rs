@@ -2,7 +2,7 @@ use crate::stores::DataStoreEntry;
 use crate::themes::page::Page;
 use crate::themes::replace_tokens;
 use crate::themes::token::Token;
-use portfu::pfcore::service::BodyType;
+use portfu::pfcore::services::body::BodyType;
 use portfu::pfcore::{IntoStreamBody, ServiceData};
 use portfu::prelude::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use portfu::prelude::http::HeaderValue;

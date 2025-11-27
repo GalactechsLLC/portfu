@@ -48,7 +48,7 @@ impl syn::parse::Parse for EndpointArgs {
         })?;
 
         // verify that path pattern is valid
-        let _ = portfu_core::routes::Route::new(path.value());
+        let _ = portfu_core::router::routes::Route::new(path.value());
 
         // if there's no comma, assume that no options are provided
         if !input.peek(Token![,]) {
@@ -221,7 +221,7 @@ impl ToTokens for Endpoint {
             }
         };
         let registrations = quote! {
-            let __resource = ::portfu::pfcore::service::ServiceBuilder::new(#path)
+            let __resource = ::portfu::pfcore::services::builder::ServiceBuilder::new(#path)
                 .name(#resource_name)
                 .extend_state(shared_state.clone())
                 #method_filters
@@ -231,7 +231,7 @@ impl ToTokens for Endpoint {
             service_registry.register(__resource);
         };
         let service_def = quote! {
-            ::portfu::pfcore::service::ServiceBuilder::new(#path)
+            ::portfu::pfcore::services::builder::ServiceBuilder::new(#path)
                 .name(#resource_name)
                 #method_filters
                 #(.filter(::portfu::pfcore::filters::all(#filters_name, #filters)))*
@@ -329,11 +329,11 @@ impl ToTokens for Endpoint {
                         } else if request_headers == segment.ident {
                             if reference.mutability.is_some() {
                                 dyn_vars.push(quote! {
-                                    let #ident_val: &mut ::portfu::pfcore::service::RequestHeaders = handle_data.request.request.headers_mut();
+                                    let #ident_val: &mut ::portfu::pfcore::services::RequestHeaders = handle_data.request.headers_mut();
                                 });
                             } else {
                                 dyn_vars.push(quote! {
-                                    let #ident_val: &::portfu::pfcore::service::RequestHeaders = handle_data.request.request.headers();
+                                    let #ident_val: &::portfu::pfcore::service::RequestHeaders = handle_data.request.headers();
                                 });
                             }
                             additional_function_vars.push(quote! {
@@ -343,11 +343,11 @@ impl ToTokens for Endpoint {
                         } else if response_headers == segment.ident {
                             if reference.mutability.is_some() {
                                 dyn_vars.push(quote! {
-                                    let #ident_val: &mut ::portfu::pfcore::service::ResponseHeaders = handle_data.response.headers_mut();
+                                    let #ident_val: &mut ::portfu::pfcore::services::response::ResponseHeaders = handle_data.response.headers_mut();
                                 });
                             } else {
                                 dyn_vars.push(quote! {
-                                    let #ident_val: &::portfu::pfcore::service::ResponseHeaders = handle_data.response.headers();
+                                    let #ident_val: &::portfu::pfcore::services::response::ResponseHeaders = handle_data.response.headers();
                                 });
                             }
                             additional_function_vars.push(quote! {
@@ -364,7 +364,7 @@ impl ToTokens for Endpoint {
                     Err(e) => {
                         *handle_data.response.status_mut() = ::portfu::prelude::http::StatusCode::INTERNAL_SERVER_ERROR;
                         handle_data.response.set_body(
-                            ::portfu::pfcore::service::BodyType::Stream(
+                            ::portfu::pfcore::services::body::BodyType::Stream(
                                 ::portfu::prelude::hyper::body::Bytes::from(
                                     format!("Failed to extract {} as {}, {e:?}",
                                         stringify!(#ident_val), stringify!(#ident_type).replace(' ',"")
@@ -390,7 +390,7 @@ impl ToTokens for Endpoint {
                                 ::portfu::prelude::hyper::header::HeaderValue::from_static("application/json")
                             );
                             handle_data.response.set_body(
-                                ::portfu::pfcore::service::BodyType::Stream(
+                                ::portfu::pfcore::services::body::BodyType::Stream(
                                     v.stream_body()
                                 )
                             );
@@ -402,7 +402,7 @@ impl ToTokens for Endpoint {
                             let err = format!("{e:?}");;
                             let bytes: ::portfu::prelude::hyper::body::Bytes = err.into();
                             handle_data.response.set_body(
-                                ::portfu::pfcore::service::BodyType::Stream(
+                                ::portfu::pfcore::services::body::BodyType::Stream(
                                     bytes.stream_body()
                                 )
                             )
@@ -414,7 +414,7 @@ impl ToTokens for Endpoint {
                 quote! {
                     let bytes: ::portfu::prelude::hyper::body::Bytes = t.into();
                     handle_data.response.set_body(
-                        ::portfu::pfcore::service::BodyType::Stream(
+                        ::portfu::pfcore::services::body::BodyType::Stream(
                             bytes.stream_body()
                         )
                     );
@@ -435,7 +435,7 @@ impl ToTokens for Endpoint {
                             );
                             let bytes: ::portfu::prelude::hyper::body::Bytes = v.into();
                             handle_data.response.set_body(
-                                ::portfu::pfcore::service::BodyType::Stream(
+                                ::portfu::pfcore::services::body::BodyType::Stream(
                                     bytes.stream_body()
                                 )
                             )
@@ -444,7 +444,7 @@ impl ToTokens for Endpoint {
                             let err = format!("{e:?}");;
                             let bytes: ::portfu::prelude::hyper::body::Bytes = err.into();
                             handle_data.response.set_body(
-                                ::portfu::pfcore::service::BodyType::Stream(
+                                ::portfu::pfcore::services::body::BodyType::Stream(
                                     bytes.stream_body()
                                 )
                             )
@@ -457,7 +457,7 @@ impl ToTokens for Endpoint {
                     let err = format!("{e:?}");;
                     let bytes: ::portfu::prelude::hyper::body::Bytes = err.into();
                     handle_data.response.set_body(
-                        ::portfu::pfcore::service::BodyType::Stream(
+                        ::portfu::pfcore::services::body::BodyType::Stream(
                             bytes.stream_body()
                         )
                     );
@@ -492,7 +492,7 @@ impl ToTokens for Endpoint {
                     mut handle_data: ::portfu::prelude::ServiceData
                 ) -> Result<::portfu::prelude::ServiceData, (::portfu::prelude::ServiceData, ::std::io::Error)> {
                     use ::portfu::pfcore::IntoStreamBody;
-                    if handle_data.request.request.method() == ::portfu::prelude::http::method::Method::OPTIONS {
+                    if handle_data.request.method() == ::portfu::prelude::http::method::Method::OPTIONS {
                         return Ok(handle_data)
                     }
                     #(#dyn_vars)*

@@ -1,5 +1,5 @@
 use portfu::macros::{get, put};
-use portfu::pfcore::editable::EditResult;
+use portfu::pfcore::files::EditResult;
 use portfu::pfcore::{FromBody, Json, ServiceRegister};
 use portfu::prelude::http::{Extensions, StatusCode};
 use portfu::prelude::*;
@@ -52,9 +52,8 @@ pub struct LoadRequest {
 
 #[get("/pf_admin/editor/load")]
 pub async fn get_service_value(data: &mut ServiceData) -> Result<Vec<u8>, Error> {
-    let load_request: Option<LoadRequest> = Json::from_body(&mut data.request.request.body())
-        .await?
-        .inner();
+    let load_request: Option<LoadRequest> =
+        Json::from_body(&mut data.request.body()).await?.inner();
     if let Some(load_request) = load_request {
         let services: Vec<Arc<Service>> = data.server.registry.read().await.services.to_vec();
         for service in &services {
@@ -95,9 +94,8 @@ pub struct EditRequest {
 
 #[put("/pf_admin/editor/create")]
 pub async fn create_service(data: &mut ServiceData) -> Result<Vec<u8>, Error> {
-    let edit_request: Option<EditRequest> = Json::from_body(&mut data.request.request.body())
-        .await?
-        .inner();
+    let edit_request: Option<EditRequest> =
+        Json::from_body(&mut data.request.body()).await?.inner();
     if let Some(edit_request) = edit_request {
         let services: Vec<Arc<Service>> = data.server.registry.read().await.services.to_vec();
         for service in &services {
@@ -134,9 +132,8 @@ pub async fn create_service(data: &mut ServiceData) -> Result<Vec<u8>, Error> {
 
 #[put("/pf_admin/editor/update")]
 pub async fn update_service_value(data: &mut ServiceData) -> Result<Vec<u8>, Error> {
-    let edit_request: Option<EditRequest> = Json::from_body(&mut data.request.request.body())
-        .await?
-        .inner();
+    let edit_request: Option<EditRequest> =
+        Json::from_body(&mut data.request.body()).await?.inner();
     if let Some(edit_request) = edit_request {
         let services: Vec<Arc<Service>> = data.server.registry.read().await.services.to_vec();
         for service in &services {

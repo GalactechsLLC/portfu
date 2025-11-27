@@ -1,4 +1,4 @@
-use crate::server::ServerConfig;
+use crate::server::config::ServerConfig;
 use log::error;
 use rsa::pkcs1::DecodeRsaPrivateKey;
 use rsa::pkcs1v15::SigningKey;

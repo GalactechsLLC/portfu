@@ -1,6 +1,6 @@
 use http::{header, HeaderValue, StatusCode};
 use hyper::body::Bytes;
-use portfu::pfcore::service::BodyType;
+use portfu::pfcore::services::body::BodyType;
 use portfu::pfcore::{IntoStreamBody, ServiceData};
 
 pub mod editor;

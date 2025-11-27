@@ -10,7 +10,7 @@ use crate::server::interval::Interval;
 use crate::server::static_files::StaticFiles;
 use crate::server::task::Task;
 use crate::server::websocket::WebSocketRoute;
-use portfu_core::routes::PathSegment;
+use portfu_core::router::routes::PathSegment;
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
 use quote::{quote, ToTokens};
@@ -157,9 +157,9 @@ pub fn interval(args: TokenStream, input: TokenStream) -> TokenStream {
 
 fn parse_path_variables(path: &LitStr) -> (Vec<TokenStream2>, Vec<String>) {
     let mut path_vars = vec![];
-    match portfu_core::routes::Route::new(path.value()) {
-        portfu_core::routes::Route::Static(_, _) => (vec![quote! {}], vec![]),
-        portfu_core::routes::Route::Segmented(segments, _) => {
+    match portfu_core::router::routes::Route::new(path.value()) {
+        portfu_core::router::routes::Route::Static(_, _) => (vec![quote! {}], vec![]),
+        portfu_core::router::routes::Route::Segmented(segments, _) => {
             let mut variables = vec![];
             for segment in segments.iter().filter_map(|v| match v {
                 PathSegment::Static(_) => None,

@@ -1,25 +1,20 @@
-pub mod cache;
-pub mod editable;
 pub mod files;
-pub mod filters;
-pub mod npm_service;
-pub mod routes;
+pub mod router;
+pub mod runtime;
 pub mod server;
-pub mod service;
-pub mod signal;
+pub mod services;
 pub mod sockets;
-mod ssl;
-pub mod task;
-pub mod wrappers;
+pub mod utils;
 
-use crate::editable::EditResult;
-use crate::filters::FilterFn;
+use crate::files::EditResult;
+use crate::router::filters::FilterFn;
+use crate::router::middleware::Middleware;
+use crate::runtime::thread::ServerThreadImpl;
 use crate::server::Server;
-use crate::service::{
-    BodyType, IncomingRequest, RefBodyType, Service, ServiceRequest, ServiceResponse,
-};
-use crate::task::Task;
-use crate::wrappers::WrapperFn;
+use crate::services::body::{BodyType, RefBodyType};
+use crate::services::request::ServiceRequest;
+use crate::services::response::ServiceResponse;
+use crate::services::Service;
 use async_trait::async_trait;
 use futures_util::{Stream, TryStreamExt};
 use http::Extensions;
@@ -215,7 +210,7 @@ pub struct ServiceData {
 }
 impl ServiceData {
     pub fn get_best_guess_public_ip(&self, address: &SocketAddr) -> String {
-        let remote = if let Some(real_ip) = self.request.request.headers().get("x-real-ip") {
+        let remote = if let Some(real_ip) = self.request.headers().get("x-real-ip") {
             format!("{real_ip:?}")
         } else {
             address.ip().to_string()
@@ -223,7 +218,7 @@ impl ServiceData {
         debug!("Found Remote IP: {remote}");
         if is_cloudflare(&remote) {
             debug!("Detected Cloudflare");
-            if let Some(real_ip) = self.request.request.headers().get("cf-connecting-ip") {
+            if let Some(real_ip) = self.request.headers().get("cf-connecting-ip") {
                 let ip = format!("{real_ip:?}");
                 debug!("Cloudflare: Real IP: {ip}");
                 ip
@@ -324,9 +319,9 @@ pub static mut STATIC_REGISTRY: Lazy<ServiceRegistry> = Lazy::new(|| ServiceRegi
 pub struct ServiceRegistry {
     pub services: Vec<Arc<Service>>,
     pub default_service: Option<Arc<Service>>,
-    pub tasks: Vec<Arc<Task>>,
+    pub tasks: Vec<Arc<ServerThreadImpl>>,
     pub filters: Vec<Arc<dyn FilterFn + Sync + Send>>,
-    pub wrappers: Vec<Arc<dyn WrapperFn + Sync + Send>>,
+    pub wrappers: Vec<Arc<dyn Middleware + Sync + Send>>,
 }
 impl ServiceRegistry {
     pub fn register(&mut self, mut service: Service) {
@@ -370,7 +365,6 @@ impl<T: Send + Sync + 'static> Deref for State<T> {
 impl<'a, T: Send + Sync + 'static> FromRequest<'a> for State<T> {
     async fn from_request(request: &'a mut ServiceRequest, _: &'a str) -> Result<Self, Error> {
         request
-            .request
             .extensions()
             .ok_or(Error::new(
                 ErrorKind::NotFound,
@@ -402,16 +396,6 @@ impl<'a> FromRequest<'a> for SocketAddr {
     }
 }
 
-#[async_trait]
-impl<'a> FromRequest<'a> for &'a IncomingRequest {
-    async fn from_request(
-        request: &'a mut ServiceRequest,
-        _: &'a str,
-    ) -> Result<&'a IncomingRequest, Error> {
-        Ok(&request.request)
-    }
-}
-
 #[derive(Clone)]
 pub struct Path(String);
 impl Path {
@@ -431,15 +415,15 @@ impl<'a> FromRequest<'a> for Path {
         var_name: &'a str,
     ) -> Result<Self, Error> {
         request
-            .path
-            .extract(request.request.uri().path(), var_name)
+            .route()
+            .extract(request.uri().path(), var_name)
             .map(Path)
             .ok_or(Error::new(
                 ErrorKind::InvalidInput,
                 format!(
                     "Failed to parse path variable {} in path {}",
                     var_name,
-                    request.request.uri().path()
+                    request.uri().path()
                 ),
             ))
     }
@@ -464,7 +448,7 @@ impl<T: FromBody> AsMut<T> for Body<T> {
 #[async_trait]
 impl<'a, T: FromBody> FromRequest<'a> for Body<T> {
     async fn from_request(request: &'a mut ServiceRequest, _: &'a str) -> Result<Self, Error> {
-        let mut body = request.request.body();
+        let mut body = request.body();
         T::from_body(&mut body).await.map(Body)
     }
 }
@@ -529,7 +513,7 @@ where
 #[async_trait::async_trait]
 impl<'r, T: for<'a> Deserialize<'a>> FromRequest<'r> for Json<Option<T>> {
     async fn from_request(request: &'r mut ServiceRequest, _: &'r str) -> Result<Self, Error> {
-        let bytes = body_to_bytes(&mut request.request.body()).await?;
+        let bytes = body_to_bytes(&mut request.body()).await?;
         if bytes.is_empty() || bytes.eq_ignore_ascii_case("{}".as_bytes()) {
             return Ok(Json(None));
         }
@@ -554,7 +538,7 @@ impl<T: for<'a> Deserialize<'a>> Query<T> {
 #[async_trait::async_trait]
 impl<'r, T: for<'a> Deserialize<'a>> FromRequest<'r> for Query<Option<T>> {
     async fn from_request(request: &'r mut ServiceRequest, _: &'r str) -> Result<Self, Error> {
-        if let Some(query) = request.request.uri().query() {
+        if let Some(query) = request.uri().query() {
             serde_html_form::from_str(query)
                 .map_err(|e| {
                     Error::new(

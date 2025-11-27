@@ -3,7 +3,7 @@ use http::StatusCode;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use log::debug;
 use portfu::macros::{get, post};
-use portfu::pfcore::wrappers::{Wrapper, WrapperFn, WrapperResult};
+use portfu::pfcore::router::middleware::{Middleware, MiddlewareImpl, MiddlewareResult};
 use portfu::pfcore::{Json, Query};
 use portfu::prelude::async_trait::async_trait;
 use portfu::prelude::log::error;
@@ -122,18 +122,21 @@ macro_rules! user_role_macro {
     ($variant:ident, $object:ident) => {
         pub struct $object {}
         #[async_trait]
-        impl<'a> WrapperFn for $object {
+        impl<'a> Middleware for $object {
             fn name(&self) -> &str {
                 stringify!($variant)
             }
-            async fn before(&self, data: &mut portfu::pfcore::ServiceData) -> WrapperResult {
+            async fn before(
+                &self,
+                data: &mut portfu::pfcore::ServiceData,
+            ) -> Result<MiddlewareResult, Error> {
                 if let Some(session) = data.request.get::<Arc<RwLock<Session>>>() {
                     if let Some(claims) = session.read().await.data.get::<Claims>() {
                         if claims.rol >= UserRole::$object {
-                            return WrapperResult::Continue;
+                            return Ok(MiddlewareResult::Continue);
                         }
                     } else {
-                        if let Some(jwt_header) = data.request.request.headers().get("USER_JWT") {
+                        if let Some(jwt_header) = data.request.headers().get("USER_JWT") {
                             if let Ok(str_val) = jwt_header.to_str() {
                                 match decode::<Claims>(
                                     str_val,
@@ -144,7 +147,7 @@ macro_rules! user_role_macro {
                                         let res =
                                             (token_data.claims.rol >= UserRole::$object).into();
                                         session.write().await.data.insert(token_data.claims);
-                                        return res;
+                                        return Ok(res);
                                     }
                                     Err(e) => {
                                         error!("Error Parsing JWT Token: {e:?}");
@@ -154,17 +157,20 @@ macro_rules! user_role_macro {
                         }
                     }
                 }
-                WrapperResult::Return
+                Ok(MiddlewareResult::Return)
             }
 
-            async fn after(&self, _data: &mut portfu::pfcore::ServiceData) -> WrapperResult {
-                WrapperResult::Continue
+            async fn after(
+                &self,
+                _data: &mut portfu::pfcore::ServiceData,
+            ) -> Result<MiddlewareResult, Error> {
+                Ok(MiddlewareResult::Continue)
             }
         }
-        pub static $variant: Lazy<Arc<Wrapper>> = Lazy::new(|| {
-            Arc::new(Wrapper {
+        pub static $variant: Lazy<Arc<MiddlewareImpl>> = Lazy::new(|| {
+            Arc::new(MiddlewareImpl {
                 name: stringify!($variant).to_string(),
-                wrapper_functions: vec![Arc::new($object {})],
+                handlers: vec![Arc::new($object {})],
             })
         });
     };
