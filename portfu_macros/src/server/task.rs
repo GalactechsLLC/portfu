@@ -103,7 +103,7 @@ impl ToTokens for Task {
                     use ::portfu::pfcore::task::TaskFn;
                     ::portfu::pfcore::task::Task {
                         name: task.name().to_string(),
-                        task_fn: Arc::new(task)
+                        task_fn: std::sync::Arc::new(task)
                     }
                 }
             }
