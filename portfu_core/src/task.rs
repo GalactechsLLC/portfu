@@ -33,3 +33,11 @@ impl TaskFn for Task {
         self.task_fn.run(state).await
     }
 }
+impl<T: TaskFn + Sync + Send + 'static> From<Arc<T>> for Task {
+    fn from(task: Arc<T>) -> Task {
+        Task {
+            name: task.name().to_string(),
+            task_fn: task,
+        }
+    }
+}

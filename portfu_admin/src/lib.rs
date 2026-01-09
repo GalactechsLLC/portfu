@@ -3,7 +3,7 @@ use crate::services::users::UserManager;
 use crate::stores::UserStore;
 use portfu::pfcore::npm_service::NpmSinglePageApp;
 use portfu::prelude::ServiceGroup;
-use portfu::wrappers::sessions::SessionWrapper;
+use portfu::wrappers::sessions::SessionManager;
 use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -23,9 +23,11 @@ pub struct PortfuAdmin<T: UserStore> {
 }
 impl<U: UserStore> From<PortfuAdmin<U>> for ServiceGroup {
     fn from(admin: PortfuAdmin<U>) -> ServiceGroup {
+        let session_manager = Arc::new(SessionManager::default());
         ServiceGroup::default()
             .shared_state(admin.user_datastore)
-            .wrap(Arc::new(SessionWrapper::default()))
+            .wrap(session_manager.clone())
+            .task(session_manager)
             .sub_group(ServiceEditor::default())
             .sub_group(NpmSinglePageApp::new(
                 PathBuf::from(env::var("SVELTE_SOURCE").unwrap()),

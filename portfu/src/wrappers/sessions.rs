@@ -3,13 +3,17 @@ use cookie::Cookie;
 use dashmap::DashMap;
 use http::{header, Extensions, HeaderName, HeaderValue};
 use once_cell::sync::Lazy;
+use pfcore::signal::await_termination;
+use pfcore::task::TaskFn;
 use portfu_core::wrappers::{WrapperFn, WrapperResult};
 use portfu_core::ServiceData;
 use sha2::{Digest, Sha256};
+use std::io::Error;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
+use tokio::time::interval;
 use uuid::Uuid;
 
 pub static SESSION_HEADER: &str = "session_id";
@@ -20,11 +24,11 @@ pub struct Session {
     pub id: Uuid,
 }
 
-pub struct SessionWrapper {
+pub struct SessionManager {
     pub session_duration: Duration,
     pub secure: bool,
 }
-impl Default for SessionWrapper {
+impl Default for SessionManager {
     fn default() -> Self {
         Self {
             session_duration: Duration::from_secs(60 * 30), //30 minutes
@@ -33,7 +37,7 @@ impl Default for SessionWrapper {
     }
 }
 
-impl SessionWrapper {
+impl SessionManager {
     async fn create_session_cookie(
         &self,
         data: &ServiceData,
@@ -110,9 +114,39 @@ pub async fn get_session_from_request(data: &ServiceData) -> Option<Arc<RwLock<S
     SESSIONS.get(&server_session_id).map(|v| v.value().clone())
 }
 #[async_trait]
-impl WrapperFn for SessionWrapper {
+impl TaskFn for SessionManager {
     fn name(&self) -> &str {
-        "SessionWrapper"
+        WrapperFn::name(self)
+    }
+
+    async fn run(&self, _state: Arc<RwLock<Extensions>>) -> Result<(), Error> {
+        let mut interval_duration = interval(Duration::from_secs(15));
+        loop {
+            tokio::select! {
+                _ = interval_duration.tick() => {
+                    let mut to_remove = vec![];
+                    for entry in SESSIONS.iter() {
+                        let session = entry.value().read().await;
+                        if session.last_update.elapsed() > self.session_duration {
+                            to_remove.push(entry.key().clone());
+                        }
+                    }
+                    for key in to_remove {
+                        SESSIONS.remove(&key);
+                    }
+                }
+                _ = await_termination() => {
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+#[async_trait]
+impl WrapperFn for SessionManager {
+    fn name(&self) -> &str {
+        "SessionManager"
     }
 
     async fn before(&self, data: &mut ServiceData) -> WrapperResult {
