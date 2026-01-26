@@ -4,6 +4,8 @@ use dashmap::DashMap;
 use http::{header, Extensions, HeaderName, HeaderValue};
 use once_cell::sync::Lazy;
 use pfcore::router::middleware::{Middleware, MiddlewareResult};
+use pfcore::runtime::thread::ServerThread;
+use pfcore::utils::signal::await_termination;
 use portfu_core::ServiceData;
 use sha2::{Digest, Sha256};
 use std::io::Error;
@@ -11,6 +13,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
+use tokio::time::interval;
 use uuid::Uuid;
 
 pub static SESSION_HEADER: &str = "session_id";
@@ -109,6 +112,36 @@ pub async fn get_session_from_request(data: &ServiceData) -> Option<Arc<RwLock<S
     hasher.update([cookie.value_trimmed().as_bytes(), salt.as_bytes()].concat());
     let server_session_id = hex::encode(hasher.finalize().as_slice());
     SESSIONS.get(&server_session_id).map(|v| v.value().clone())
+}
+#[async_trait]
+impl ServerThread for SessionManager {
+    fn name(&self) -> &str {
+        Middleware::name(self)
+    }
+
+    async fn run(&self, _state: Arc<RwLock<Extensions>>) -> Result<(), Error> {
+        let mut interval_duration = interval(Duration::from_secs(15));
+        loop {
+            tokio::select! {
+                _ = interval_duration.tick() => {
+                    let mut to_remove = vec![];
+                    for entry in SESSIONS.iter() {
+                        let session = entry.value().read().await;
+                        if session.last_update.elapsed() > self.session_duration {
+                            to_remove.push(entry.key().clone());
+                        }
+                    }
+                    for key in to_remove {
+                        SESSIONS.remove(&key);
+                    }
+                }
+                _ = await_termination() => {
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
 }
 #[async_trait]
 impl Middleware for SessionManager {

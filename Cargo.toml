@@ -37,7 +37,7 @@ regex = "1.11.2"
 reqwest = {version="0.12.23", default-features = false, features = ["rustls-tls", "json", "stream"] }
 rustls = {version = "0.23.29" }
 rustls-pemfile = "2.1.2"
-rsa = { version = "0.9.6", features = ["std", "pem", "sha2"] }
+rsa = { version = "0.9.10", features = ["std", "pem", "sha2"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_html_form = "0.2.7"
 serde_json = "1.0.143"

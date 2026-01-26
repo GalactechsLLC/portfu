@@ -33,11 +33,11 @@ impl ServerThread for ServerThreadImpl {
         self.handle.run(state).await
     }
 }
-impl<T: TaskFn + Sync + Send + 'static> From<Arc<T>> for Task {
-    fn from(task: Arc<T>) -> Task {
-        Task {
+impl<T: ServerThread + Sync + Send + 'static> From<Arc<T>> for ServerThreadImpl {
+    fn from(task: Arc<T>) -> ServerThreadImpl {
+        ServerThreadImpl {
             name: task.name().to_string(),
-            task_fn: task,
+            handle: task,
         }
     }
 }

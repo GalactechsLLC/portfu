@@ -23,7 +23,6 @@ impl<K: Eq + PartialEq + Hash, V, const N: usize> Default for CircularCache<K, V
 }
 
 impl<K: Eq + PartialEq + Hash, V, const N: usize> CircularCache<K, V, N> {
-
     pub const fn new() -> Self {
         // Enforce a minimum size for practicality
         assert!(N > 0, "CircularCache size N must be greater than 0");
@@ -54,7 +53,7 @@ impl<K: Eq + PartialEq + Hash, V, const N: usize> CircularCache<K, V, N> {
     }
 
     pub fn first(&self, key: &K) -> Option<&V> {
-        let search_hash = Self::hash(&key);
+        let search_hash = Self::hash(key);
         for (_, stored_key, stored_hash, stored_value) in self.iter_initialized()? {
             if stored_hash == search_hash && stored_key == key {
                 return Some(stored_value);
@@ -64,7 +63,7 @@ impl<K: Eq + PartialEq + Hash, V, const N: usize> CircularCache<K, V, N> {
     }
 
     pub fn get(&self, key: &K) -> Vec<&V> {
-        let search_hash = Self::hash(&key);
+        let search_hash = Self::hash(key);
         let mut slices = Vec::new();
         if let Some(values) = self.iter_initialized() {
             for (_, stored_key, stored_hash, stored_value) in values {
@@ -77,7 +76,7 @@ impl<K: Eq + PartialEq + Hash, V, const N: usize> CircularCache<K, V, N> {
     }
 
     pub fn contains(&self, key: &K) -> bool {
-        let search_hash = Self::hash(&key);
+        let search_hash = Self::hash(key);
         if let Some(values) = self.iter_initialized() {
             for (_, stored_key, stored_hash, _) in values {
                 if stored_hash == search_hash && stored_key == key {
