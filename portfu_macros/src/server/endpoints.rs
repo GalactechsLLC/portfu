@@ -333,7 +333,7 @@ impl ToTokens for Endpoint {
                                 });
                             } else {
                                 dyn_vars.push(quote! {
-                                    let #ident_val: &::portfu::pfcore::service::RequestHeaders = handle_data.request.headers();
+                                    let #ident_val: &::portfu::pfcore::services::RequestHeaders = handle_data.request.headers();
                                 });
                             }
                             additional_function_vars.push(quote! {
