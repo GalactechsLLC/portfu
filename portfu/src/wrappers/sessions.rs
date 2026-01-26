@@ -47,7 +47,7 @@ impl SessionManager {
         let client_session_id = Uuid::new_v4();
         let mut hasher = Sha256::new();
         hasher.update([client_session_id.to_string().as_bytes(), salt.as_bytes()].concat());
-        let server_session_id = hex::encode(hasher.finalize().as_slice());
+        let server_session_id = hex::encode(hasher.finalize());
         let cookie = Cookie::build((SESSION_HEADER, client_session_id.to_string()))
             .path("/")
             .secure(self.secure)
@@ -71,7 +71,7 @@ impl SessionManager {
         let salt = data.get_best_guess_public_ip(address);
         let mut hasher = Sha256::new();
         hasher.update([session_cookie.value_trimmed().as_bytes(), salt.as_bytes()].concat());
-        let server_session_id = hex::encode(hasher.finalize().as_slice());
+        let server_session_id = hex::encode(hasher.finalize());
         if let Some(session) = SESSIONS.get(&server_session_id).map(|v| v.value().clone()) {
             if Instant::now().duration_since(session.read().await.last_update)
                 >= self.session_duration
@@ -110,7 +110,7 @@ pub async fn get_session_from_request(data: &ServiceData) -> Option<Arc<RwLock<S
     let salt = data.get_best_guess_public_ip(address);
     let mut hasher = Sha256::new();
     hasher.update([cookie.value_trimmed().as_bytes(), salt.as_bytes()].concat());
-    let server_session_id = hex::encode(hasher.finalize().as_slice());
+    let server_session_id = hex::encode(hasher.finalize());
     SESSIONS.get(&server_session_id).map(|v| v.value().clone())
 }
 #[async_trait]
