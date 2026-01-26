@@ -140,7 +140,12 @@ impl ToTokens for StaticFiles {
 }
 
 fn read_directory(root: &Path, path: &Path, file_map: &mut HashMap<String, String>) {
-    let mut dir_reader = path.read_dir().unwrap();
+    let mut dir_reader = path
+        .read_dir()
+        .map_err(|e| {
+            panic!("An Error occurred when reading directory {path:?} - {e:?}");
+        })
+        .unwrap();
     while let Some(Ok(entry)) = dir_reader.next() {
         let entry_path = entry.path();
         if entry.path().is_dir() {

@@ -103,7 +103,7 @@ impl ToTokens for Task {
                     use ::portfu::pfcore::runtime::thread::ServerThread;
                     ::portfu::pfcore::runtime::thread::ServerThreadImpl {
                         name: task.name().to_string(),
-                        handle: Arc::new(task)
+                        handle: std::sync::Arc::new(task)
                     }
                 }
             }

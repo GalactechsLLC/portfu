@@ -21,11 +21,11 @@ pub struct Session {
     pub id: Uuid,
 }
 
-pub struct SessionWrapper {
+pub struct SessionManager {
     pub session_duration: Duration,
     pub secure: bool,
 }
-impl Default for SessionWrapper {
+impl Default for SessionManager {
     fn default() -> Self {
         Self {
             session_duration: Duration::from_secs(60 * 30), //30 minutes
@@ -34,7 +34,7 @@ impl Default for SessionWrapper {
     }
 }
 
-impl SessionWrapper {
+impl SessionManager {
     async fn create_session_cookie(
         &self,
         data: &ServiceData,
@@ -111,9 +111,9 @@ pub async fn get_session_from_request(data: &ServiceData) -> Option<Arc<RwLock<S
     SESSIONS.get(&server_session_id).map(|v| v.value().clone())
 }
 #[async_trait]
-impl Middleware for SessionWrapper {
+impl Middleware for SessionManager {
     fn name(&self) -> &str {
-        "SessionWrapper"
+        "SessionManager"
     }
 
     async fn before(&self, data: &mut ServiceData) -> Result<MiddlewareResult, Error> {

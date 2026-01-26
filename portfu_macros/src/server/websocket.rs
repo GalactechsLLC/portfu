@@ -134,7 +134,7 @@ impl ToTokens for WebSocketRoute {
                             let #ident_val: ::portfu::pfcore::services::request::RequestHeaders = handle_data.request.headers().clone();
                         });
                         additional_function_vars.push(quote! {
-                            headers,
+                            #ident_val,
                         });
                         continue;
                     }
