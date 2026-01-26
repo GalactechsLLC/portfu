@@ -1,10 +1,16 @@
-use crate::filters::Filter;
-use crate::service::{BodyType, IncomingRequest, Service, ServiceRequest, ServiceResponse};
-use crate::signal::await_termination;
-use crate::ssl::load_ssl_certs;
-use crate::task::{Task, TaskFn};
-use crate::wrappers::WrapperFn;
-use crate::{IntoStreamBody, ServiceData, ServiceRegister, ServiceRegistry, StreamingBody};
+pub mod builder;
+pub mod config;
+mod ssl;
+pub mod state;
+
+use crate::runtime::thread::ServerThread;
+use crate::server::config::ServerConfig;
+use crate::services::body::BodyType;
+use crate::services::request::{RequestType, ServiceRequest};
+use crate::services::response::ServiceResponse;
+use crate::services::Service;
+use crate::utils::signal::await_termination;
+use crate::{IntoStreamBody, ServiceData, ServiceRegistry, StreamingBody};
 use http::{Extensions, Request, Response, StatusCode};
 use http_body_util::Full;
 use hyper::body::{Bytes, Incoming};
@@ -12,9 +18,7 @@ use hyper::server::conn::http1::Builder;
 use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
 use log::{debug, error, info};
-use serde::{Deserialize, Serialize};
-use sha2::digest::Output;
-use sha2::{Digest, Sha256, Sha256VarCore};
+use ssl::load_ssl_certs;
 use std::env;
 use std::io::{Error, ErrorKind};
 use std::net::{Ipv4Addr, SocketAddr};
@@ -27,51 +31,6 @@ use tokio::sync::RwLock;
 use tokio::task::JoinSet;
 use tokio::{select, spawn};
 use tokio_rustls::TlsAcceptor;
-
-#[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SslConfig {
-    pub domain: String,
-    pub key: String,
-    pub certs: String,
-    pub root_certs: String,
-}
-
-#[derive(Debug)]
-pub struct ServerConfig {
-    pub host: String,
-    pub port: u16,
-    pub ssl_config: Option<SslConfig>,
-    pub client_ssl_config: Option<SslConfig>,
-    pub keep_alive: bool,
-    pub half_close: bool,
-    pub preserve_header_case: bool,
-    pub max_buf_size: usize,
-}
-impl Default for ServerConfig {
-    fn default() -> Self {
-        Self {
-            host: "localhost".to_string(),
-            port: 8080,
-            ssl_config: None,
-            client_ssl_config: None,
-            keep_alive: true,
-            half_close: true,
-            preserve_header_case: true,
-            max_buf_size: 1024 * 1024 * 2, //2 Mib
-        }
-    }
-}
-
-#[derive(Copy, Clone, Hash, Eq, PartialEq, Debug)]
-pub struct PeerId(pub [u8; 32]);
-
-pub fn peer_hash(input: impl AsRef<[u8]>) -> PeerId {
-    let mut hasher = Sha256::new();
-    hasher.update(input);
-    let mut buf = [0u8; 32];
-    hasher.finalize_into(<&mut Output<Sha256VarCore>>::from(&mut buf));
-    PeerId(buf)
-}
 
 #[derive(Debug)]
 pub struct Server {
@@ -119,7 +78,7 @@ impl Server {
             let state = server.shared_state.clone();
             info!("Spawning Task {}", task.name());
             background_tasks.spawn(async move {
-                if let Err(e) = task.task_fn.run(state.clone()).await {
+                if let Err(e) = task.handle.run(state.clone()).await {
                     error!("Error in background task: {e:?}");
                 }
             });
@@ -136,16 +95,9 @@ impl Server {
                                 if let Some(acceptor) = tls_acceptor.as_ref() {
                                     match acceptor.accept(stream).await {
                                         Ok(stream) => {
-                                            let mut peer_id = None;
-                                            if let Some(certs) = stream.get_ref().1.peer_certificates() {
-                                                if !certs.is_empty() {
-                                                    peer_id = Some(peer_hash(&certs[0]));
-                                                }
-                                            }
                                             let service = service_fn(move |req| {
-                                                let peer_id = Arc::new(peer_id);
                                                 let server = server.clone();
-                                                Self::connection_handler(server, req, address, peer_id)
+                                                Self::connection_handler(server, req, address)
                                             });
                                             let connection = http.serve_connection(TokioIo::new(stream), service).with_upgrades();
                                             if let Err(err) = connection.await {
@@ -159,7 +111,7 @@ impl Server {
                                 } else {
                                     let service = service_fn(move |req| {
                                         let server = server.clone();
-                                        Self::connection_handler(server, req, address, Arc::new(None))
+                                        Self::connection_handler(server, req, address)
                                     });
                                     let connection = http.serve_connection(TokioIo::new(stream), service).with_upgrades();
                                     if let Err(err) = connection.await {
@@ -203,10 +155,8 @@ impl Server {
         server: Arc<Self>,
         mut request: Request<Incoming>,
         address: SocketAddr,
-        peer_id: Arc<Option<PeerId>>,
     ) -> Result<Response<StreamingBody>, Error> {
         request.extensions_mut().insert(address);
-        request.extensions_mut().insert(peer_id);
         request.extensions_mut().insert(server.shared_state.clone()); //Put the Server Shared State in the Request Extensions
         let mut response: ServiceResponse = ServiceResponse::new();
         let mut handler = None;
@@ -243,147 +193,21 @@ pub async fn handle_service(
         .extend(service.shared_state.clone());
     let mut service_data = ServiceData {
         server: server.clone(),
-        request: ServiceRequest {
-            request: IncomingRequest::Stream(request.map(|b| b.stream_body())),
-            path: service.path.clone(),
-        },
+        request: ServiceRequest::new(
+            RequestType::Stream(request.map(|b| b.stream_body())),
+            service.path.clone(),
+        ),
         response,
     };
     service_data = service
         .handle(service_data)
         .await
         .unwrap_or_else(|(mut sd, e)| {
-            error!(
-                "Service Error when Handling {} - {e:?}",
-                sd.request.request.uri()
-            );
+            error!("Service Error when Handling {} - {e:?}", sd.request.uri());
             *sd.response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
             sd.response
                 .set_body(BodyType::Sized(Full::new(Bytes::from(format!("{e:?}")))));
             sd
         });
     Ok(service_data.response.into())
-}
-
-pub type DelayedRegistry = Vec<Box<dyn FnOnce(&mut ServiceRegistry, Extensions)>>;
-
-pub struct ServerBuilder {
-    services: ServiceRegistry,
-    config: ServerConfig,
-    shared_state: Extensions,
-    run_handle: Arc<AtomicBool>,
-    delayed_registry: DelayedRegistry,
-}
-pub struct SharedState<T> {
-    inner: Arc<T>,
-}
-impl<T> From<T> for SharedState<T> {
-    fn from(value: T) -> Self {
-        SharedState {
-            inner: Arc::new(value),
-        }
-    }
-}
-impl<T> From<Arc<T>> for SharedState<T> {
-    fn from(inner: Arc<T>) -> Self {
-        SharedState { inner }
-    }
-}
-impl ServerBuilder {
-    pub fn from_config(config: ServerConfig) -> Self {
-        Self {
-            config,
-            ..Default::default()
-        }
-    }
-    pub fn host(self, host: String) -> Self {
-        let mut s = self;
-        s.config.host = host;
-        s
-    }
-    pub fn port(self, port: u16) -> Self {
-        let mut s = self;
-        s.config.port = port;
-        s
-    }
-    pub fn ssl_config(self, ssl_config: Option<SslConfig>) -> Self {
-        let mut s = self;
-        s.config.ssl_config = ssl_config;
-        s
-    }
-    pub fn register<T: ServiceRegister>(self, service: T) -> Self {
-        let mut s = self;
-        service.register(&mut s.services, s.shared_state.clone());
-        s
-    }
-    pub fn delay_register<T: 'static + ServiceRegister>(self, service: T) -> Self {
-        let mut s = self;
-        s.delayed_registry.push(Box::new(move |reg, shared| {
-            service.register(reg, shared); // consumes the concrete `service`
-        }));
-        s
-    }
-    pub fn default_service(self, mut service: Service) -> Self {
-        let mut s = self;
-        service.shared_state.extend(s.shared_state.clone());
-        service.wrappers.extend(s.services.wrappers.clone());
-        service.filters.extend(s.services.filters.clone());
-        s.services.default_service = Some(Arc::new(service));
-        s
-    }
-    pub fn filter(self, filter: Filter) -> Self {
-        let mut s = self;
-        s.services.filters.push(Arc::new(filter));
-        s
-    }
-    pub fn wrap(self, wrapper: Arc<dyn WrapperFn + Sync + Send>) -> Self {
-        let mut s = self;
-        s.services.wrappers.push(wrapper);
-        s
-    }
-    pub fn task<T: Into<Task>>(mut self, task: T) -> Self {
-        self.services.tasks.push(Arc::new(task.into()));
-        self
-    }
-    pub fn run_handle(mut self, run_handle: Arc<AtomicBool>) -> Self {
-        self.run_handle = run_handle;
-        self
-    }
-    pub fn shared_state<T: Send + Sync + 'static>(
-        self,
-        shared_state: impl Into<SharedState<T>>,
-    ) -> Self {
-        let mut s = self;
-        let state: SharedState<T> = shared_state.into();
-        s.shared_state.insert(state.inner);
-        s
-    }
-    pub fn build(mut self) -> Server {
-        for f in self.delayed_registry {
-            f(&mut self.services, self.shared_state.clone());
-        }
-        Server {
-            registry: Arc::new(RwLock::new(self.services)),
-            config: self.config,
-            run: self.run_handle,
-            shared_state: Arc::new(RwLock::new(self.shared_state)),
-        }
-    }
-}
-impl Default for ServerBuilder {
-    fn default() -> Self {
-        Self {
-            services: ServiceRegistry {
-                services: vec![],
-                tasks: vec![],
-                filters: vec![],
-                wrappers: vec![],
-                default_service: None,
-            },
-            config: ServerConfig::default(),
-            shared_state: Extensions::default(),
-            run_handle: Arc::new(AtomicBool::new(true)),
-            delayed_registry: vec![],
-        }
-    }
 }

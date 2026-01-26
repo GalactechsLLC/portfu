@@ -1,8 +1,9 @@
 use async_trait::async_trait;
 use http::{HeaderName, HeaderValue};
 use log::error;
-use pfcore::wrappers::{WrapperFn, WrapperResult};
+use pfcore::router::middleware::{Middleware, MiddlewareResult};
 use pfcore::ServiceData;
+use std::io::Error;
 
 pub struct Cors {
     allow_all: bool,
@@ -37,12 +38,12 @@ impl Cors {
     }
 }
 #[async_trait]
-impl WrapperFn for Cors {
+impl Middleware for Cors {
     fn name(&self) -> &str {
         "Cors Wrapper"
     }
 
-    async fn before(&self, data: &mut ServiceData) -> WrapperResult {
+    async fn before(&self, data: &mut ServiceData) -> Result<MiddlewareResult, Error> {
         if self.allow_credentials {
             data.response.headers_mut().insert(
                 HeaderName::from_static("access-control-allow-credentials"),
@@ -67,7 +68,7 @@ impl WrapperFn for Cors {
                 HeaderName::from_static("access-control-allow-headers"),
                 HeaderValue::from_static("*"),
             );
-        } else if let Some(origin) = data.request.request.headers().get("origin") {
+        } else if let Some(origin) = data.request.headers().get("origin") {
             let origin_str = origin.to_str().unwrap_or_default().to_owned();
             if self.allowed_origins.contains(&origin_str) {
                 data.response.headers_mut().insert(
@@ -80,7 +81,7 @@ impl WrapperFn for Cors {
                         .insert(HeaderName::from_static("access-control-allow-methods"), val);
                 }
                 let mut allowed = vec![];
-                for (k, _) in data.request.request.headers() {
+                for (k, _) in data.request.headers() {
                     if self.allowed_headers.contains(k) {
                         allowed.push(k);
                     }
@@ -105,10 +106,10 @@ impl WrapperFn for Cors {
                 }
             }
         }
-        WrapperResult::Continue
+        Ok(MiddlewareResult::Continue)
     }
 
-    async fn after(&self, _: &mut ServiceData) -> WrapperResult {
-        WrapperResult::Continue
+    async fn after(&self, _: &mut ServiceData) -> Result<MiddlewareResult, Error> {
+        Ok(MiddlewareResult::Continue)
     }
 }

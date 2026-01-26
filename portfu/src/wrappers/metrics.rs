@@ -7,8 +7,9 @@ use http_body_util::{BodyExt, Full};
 use hyper::body::Body;
 use log::error;
 use once_cell::sync::Lazy;
-use pfcore::service::{BodyType, MutBody, ServiceBuilder};
-use pfcore::wrappers::{WrapperFn, WrapperResult};
+use pfcore::router::middleware::{Middleware, MiddlewareResult};
+use pfcore::services::body::{BodyType, MutBody};
+use pfcore::services::builder::ServiceBuilder;
 use pfcore::{IntoStreamBody, ServiceHandler, ServiceRegister, ServiceRegistry, ServiceType};
 use prometheus::{self, HistogramOpts, HistogramVec, Registry, TextEncoder};
 use std::io::{Error, ErrorKind};
@@ -143,66 +144,66 @@ impl ServiceRegister for MetricsEndpoint {
 pub struct MetricsWrapper {}
 
 #[async_trait]
-impl WrapperFn for MetricsWrapper {
+impl Middleware for MetricsWrapper {
     fn name(&self) -> &str {
         "MetricsWrapper"
     }
 
-    async fn before(&self, data: &mut ServiceData) -> WrapperResult {
+    async fn before(&self, data: &mut ServiceData) -> Result<MiddlewareResult, Error> {
         data.request.insert(TrackingStruct {
             timer: Instant::now(),
         });
-        let body = data.request.consume();
+        let body = data.request.consume().await?;
         let new_body = convert_to_fixed(body).await;
         match &new_body {
             BodyType::Stream(_) => REQUEST_SIZES
                 .with_label_values(&[
-                    data.request.request.method().as_str(),
-                    data.request.request.uri().path(),
+                    data.request.method().as_str(),
+                    data.request.uri().path(),
                     data.response.status().as_str(),
                 ])
                 .observe(-1f64),
             BodyType::Sized(s) => REQUEST_SIZES
                 .with_label_values(&[
-                    data.request.request.method().as_str(),
-                    data.request.request.uri().path(),
+                    data.request.method().as_str(),
+                    data.request.uri().path(),
                     data.response.status().as_str(),
                 ])
                 .observe(s.size_hint().exact().unwrap_or_default() as f64),
             BodyType::Empty => REQUEST_SIZES
                 .with_label_values(&[
-                    data.request.request.method().as_str(),
-                    data.request.request.uri().path(),
+                    data.request.method().as_str(),
+                    data.request.uri().path(),
                     data.response.status().as_str(),
                 ])
                 .observe(0f64),
         }
         data.request.set_body(new_body);
-        WrapperResult::Continue
+        Ok(MiddlewareResult::Continue)
     }
 
-    async fn after(&self, data: &mut ServiceData) -> WrapperResult {
+    async fn after(&self, data: &mut ServiceData) -> Result<MiddlewareResult, Error> {
         let body = data.response.consume();
         let new_body = convert_to_fixed(body).await;
         match &new_body {
             BodyType::Stream(_) => RESPONSE_SIZES
                 .with_label_values(&[
-                    data.request.request.method().as_str(),
-                    data.request.request.uri().path(),
+                    data.request.method().as_str(),
+                    data.request.uri().path(),
                     data.response.status().as_str(),
                 ])
                 .observe(-1f64),
             BodyType::Sized(s) => RESPONSE_SIZES
                 .with_label_values(&[
-                    data.request.request.method().as_str(),
-                    data.request.request.uri().path(),
+                    data.request.method().as_str(),
+                    data.request.uri().path(),
                     data.response.status().as_str(),
                 ])
                 .observe(s.size_hint().exact().unwrap_or_default() as f64),
             BodyType::Empty => RESPONSE_SIZES
                 .with_label_values(&[
-                    data.request.request.method().as_str(),
-                    data.request.request.uri().path(),
+                    data.request.method().as_str(),
+                    data.request.uri().path(),
                     data.response.status().as_str(),
                 ])
                 .observe(0f64),
@@ -211,8 +212,8 @@ impl WrapperFn for MetricsWrapper {
         if let Some(tracking_struct) = data.request.remove::<TrackingStruct>() {
             RESPONSE_TIMES
                 .with_label_values(&[
-                    data.request.request.method().as_str(),
-                    data.request.request.uri().path(),
+                    data.request.method().as_str(),
+                    data.request.uri().path(),
                     data.response.status().as_str(),
                 ])
                 .observe(
@@ -221,7 +222,7 @@ impl WrapperFn for MetricsWrapper {
                         .as_secs_f64(),
                 );
         }
-        WrapperResult::Continue
+        Ok(MiddlewareResult::Continue)
     }
 }
 

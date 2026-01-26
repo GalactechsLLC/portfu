@@ -1,7 +1,7 @@
 use crate::themes::page::Page;
 use crate::themes::template::Template;
 use crate::themes::Theme;
-use portfu::pfcore::routes::Route;
+use portfu::pfcore::router::routes::Route;
 use portfu::prelude::once_cell::sync::Lazy;
 use portfu::prelude::uuid::Uuid;
 use regex::Regex;

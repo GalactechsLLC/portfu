@@ -7,23 +7,23 @@ macro_rules! method_macro {
     ($variant:ident, $object:ident, $method:ident) => {
         pub struct $object {}
         #[async_trait]
-        impl<'a> portfu_core::filters::FilterFn for $object {
+        impl<'a> portfu_core::router::filters::FilterFn for $object {
             fn name(&self) -> &str {
                 stringify!($variant)
             }
             async fn filter(
                 &self,
                 request: &Request<Incoming>,
-            ) -> ::portfu_core::filters::FilterResult {
+            ) -> ::portfu_core::router::filters::FilterResult {
                 (*request.method() == ::http::method::Method::$variant).into()
             }
         }
         pub static $variant: ::once_cell::sync::Lazy<
-            ::std::sync::Arc<::portfu_core::filters::Filter>,
+            ::std::sync::Arc<::portfu_core::router::filters::Filter>,
         > = ::once_cell::sync::Lazy::new(|| {
-            ::std::sync::Arc::new(::portfu_core::filters::Filter {
+            ::std::sync::Arc::new(::portfu_core::router::filters::Filter {
                 name: stringify!($variant).to_string(),
-                mode: ::portfu_core::filters::FilterMode::Any,
+                mode: ::portfu_core::router::filters::FilterMode::Any,
                 filter_functions: vec![Arc::new($object {})],
             })
         });

@@ -6,8 +6,8 @@ pub mod token;
 use crate::themes::page::Page;
 use crate::themes::template::Template;
 use crate::themes::token::Token;
-use portfu::pfcore::routes::Route;
-use portfu::pfcore::service::BodyType;
+use portfu::pfcore::router::routes::Route;
+use portfu::pfcore::services::body::BodyType;
 use portfu::pfcore::{IntoStreamBody, ServiceData};
 use portfu::prelude::http::StatusCode;
 use std::io::Error;
@@ -35,10 +35,10 @@ impl Theme {
         mut data: ServiceData,
         tokens: Arc<RwLock<Vec<Token>>>,
     ) -> Result<ServiceData, (ServiceData, Error)> {
-        let path = if data.request.request.uri().path().ends_with('/') {
-            format!("{}index.html", data.request.request.uri().path())
+        let path = if data.request.uri().path().ends_with('/') {
+            format!("{}index.html", data.request.uri().path())
         } else {
-            data.request.request.uri().path().to_string()
+            data.request.uri().path().to_string()
         };
         for page in &self.pages {
             if page.0.matches(&path) {

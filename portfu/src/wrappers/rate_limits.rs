@@ -3,8 +3,9 @@ use http::StatusCode;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Body, Bytes};
 use log::{debug, warn};
-use pfcore::service::{BodyType, IncomingRequest, MutBody};
-use pfcore::wrappers::{WrapperFn, WrapperResult};
+use pfcore::router::middleware::{Middleware, MiddlewareResult};
+use pfcore::services::body::{BodyType, MutBody};
+use pfcore::services::request::RequestType;
 use pfcore::ServiceData;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
@@ -96,11 +97,11 @@ impl RateLimiter {
     }
 }
 #[async_trait]
-impl WrapperFn for RateLimiter {
+impl Middleware for RateLimiter {
     fn name(&self) -> &str {
         "RateLimiter"
     }
-    async fn before(&self, data: &mut ServiceData) -> WrapperResult {
+    async fn before(&self, data: &mut ServiceData) -> Result<MiddlewareResult, Error> {
         let address = data
             .request
             .get()
@@ -121,7 +122,7 @@ impl WrapperFn for RateLimiter {
             .path_limits
             .read()
             .await
-            .get(data.request.request.uri().path())
+            .get(data.request.uri().path())
             .cloned()
         {
             (
@@ -130,7 +131,7 @@ impl WrapperFn for RateLimiter {
                 path_limits.request_size_limit_bytes.load(Ordering::Relaxed) as u64,
                 recent_requests
                     .recent_requests(
-                        Some(data.request.request.uri().path()),
+                        Some(data.request.uri().path()),
                         path_limits.count_seconds.load(Ordering::Relaxed) as u64,
                     )
                     .await,
@@ -153,7 +154,7 @@ impl WrapperFn for RateLimiter {
         if recent_count >= requests_per_second_limit {
             warn!(
                 "Rate limiting (TooManyRequests): {remote}, {}",
-                data.request.request.uri().path()
+                data.request.uri().path()
             );
             create_error(
                 data,
@@ -163,18 +164,18 @@ impl WrapperFn for RateLimiter {
         } else {
             debug!("Not Request Rate Limited: {recent_count} < {requests_per_second_limit}");
             recent_requests
-                .add(data.request.request.uri().path().to_string())
+                .add(data.request.uri().path().to_string())
                 .await; //We only add requests we accept, so some still go through instead of overuse causing the client to always get blocked
             if size_limit > 0 {
                 debug!("Checking Size Limit: {size_limit}");
-                match &data.request.request {
-                    IncomingRequest::Stream(stream) => {
+                match &data.request.request_type() {
+                    RequestType::Stream(stream) => {
                         let size_hint = stream.body().size_hint();
                         if let Some(size) = size_hint.exact() {
                             if size > size_limit {
                                 warn!(
                                     "Rate limiting (PayloadTooLarge): {remote}, {}",
-                                    data.request.request.uri().path()
+                                    data.request.uri().path()
                                 );
                                 create_error(
                                     data,
@@ -182,12 +183,12 @@ impl WrapperFn for RateLimiter {
                                     StatusCode::PAYLOAD_TOO_LARGE,
                                 )
                             } else {
-                                WrapperResult::Continue
+                                Ok(MiddlewareResult::Continue)
                             }
                         } else if size_hint.lower() > size_limit {
                             warn!(
                                 "Rate limiting (PayloadTooLarge): {remote}, {}",
-                                data.request.request.uri().path()
+                                data.request.uri().path()
                             );
                             create_error(
                                 data,
@@ -201,7 +202,7 @@ impl WrapperFn for RateLimiter {
                             if size > size_limit {
                                 warn!(
                                     "Rate limiting (PayloadTooLarge): {remote}, {}",
-                                    data.request.request.uri().path()
+                                    data.request.uri().path()
                                 );
                                 create_error(
                                     data,
@@ -209,11 +210,11 @@ impl WrapperFn for RateLimiter {
                                     StatusCode::PAYLOAD_TOO_LARGE,
                                 )
                             } else {
-                                WrapperResult::Continue
+                                Ok(MiddlewareResult::Continue)
                             }
                         } else {
                             match handle_unsized(data, size_limit as usize, remote).await {
-                                Ok(r) => r,
+                                Ok(r) => Ok(r),
                                 Err(e) => create_error(
                                     data,
                                     format!("Failed to process unsized payload: {e:?}"),
@@ -222,13 +223,13 @@ impl WrapperFn for RateLimiter {
                             }
                         }
                     }
-                    IncomingRequest::Sized(sized) => {
+                    RequestType::Sized(sized) => {
                         let size_hint = sized.body().size_hint();
                         if let Some(size) = size_hint.exact() {
                             if size > size_limit {
                                 warn!(
                                     "Rate limiting (PayloadTooLarge): {remote}, {}",
-                                    data.request.request.uri().path()
+                                    data.request.uri().path()
                                 );
                                 create_error(
                                     data,
@@ -236,12 +237,12 @@ impl WrapperFn for RateLimiter {
                                     StatusCode::PAYLOAD_TOO_LARGE,
                                 )
                             } else {
-                                WrapperResult::Continue
+                                Ok(MiddlewareResult::Continue)
                             }
                         } else if size_hint.lower() > size_limit {
                             warn!(
                                 "Rate limiting (PayloadTooLarge): {remote}, {}",
-                                data.request.request.uri().path()
+                                data.request.uri().path()
                             );
                             create_error(
                                 data,
@@ -255,7 +256,7 @@ impl WrapperFn for RateLimiter {
                             if size > size_limit {
                                 warn!(
                                     "Rate limiting (PayloadTooLarge): {remote}, {}",
-                                    data.request.request.uri().path()
+                                    data.request.uri().path()
                                 );
                                 create_error(
                                     data,
@@ -263,7 +264,7 @@ impl WrapperFn for RateLimiter {
                                     StatusCode::PAYLOAD_TOO_LARGE,
                                 )
                             } else {
-                                WrapperResult::Continue
+                                Ok(MiddlewareResult::Continue)
                             }
                         } else {
                             create_error(
@@ -274,24 +275,28 @@ impl WrapperFn for RateLimiter {
                             )
                         }
                     }
-                    IncomingRequest::Consumed(_) => WrapperResult::Continue,
-                    IncomingRequest::Empty(_) => WrapperResult::Continue,
+                    RequestType::Consumed(_) => Ok(MiddlewareResult::Continue),
+                    RequestType::Empty(_) => Ok(MiddlewareResult::Continue),
                 }
             } else {
-                WrapperResult::Continue
+                Ok(MiddlewareResult::Continue)
             }
         }
     }
-    async fn after(&self, _: &mut ServiceData) -> WrapperResult {
-        WrapperResult::Continue
+    async fn after(&self, _: &mut ServiceData) -> Result<MiddlewareResult, Error> {
+        Ok(MiddlewareResult::Continue)
     }
 }
 
-pub fn create_error(data: &mut ServiceData, error: String, status: StatusCode) -> WrapperResult {
+pub fn create_error(
+    data: &mut ServiceData,
+    error: String,
+    status: StatusCode,
+) -> Result<MiddlewareResult, Error> {
     data.response
         .set_body(BodyType::Sized(Full::new(Bytes::from(error))));
     *data.response.status_mut() = status;
-    WrapperResult::Return
+    Ok(MiddlewareResult::Return)
 }
 
 #[inline]
@@ -299,8 +304,8 @@ pub async fn handle_unsized(
     data: &mut ServiceData,
     limit: usize,
     remote: String,
-) -> Result<WrapperResult, Error> {
-    let mut body = data.request.consume();
+) -> Result<MiddlewareResult, Error> {
+    let mut body = data.request.consume().await?;
     let mut buffer = Vec::with_capacity(limit);
     while let Some(next) = body.frame().await {
         let frame = next.map_err(|e| Error::other(format!("HTTP ERROR IN RATE_LIMITER: {e:?}")))?;
@@ -308,13 +313,13 @@ pub async fn handle_unsized(
             if buffer.len() > limit || buffer.len() + chunk.len() > limit {
                 warn!(
                     "Rate limiting (PayloadTooLarge): {remote}, {}",
-                    data.request.request.uri().path()
+                    data.request.uri().path()
                 );
-                return Ok(create_error(
+                return create_error(
                     data,
                     format!("Stream Payload Too large, Limit is {limit}"),
                     StatusCode::PAYLOAD_TOO_LARGE,
-                ));
+                );
             } else {
                 buffer.extend(chunk);
             }
@@ -322,7 +327,7 @@ pub async fn handle_unsized(
     }
     data.request
         .set_body(BodyType::Sized(Full::new(Bytes::from(buffer))));
-    Ok(WrapperResult::Continue)
+    Ok(MiddlewareResult::Continue)
 }
 
 impl Default for RecentRequests {

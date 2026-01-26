@@ -3,9 +3,9 @@ use cookie::Cookie;
 use dashmap::DashMap;
 use http::{header, Extensions, HeaderName, HeaderValue};
 use once_cell::sync::Lazy;
-use pfcore::signal::await_termination;
-use pfcore::task::TaskFn;
-use portfu_core::wrappers::{WrapperFn, WrapperResult};
+use pfcore::router::middleware::{Middleware, MiddlewareResult};
+use pfcore::runtime::thread::ServerThread;
+use pfcore::utils::signal::await_termination;
 use portfu_core::ServiceData;
 use sha2::{Digest, Sha256};
 use std::io::Error;
@@ -47,7 +47,7 @@ impl SessionManager {
         let client_session_id = Uuid::new_v4();
         let mut hasher = Sha256::new();
         hasher.update([client_session_id.to_string().as_bytes(), salt.as_bytes()].concat());
-        let server_session_id = hex::encode(hasher.finalize().as_slice());
+        let server_session_id = hex::encode(hasher.finalize());
         let cookie = Cookie::build((SESSION_HEADER, client_session_id.to_string()))
             .path("/")
             .secure(self.secure)
@@ -71,7 +71,7 @@ impl SessionManager {
         let salt = data.get_best_guess_public_ip(address);
         let mut hasher = Sha256::new();
         hasher.update([session_cookie.value_trimmed().as_bytes(), salt.as_bytes()].concat());
-        let server_session_id = hex::encode(hasher.finalize().as_slice());
+        let server_session_id = hex::encode(hasher.finalize());
         if let Some(session) = SESSIONS.get(&server_session_id).map(|v| v.value().clone()) {
             if Instant::now().duration_since(session.read().await.last_update)
                 >= self.session_duration
@@ -88,7 +88,7 @@ impl SessionManager {
 }
 pub fn get_session_cookie_from_request(data: &ServiceData) -> Option<Cookie<'_>> {
     let mut session_cookie = None;
-    'outer: for value in data.request.request.headers().get_all(header::COOKIE) {
+    'outer: for value in data.request.headers().get_all(header::COOKIE) {
         match value.to_str() {
             Ok(val) => {
                 let mut split_cookies = Cookie::split_parse(val);
@@ -110,13 +110,13 @@ pub async fn get_session_from_request(data: &ServiceData) -> Option<Arc<RwLock<S
     let salt = data.get_best_guess_public_ip(address);
     let mut hasher = Sha256::new();
     hasher.update([cookie.value_trimmed().as_bytes(), salt.as_bytes()].concat());
-    let server_session_id = hex::encode(hasher.finalize().as_slice());
+    let server_session_id = hex::encode(hasher.finalize());
     SESSIONS.get(&server_session_id).map(|v| v.value().clone())
 }
 #[async_trait]
-impl TaskFn for SessionManager {
+impl ServerThread for SessionManager {
     fn name(&self) -> &str {
-        WrapperFn::name(self)
+        Middleware::name(self)
     }
 
     async fn run(&self, _state: Arc<RwLock<Extensions>>) -> Result<(), Error> {
@@ -144,18 +144,17 @@ impl TaskFn for SessionManager {
     }
 }
 #[async_trait]
-impl WrapperFn for SessionManager {
+impl Middleware for SessionManager {
     fn name(&self) -> &str {
         "SessionManager"
     }
 
-    async fn before(&self, data: &mut ServiceData) -> WrapperResult {
+    async fn before(&self, data: &mut ServiceData) -> Result<MiddlewareResult, Error> {
         let session = match get_session_cookie_from_request(data) {
             None => {
                 let (cookie, session) = self.create_session_cookie(data).await;
                 if let Ok(value) = HeaderValue::from_str(&cookie.to_string()) {
                     data.request
-                        .request
                         .headers_mut()
                         .insert(HeaderName::from_static(SESSION_HEADER), value.clone());
                     data.response
@@ -171,7 +170,6 @@ impl WrapperFn for SessionManager {
                     let (cookie, session) = self.create_session_cookie(data).await;
                     if let Ok(value) = HeaderValue::from_str(&cookie.to_string()) {
                         data.request
-                            .request
                             .headers_mut()
                             .insert(HeaderName::from_static(SESSION_HEADER), value.clone());
                         data.response
@@ -183,10 +181,10 @@ impl WrapperFn for SessionManager {
             }
         };
         data.request.insert(session);
-        WrapperResult::Continue
+        Ok(MiddlewareResult::Continue)
     }
 
-    async fn after(&self, _: &mut ServiceData) -> WrapperResult {
-        WrapperResult::Continue
+    async fn after(&self, _: &mut ServiceData) -> Result<MiddlewareResult, Error> {
+        Ok(MiddlewareResult::Continue)
     }
 }

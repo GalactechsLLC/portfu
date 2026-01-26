@@ -62,33 +62,33 @@ impl ToTokens for StaticFiles {
                 });
                 if let Some(suffix) = key.strip_suffix("index.html") {
                     quote! {
-                        ::portfu::pfcore::service::ServiceBuilder::new(#suffix)
+                        ::portfu::pfcore::services::builder::ServiceBuilder::new(#suffix)
                         .name(stringify!(#name))
                         .handler(::std::sync::Arc::new(
-                            ::portfu::pfcore::files::StaticFile {
+                            ::portfu::pfcore::files::r#static::StaticFile {
                                 name: #key,
-                                mime: ::portfu::pfcore::files::get_mime_type(#key),
+                                mime: ::portfu::pfcore::files::loader::get_mime_type(#key),
                                 file_contents: #static_bytes_name.as_ref()
                             }
                         )).build(),
-                        ::portfu::pfcore::service::ServiceBuilder::new(#key)
+                        ::portfu::pfcore::services::builder::ServiceBuilder::new(#key)
                         .name(stringify!(#name))
                         .handler(::std::sync::Arc::new(
-                            ::portfu::pfcore::files::StaticFile {
+                            ::portfu::pfcore::files::r#static::StaticFile {
                                 name: #key,
-                                mime: ::portfu::pfcore::files::get_mime_type(#key),
+                                mime: ::portfu::pfcore::files::loader::get_mime_type(#key),
                                 file_contents: #static_bytes_name.as_ref()
                             }
                         )).build()
                     }
                 } else {
                     quote! {
-                        ::portfu::pfcore::service::ServiceBuilder::new(#key)
+                        ::portfu::pfcore::services::builder::ServiceBuilder::new(#key)
                         .name(stringify!(#name))
                         .handler(::std::sync::Arc::new(
-                            ::portfu::pfcore::files::StaticFile {
+                            ::portfu::pfcore::files::r#static::StaticFile {
                                 name: #key,
-                                mime: ::portfu::pfcore::files::get_mime_type(#key),
+                                mime: ::portfu::pfcore::files::loader::get_mime_type(#key),
                                 file_contents: #static_bytes_name.as_ref()
                             }
                         )).build()
@@ -97,7 +97,7 @@ impl ToTokens for StaticFiles {
             })
             .collect();
         let static_file_group = quote! {
-            ::portfu::pfcore::service::ServiceGroup {
+            ::portfu::pfcore::services::group::ServiceGroup {
                 services: vec![
                     #(#service_defs),*
                 ],

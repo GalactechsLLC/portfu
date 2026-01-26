@@ -98,17 +98,17 @@ impl ToTokens for Task {
             #(#doc_attributes)*
             #[allow(non_camel_case_types, missing_docs)]
             pub struct #name;
-            impl From<#name> for ::portfu::pfcore::task::Task {
-                fn from(task: #name) -> ::portfu::pfcore::task::Task {
-                    use ::portfu::pfcore::task::TaskFn;
-                    ::portfu::pfcore::task::Task {
+            impl From<#name> for ::portfu::pfcore::runtime::thread::ServerThreadImpl {
+                fn from(task: #name) -> ::portfu::pfcore::runtime::thread::ServerThreadImpl {
+                    use ::portfu::pfcore::runtime::thread::ServerThread;
+                    ::portfu::pfcore::runtime::thread::ServerThreadImpl {
                         name: task.name().to_string(),
-                        task_fn: std::sync::Arc::new(task)
+                        handle: std::sync::Arc::new(task)
                     }
                 }
             }
             #[::portfu::prelude::async_trait::async_trait]
-            impl ::portfu::pfcore::task::TaskFn for #name {
+            impl ::portfu::pfcore::runtime::thread::ServerThread for #name {
                 fn name(&self) -> &str {
                     stringify!(#name)
                 }
@@ -127,7 +127,7 @@ impl ToTokens for Task {
                             } => {
                                  Ok::<(), ::std::io::Error>(())
                             }
-                            _ = ::portfu::pfcore::signal::await_termination() => {
+                            _ = ::portfu::pfcore::utils::signal::await_termination() => {
                                 Ok::<(), ::std::io::Error>(())
                             }
                         }

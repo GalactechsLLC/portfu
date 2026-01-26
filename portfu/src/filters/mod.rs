@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use http::{HeaderName, Request};
 use hyper::body::Incoming;
-use portfu_core::filters::{Filter, FilterFn, FilterMode, FilterResult};
+use portfu_core::router::filters::{Filter, FilterFn, FilterMode, FilterResult};
 use std::sync::Arc;
 
 pub mod method;

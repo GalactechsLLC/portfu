@@ -12,7 +12,8 @@ use oauth2::{
 };
 use octocrab::models::orgs::Organization;
 use octocrab::models::Author;
-use portfu::pfcore::service::{ServiceBuilder, ServiceGroup};
+use portfu::pfcore::services::builder::ServiceBuilder;
+use portfu::pfcore::services::group::ServiceGroup;
 use portfu::pfcore::{FromRequest, Json, Query, ServiceData, ServiceHandler, ServiceType};
 use portfu::prelude::async_trait;
 use portfu::wrappers::sessions::Session;
