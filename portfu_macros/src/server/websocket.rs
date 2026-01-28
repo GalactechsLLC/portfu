@@ -131,7 +131,7 @@ impl ToTokens for WebSocketRoute {
                         continue;
                     } else if headers == segment.ident {
                         dyn_vars.push(quote! {
-                            let #ident_val: ::portfu::pfcore::services::request::RequestHeaders = handle_data.request.headers().clone();
+                            let #ident_val: ::portfu::pfcore::services::RequestHeaders = handle_data.request.headers().clone();
                         });
                         additional_function_vars.push(quote! {
                             #ident_val,

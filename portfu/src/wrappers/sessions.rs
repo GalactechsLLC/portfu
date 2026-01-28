@@ -18,6 +18,7 @@ use uuid::Uuid;
 
 pub static SESSION_HEADER: &str = "session_id";
 pub static SESSIONS: Lazy<Arc<DashMap<String, Arc<RwLock<Session>>>>> = Lazy::new(Default::default);
+pub static SESSION_CLIENT_IDS: Lazy<Arc<DashMap<String, String>>> = Lazy::new(Default::default);
 pub struct Session {
     pub data: Extensions,
     pub last_update: Instant,
@@ -59,7 +60,8 @@ impl SessionManager {
             last_update: Instant::now(),
             id: client_session_id,
         }));
-        SESSIONS.insert(server_session_id, session.clone());
+        SESSIONS.insert(server_session_id.clone(), session.clone());
+        SESSION_CLIENT_IDS.insert(client_session_id.to_string(), server_session_id);
         (cookie.into_owned(), session)
     }
     pub async fn get_session(
@@ -84,6 +86,12 @@ impl SessionManager {
         } else {
             None
         }
+    }
+    pub fn get_session_from_id(client_session_id: &str) -> Option<Arc<RwLock<Session>>> {
+        let server_session_id = SESSION_CLIENT_IDS.get(client_session_id)?;
+        SESSIONS
+            .get(server_session_id.value())
+            .map(|v| v.value().clone())
     }
 }
 pub fn get_session_cookie_from_request(data: &ServiceData) -> Option<Cookie<'_>> {
