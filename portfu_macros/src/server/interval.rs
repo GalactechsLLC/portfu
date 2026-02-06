@@ -99,14 +99,14 @@ impl ToTokens for Interval {
                             dyn_vars.push(quote! {
                             let #ident_val: #ident_type = __inner_state.read().await.get::<::std::sync::Arc<#inner_type>>()
                                 .cloned()
-                                .map(|data| ::portfu::pfcore::State(data)).ok_or(
+                                .map(|data| ::portfu::pfcore::State(data)).ok_or_else( || {
+                                    ::portfu::prelude::log::error!("Failed to find State of type {}", stringify!(#inner_type));
                                     ::std::io::Error::new(::std::io::ErrorKind::NotFound, format!("Failed to find State of type {}", stringify!(#inner_type)))
-                                )?;
+                                })?;
                             });
                             additional_function_vars.push(quote! {
                                 #ident_val,
                             });
-                            continue;
                         } else {
                             panic!("Only State Objects are Available to Intervals");
                         }
@@ -144,8 +144,16 @@ impl ToTokens for Interval {
                     let __inner_state = state;
                     #ast
                     let mut __interval_duration = ::tokio::time::interval(std::time::Duration::from_millis(#interval));
+                    ::portfu::prelude::log::debug!("Starting Interval: {}", stringify!(#name));
                     loop {
+                        ::portfu::prelude::log::debug!("Extracting Variables: {}", stringify!(#name));
+                        let __dyn_count: usize = 0usize #(+ { let _ = stringify!(#dyn_vars); 1usize })*;
                         #(#dyn_vars)*
+                        ::portfu::prelude::log::debug!(
+                            "Got {} Dyn Variables for {}",
+                            __dyn_count,
+                            stringify!(#name),
+                        );
                         tokio::select! {
                             _ = __interval_duration.tick() => {
                                 if let Err(e) = #name(#(#additional_function_vars)*).await {
@@ -153,6 +161,7 @@ impl ToTokens for Interval {
                                 }
                             }
                             _ = ::portfu::pfcore::utils::signal::await_termination() => {
+                                ::portfu::prelude::log::info!("Stopping Interval: {}", stringify!(#name));
                                 break;
                             }
                         }
