@@ -80,6 +80,8 @@ impl Server {
             background_tasks.spawn(async move {
                 if let Err(e) = task.handle.run(state.clone()).await {
                     error!("Error in background task: {e:?}");
+                } else {
+                    info!("Task Finished without Error: {}", task.name());
                 }
             });
         }
