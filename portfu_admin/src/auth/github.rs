@@ -352,6 +352,7 @@ impl ServiceHandler for OAuthAuthHandler {
             nbf: OffsetDateTime::now_utc().unix_timestamp() as usize,
             sub: "".to_string(),
             eml: "".to_string(),
+            uid: "".to_string(),
             rol: UserRole::None,
             org: vec![],
         });
@@ -426,7 +427,8 @@ impl ServiceHandler for OAuthAuthHandler {
                 warn!("Failed to Load User Emails");
                 claims.eml = user_info.email.unwrap_or_default();
             }
-            claims.sub = user_info.id.to_string();
+            claims.sub = user_info.login;
+            claims.uid = user_info.id.to_string();
         }
         session.write().await.data.insert(claims.clone());
         if let Some(redirect) = session

@@ -1,0 +1,12 @@
+[package]
+name = "portfu_updated"
+version = "2.0.0"
+edition = "2024"
+
+[dependencies]
+http = "1.4.0"
+inventory = "0.3.21"
+portfu_common = {path="../portfu_common"}
+portfu_macros_updated = {path="../portfu_macros_updated"}
+tokio = {version = "1.47.1", features=["rt-multi-thread", "sync", "signal", "macros", "process", "time", "fs", "net"]}
+regex = "1.12.3"

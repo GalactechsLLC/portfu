@@ -1,11 +1,15 @@
 use crate::users::UserRole;
-use http::StatusCode;
+use http::header::CONTENT_TYPE;
+use http::{HeaderValue, StatusCode};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use log::debug;
 use portfu::macros::{get, post};
 use portfu::pfcore::router::middleware::{Middleware, MiddlewareImpl, MiddlewareResult};
+use portfu::pfcore::services::body::BodyType;
 use portfu::pfcore::{Json, Query};
 use portfu::prelude::async_trait::async_trait;
+use portfu::prelude::http_body_util::Full;
+use portfu::prelude::hyper::body::Bytes;
 use portfu::prelude::log::error;
 use portfu::prelude::once_cell::sync::Lazy;
 use portfu::prelude::uuid::Uuid;
@@ -105,6 +109,18 @@ pub static VALIDATIONS: Lazy<Validation> = Lazy::new(|| {
     val
 });
 
+const UNAUTHORIZED_BODY: &[u8] = br#"{"error":"unauthorized"}"#;
+const FORBIDDEN_BODY: &[u8] = br#"{"error":"forbidden"}"#;
+
+fn set_auth_error(data: &mut ServiceData, status: StatusCode, body: &'static [u8]) {
+    *data.response.status_mut() = status;
+    data.response
+        .headers_mut()
+        .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    data.response
+        .set_body(BodyType::Sized(Full::new(Bytes::from_static(body))));
+}
+
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct Claims {
     pub aud: String,   // Optional. Audience
@@ -114,6 +130,7 @@ pub struct Claims {
     pub nbf: usize, // Optional. Not Before (as UTC timestamp)
     pub sub: String, // Optional. User ID
     pub eml: String, // Optional. User Email
+    pub uid: String, // Optional. User Id
     pub rol: UserRole, // Optional. UserRole
     pub org: Vec<u64>, // Optional. UserOrganizations
 }
@@ -130,11 +147,13 @@ macro_rules! user_role_macro {
                 &self,
                 data: &mut portfu::pfcore::ServiceData,
             ) -> Result<MiddlewareResult, Error> {
-                if let Some(session) = data.request.get::<Arc<RwLock<Session>>>() {
+                if let Some(session) = data.request.get::<Arc<RwLock<Session>>>().cloned() {
                     if let Some(claims) = session.read().await.data.get::<Claims>() {
                         if claims.rol >= UserRole::$object {
                             return Ok(MiddlewareResult::Continue);
                         }
+                        set_auth_error(data, StatusCode::FORBIDDEN, FORBIDDEN_BODY);
+                        return Ok(MiddlewareResult::Return);
                     } else {
                         if let Some(jwt_header) = data.request.headers().get("USER_JWT") {
                             if let Ok(str_val) = jwt_header.to_str() {
@@ -147,6 +166,13 @@ macro_rules! user_role_macro {
                                         let res =
                                             (token_data.claims.rol >= UserRole::$object).into();
                                         session.write().await.data.insert(token_data.claims);
+                                        if res == MiddlewareResult::Return {
+                                            set_auth_error(
+                                                data,
+                                                StatusCode::FORBIDDEN,
+                                                FORBIDDEN_BODY,
+                                            );
+                                        }
                                         return Ok(res);
                                     }
                                     Err(e) => {
@@ -157,6 +183,7 @@ macro_rules! user_role_macro {
                         }
                     }
                 }
+                set_auth_error(data, StatusCode::UNAUTHORIZED, UNAUTHORIZED_BODY);
                 Ok(MiddlewareResult::Return)
             }
 
