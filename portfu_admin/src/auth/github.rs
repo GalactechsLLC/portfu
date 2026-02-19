@@ -3,7 +3,7 @@ use crate::services::{redirect_to_url, send_internal_error};
 use crate::users::UserRole;
 use http::HeaderValue;
 use hyper::{header, StatusCode};
-use log::{debug, warn};
+use log::{debug, info, warn};
 use oauth2::basic::BasicClient;
 use oauth2::reqwest::async_http_client;
 use oauth2::{
@@ -131,8 +131,8 @@ impl ServiceHandler for OAuthLoginHandler {
         } else {
             None
         };
-        let session = if let Some(session) = data.request.get::<Arc<RwLock<Session>>>() {
-            session.clone()
+        let session = if let Some(session) = data.request.get::<Arc<RwLock<Session>>>().cloned() {
+            session
         } else {
             warn!("Failed to Find session to auth");
             return Ok(send_internal_error(data, "Failed to Find Session to Auth"));
@@ -431,6 +431,7 @@ impl ServiceHandler for OAuthAuthHandler {
             claims.uid = user_info.id.to_string();
         }
         session.write().await.data.insert(claims.clone());
+        info!("Running OAuth Success handles");
         if let Some(redirect) = session
             .write()
             .await
