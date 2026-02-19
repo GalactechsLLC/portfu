@@ -432,18 +432,17 @@ impl ServiceHandler for OAuthAuthHandler {
         }
         session.write().await.data.insert(claims.clone());
         info!("Running OAuth Success handles");
-        if let Some(redirect) = session
+        let maybe_redirect = session
             .write()
             .await
             .data
-            .remove::<OAuthLoginRedirectParams>()
-        {
-            return self
-                .handle_success(data, claims, redirect.redirect_url.as_str())
-                .await;
-        }
-        self.handle_success(data, claims, self.config.on_success_redirect.as_str())
-            .await
+            .remove::<OAuthLoginRedirectParams>();
+        let url = if let Some(redirect) = maybe_redirect {
+            redirect.redirect_url.clone()
+        } else {
+            self.config.on_success_redirect.clone()
+        };
+        self.handle_success(data, claims, &url).await
     }
 
     fn service_type(&self) -> ServiceType {
