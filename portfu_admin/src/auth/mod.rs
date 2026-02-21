@@ -1,8 +1,8 @@
 use crate::users::UserRole;
-use http::header::CONTENT_TYPE;
+use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::{HeaderValue, StatusCode};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
-use log::debug;
+use log::{debug, info, warn};
 use portfu::macros::{get, post};
 use portfu::pfcore::router::middleware::{Middleware, MiddlewareImpl, MiddlewareResult};
 use portfu::pfcore::services::body::BodyType;
@@ -10,7 +10,6 @@ use portfu::pfcore::{Json, Query};
 use portfu::prelude::async_trait::async_trait;
 use portfu::prelude::http_body_util::Full;
 use portfu::prelude::hyper::body::Bytes;
-use portfu::prelude::log::error;
 use portfu::prelude::once_cell::sync::Lazy;
 use portfu::prelude::uuid::Uuid;
 use portfu::prelude::{ServiceData, State};
@@ -121,6 +120,24 @@ fn set_auth_error(data: &mut ServiceData, status: StatusCode, body: &'static [u8
         .set_body(BodyType::Sized(Full::new(Bytes::from_static(body))));
 }
 
+fn extract_jwt_from_headers(data: &ServiceData) -> Option<String> {
+    if let Some(auth_header) = data.request.headers().get(AUTHORIZATION) {
+        if let Ok(value) = auth_header.to_str() {
+            let trimmed = value.trim();
+            if let Some(token) = trimmed.strip_prefix("Bearer ").map(str::trim) {
+                if !token.is_empty() {
+                    return Some(token.to_string());
+                }
+                warn!("Authorization Bearer header was present but token was empty");
+            }
+        } else {
+            warn!("Authorization header was present but not valid UTF-8");
+        }
+    }
+
+    None
+}
+
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct Claims {
     pub aud: String,   // Optional. Audience
@@ -147,42 +164,86 @@ macro_rules! user_role_macro {
                 &self,
                 data: &mut portfu::pfcore::ServiceData,
             ) -> Result<MiddlewareResult, Error> {
-                if let Some(session) = data.request.get::<Arc<RwLock<Session>>>().cloned() {
-                    if let Some(claims) = session.read().await.data.get::<Claims>() {
+                let path = data.request.uri().path().to_string();
+                let has_authorization_header =
+                    data.request.headers().get(AUTHORIZATION).is_some();
+
+                let session = data.request.get::<Arc<RwLock<Session>>>().cloned();
+                if let Some(session_ref) = session.as_ref() {
+                    if let Some(claims) = session_ref.read().await.data.get::<Claims>() {
+                        info!(
+                            "Admin auth session claims found path={} role={:?} uid={} sub={}",
+                            path, claims.rol, claims.uid, claims.sub
+                        );
                         if claims.rol >= UserRole::$object {
                             return Ok(MiddlewareResult::Continue);
                         }
+                        warn!(
+                            "Admin auth forbidden path={} required_role={:?} actual_role={:?}",
+                            path,
+                            UserRole::$object,
+                            claims.rol
+                        );
                         set_auth_error(data, StatusCode::FORBIDDEN, FORBIDDEN_BODY);
                         return Ok(MiddlewareResult::Return);
-                    } else {
-                        if let Some(jwt_header) = data.request.headers().get("USER_JWT") {
-                            if let Ok(str_val) = jwt_header.to_str() {
-                                match decode::<Claims>(
-                                    str_val,
-                                    &DecodingKey::from_secret(CURRENT_SECRET.as_bytes()),
-                                    &*VALIDATIONS,
-                                ) {
-                                    Ok(token_data) => {
-                                        let res =
-                                            (token_data.claims.rol >= UserRole::$object).into();
-                                        session.write().await.data.insert(token_data.claims);
-                                        if res == MiddlewareResult::Return {
-                                            set_auth_error(
-                                                data,
-                                                StatusCode::FORBIDDEN,
-                                                FORBIDDEN_BODY,
-                                            );
-                                        }
-                                        return Ok(res);
-                                    }
-                                    Err(e) => {
-                                        error!("Error Parsing JWT Token: {e:?}");
-                                    }
-                                };
+                    }
+                    info!(
+                        "Admin auth no session claims path={} authorization_header_present={}",
+                        path, has_authorization_header
+                    );
+                } else {
+                    warn!(
+                        "Admin auth session state missing path={} authorization_header_present={}",
+                        path, has_authorization_header
+                    );
+                }
+
+                if let Some(jwt_token) = extract_jwt_from_headers(data) {
+                    match decode::<Claims>(
+                        &jwt_token,
+                        &DecodingKey::from_secret(CURRENT_SECRET.as_bytes()),
+                        &*VALIDATIONS,
+                    ) {
+                        Ok(token_data) => {
+                            info!(
+                                "Admin auth JWT decoded path={} role={:?} uid={} sub={}",
+                                path,
+                                token_data.claims.rol,
+                                token_data.claims.uid,
+                                token_data.claims.sub
+                            );
+
+                            if let Some(session_ref) = session.as_ref() {
+                                session_ref.write().await.data.insert(token_data.claims.clone());
                             }
+
+                            if token_data.claims.rol >= UserRole::$object {
+                                return Ok(MiddlewareResult::Continue);
+                            }
+
+                            warn!(
+                                "Admin auth forbidden after JWT decode path={} required_role={:?} actual_role={:?}",
+                                path,
+                                UserRole::$object,
+                                token_data.claims.rol
+                            );
+                            set_auth_error(data, StatusCode::FORBIDDEN, FORBIDDEN_BODY);
+                            return Ok(MiddlewareResult::Return);
+                        }
+                        Err(e) => {
+                            warn!("Admin auth JWT decode failed path={} error={e:?}", path);
                         }
                     }
+                } else {
+                    warn!(
+                        "Admin auth missing usable bearer token path={} authorization_header_present={}",
+                        path, has_authorization_header
+                    );
                 }
+                warn!(
+                    "Admin auth unauthorized path={} authorization_header_present={}",
+                    path, has_authorization_header
+                );
                 set_auth_error(data, StatusCode::UNAUTHORIZED, UNAUTHORIZED_BODY);
                 Ok(MiddlewareResult::Return)
             }
