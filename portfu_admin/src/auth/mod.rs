@@ -171,7 +171,7 @@ macro_rules! user_role_macro {
                 let session = data.request.get::<Arc<RwLock<Session>>>().cloned();
                 if let Some(session_ref) = session.as_ref() {
                     if let Some(claims) = session_ref.read().await.data.get::<Claims>() {
-                        info!(
+                        debug!(
                             "Admin auth session claims found path={} role={:?} uid={} sub={}",
                             path, claims.rol, claims.uid, claims.sub
                         );
@@ -205,7 +205,7 @@ macro_rules! user_role_macro {
                         &*VALIDATIONS,
                     ) {
                         Ok(token_data) => {
-                            info!(
+                            debug!(
                                 "Admin auth JWT decoded path={} role={:?} uid={} sub={}",
                                 path,
                                 token_data.claims.rol,

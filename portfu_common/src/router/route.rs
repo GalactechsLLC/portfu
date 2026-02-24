@@ -32,7 +32,7 @@ impl Route {
         let mut has_tail = false;
         while let Some(idx) = to_parse.find('{') {
             let (prefix, rem) = to_parse.split_at(idx);
-            segments.push(PathSegment::Static(to_parse.to_string()));
+            segments.push(PathSegment::Static(prefix.to_string()));
             re.push_str(&escape(prefix));
             let (param_pattern, re_part, rem, tail) = Self::parse_param(rem);
             if tail {
@@ -107,5 +107,37 @@ impl Route {
         });
         let regex = format!(r"(?P<{}>{})", &name, &pattern);
         (segment, regex, unprocessed, tail)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PathSegment, Route};
+
+    fn segment_pattern(route: &Route) -> Vec<String> {
+        match route {
+            Route::Static(path, _) => vec![path.to_string()],
+            Route::Segmented(segments, _) => segments
+                .iter()
+                .map(|segment| match segment {
+                    PathSegment::Static(path) => path.clone(),
+                    PathSegment::Variable(variable) => format!("{{{}}}", variable.name),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn segmented_route_builds_expected_segments() {
+        let route = Route::new("/users/{id}/role".to_string());
+        let pattern = segment_pattern(&route).join("");
+        assert_eq!(pattern, "/users/{id}/role");
+    }
+
+    #[test]
+    fn segmented_route_with_multiple_variables_builds_expected_segments() {
+        let route = Route::new("/a/{x}/b/{y}/c".to_string());
+        let pattern = segment_pattern(&route).join("");
+        assert_eq!(pattern, "/a/{x}/b/{y}/c");
     }
 }

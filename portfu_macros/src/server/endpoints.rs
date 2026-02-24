@@ -61,7 +61,7 @@ impl syn::parse::Parse for EndpointArgs {
         // advance past comma separator
         input.parse::<Token![,]>()?;
 
-        // if next char is a literal, assume that it is a string and show multi-path error
+        // if the next char is a literal, assume that it is a string and show a multi-path error
         if input.cursor().literal().is_some() {
             return Err(syn::Error::new(
                 Span::call_site(),

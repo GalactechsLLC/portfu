@@ -117,22 +117,16 @@ impl ToTokens for Task {
                     state: std::sync::Arc< ::tokio::sync::RwLock<::portfu::prelude::http::Extensions > >
                 ) -> Result<(), ::std::io::Error> {
                     let __inner_state = state;
-                    ::tokio::spawn( async move {
-                        ::tokio::select! {
-                            _ = async {
-                                #ast
-                                #(#dyn_vars)*
-                                let _ = #name(#(#additional_function_vars)*).await;
-                                Ok::<(), ::std::io::Error>(())
-                            } => {
-                                 Ok::<(), ::std::io::Error>(())
-                            }
-                            _ = ::portfu::pfcore::utils::signal::await_termination() => {
-                                Ok::<(), ::std::io::Error>(())
-                            }
+                    ::tokio::select! {
+                        result = async {
+                            #ast
+                            #(#dyn_vars)*
+                            #name(#(#additional_function_vars)*).await
+                        } => result,
+                        _ = ::portfu::pfcore::utils::signal::await_termination() => {
+                            Ok::<(), ::std::io::Error>(())
                         }
-                    });
-                    Ok::<(), ::std::io::Error>(())
+                    }
                 }
             }
         };

@@ -11,11 +11,13 @@ use tokio::sync::RwLock;
 pub struct DynamicFiles {
     pub root_directory: PathBuf,
     pub editable: bool,
+    pub cache_size_limit: u64,
 }
 impl TryFrom<DynamicFiles> for ServiceGroup {
     type Error = Error;
     fn try_from(slf: DynamicFiles) -> Result<ServiceGroup, Error> {
         let mut files = HashMap::new();
+        log::info!("Canonicalizing Directory: {:?}", &slf.root_directory);
         let root_directory = slf.root_directory.canonicalize()?;
         log::info!("Searching for files at: {:?}", &root_directory);
         if !root_directory.exists() {
@@ -41,7 +43,7 @@ impl TryFrom<DynamicFiles> for ServiceGroup {
                             mime,
                             path,
                             editable: slf.editable,
-                            cache_threshold: 65536,
+                            cache_threshold: slf.cache_size_limit,
                             cache_status: AtomicBool::default(),
                             cached_value: Arc::new(RwLock::new(Vec::with_capacity(0))),
                         }))

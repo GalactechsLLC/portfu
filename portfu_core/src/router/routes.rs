@@ -1,5 +1,6 @@
 use regex::{escape, Regex};
 use std::borrow::Cow;
+use std::fmt::Display;
 
 const REGEX_FLAGS: &str = "(?s-m)";
 
@@ -24,6 +25,22 @@ pub enum Route {
     Static(Cow<'static, str>, Regex),
     Segmented(Vec<PathSegment>, Regex),
 }
+impl Display for Route {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Route::Static(s, _) => write!(f, "{}", s),
+            Route::Segmented(s, _) => {
+                for segment in s {
+                    match segment {
+                        PathSegment::Static(s) => write!(f, "{}", s)?,
+                        PathSegment::Variable(v) => write!(f, "{{{}}}", v.name)?,
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+}
 impl Route {
     pub fn new(input: String) -> Self {
         let mut re = format!("{REGEX_FLAGS}^");
@@ -32,7 +49,7 @@ impl Route {
         let mut has_tail = false;
         while let Some(idx) = to_parse.find('{') {
             let (prefix, rem) = to_parse.split_at(idx);
-            segments.push(PathSegment::Static(to_parse.to_string()));
+            segments.push(PathSegment::Static(prefix.to_string()));
             re.push_str(&escape(prefix));
             let (param_pattern, re_part, rem, tail) = Self::parse_param(rem);
             if tail {
@@ -107,5 +124,28 @@ impl Route {
         });
         let regex = format!(r"(?P<{}>{})", &name, &pattern);
         (segment, regex, unprocessed, tail)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Route;
+
+    #[test]
+    fn route_to_string_static_path_is_stable() {
+        let route = Route::new("/admin/users".to_string());
+        assert_eq!(route.to_string(), "/admin/users");
+    }
+
+    #[test]
+    fn route_to_string_dynamic_path_is_stable() {
+        let route = Route::new("/users/{id}/role".to_string());
+        assert_eq!(route.to_string(), "/users/{id}/role");
+    }
+
+    #[test]
+    fn route_to_string_multiple_dynamic_segments_are_stable() {
+        let route = Route::new("/a/{x}/b/{y}/c".to_string());
+        assert_eq!(route.to_string(), "/a/{x}/b/{y}/c");
     }
 }

@@ -7,6 +7,7 @@ use http::{HeaderValue, StatusCode};
 use http_body::Frame;
 use http_body_util::{BodyStream, StreamBody};
 use hyper::body::Bytes;
+use log::debug;
 use mime_guess::from_path;
 use std::collections::HashMap;
 use std::io::Error;
@@ -35,6 +36,7 @@ impl ServiceHandler for FileLoader {
     }
     async fn handle(&self, mut data: ServiceData) -> Result<ServiceData, (ServiceData, Error)> {
         if self.cache_status.load(Ordering::Relaxed) {
+            debug!("Sending Cached File: {:?}", &self.path);
             if let Ok(val) = HeaderValue::from_str(&self.mime) {
                 data.response.headers_mut().insert(CONTENT_TYPE, val);
             }
@@ -88,6 +90,7 @@ impl ServiceHandler for FileLoader {
                 }
             }
             if stream {
+                debug!("Streaming File: {:?}", &file_path);
                 match stream_from_disk(&file_path).await {
                     Ok(stream) => {
                         if let Ok(val) = HeaderValue::from_str(&self.mime) {
@@ -106,6 +109,7 @@ impl ServiceHandler for FileLoader {
                     }
                 }
             } else {
+                debug!("Cached File: {:?}", &file_path);
                 if let Ok(val) = HeaderValue::from_str(&self.mime) {
                     data.response.headers_mut().insert(CONTENT_TYPE, val);
                 }
@@ -176,11 +180,11 @@ impl ServiceHandler for FileLoader {
     }
 }
 
-async fn load_from_disk<P: AsRef<Path>>(path: P) -> Result<Vec<u8>, Error> {
+pub async fn load_from_disk<P: AsRef<Path>>(path: P) -> Result<Vec<u8>, Error> {
     tokio::fs::read(path).await
 }
 
-async fn stream_from_disk<P: AsRef<Path>>(path: P) -> Result<StreamingBody, Error> {
+pub async fn stream_from_disk<P: AsRef<Path>>(path: P) -> Result<StreamingBody, Error> {
     let file = File::open(path).await?;
     let buffer = tokio_util::codec::FramedRead::new(file, BytesCodec::new())
         .map_ok(|b| Frame::data(Bytes::from(b.to_vec())))

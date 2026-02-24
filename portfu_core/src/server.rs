@@ -159,7 +159,9 @@ impl Server {
         address: SocketAddr,
     ) -> Result<Response<StreamingBody>, Error> {
         request.extensions_mut().insert(address);
-        request.extensions_mut().insert(server.shared_state.clone()); //Put the Server Shared State in the Request Extensions
+        request
+            .extensions_mut()
+            .extend(server.shared_state.read().await.clone()); //Put the Server Shared State in the Request Extensions
         let mut response: ServiceResponse = ServiceResponse::new();
         let mut handler = None;
         let services: Vec<Arc<Service>> = server.registry.read().await.services.to_vec();
