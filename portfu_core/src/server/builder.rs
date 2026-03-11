@@ -57,7 +57,9 @@ impl ServerBuilder {
     pub fn default_service(self, mut service: Service) -> Self {
         let mut s = self;
         service.shared_state.extend(s.shared_state.clone());
-        service.wrappers.extend(s.services.wrappers.clone());
+        let mut wrappers = s.services.wrappers.clone();
+        wrappers.extend(service.wrappers);
+        service.wrappers = wrappers;
         service.filters.extend(s.services.filters.clone());
         s.services.default_service = Some(Arc::new(service));
         s

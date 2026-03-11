@@ -3,7 +3,7 @@ use crate::services::{redirect_to_url, send_internal_error};
 use crate::users::UserRole;
 use http::HeaderValue;
 use hyper::{header, StatusCode};
-use log::{debug, warn};
+use log::{debug, info, warn};
 use oauth2::basic::BasicClient;
 use oauth2::reqwest::async_http_client;
 use oauth2::{
@@ -131,8 +131,8 @@ impl ServiceHandler for OAuthLoginHandler {
         } else {
             None
         };
-        let session = if let Some(session) = data.request.get::<Arc<RwLock<Session>>>() {
-            session.clone()
+        let session = if let Some(session) = data.request.get::<Arc<RwLock<Session>>>().cloned() {
+            session
         } else {
             warn!("Failed to Find session to auth");
             return Ok(send_internal_error(data, "Failed to Find Session to Auth"));
@@ -352,6 +352,7 @@ impl ServiceHandler for OAuthAuthHandler {
             nbf: OffsetDateTime::now_utc().unix_timestamp() as usize,
             sub: "".to_string(),
             eml: "".to_string(),
+            uid: "".to_string(),
             rol: UserRole::None,
             org: vec![],
         });
@@ -426,21 +427,22 @@ impl ServiceHandler for OAuthAuthHandler {
                 warn!("Failed to Load User Emails");
                 claims.eml = user_info.email.unwrap_or_default();
             }
-            claims.sub = user_info.id.to_string();
+            claims.sub = user_info.login;
+            claims.uid = user_info.id.to_string();
         }
         session.write().await.data.insert(claims.clone());
-        if let Some(redirect) = session
+        info!("Running OAuth Success handles");
+        let maybe_redirect = session
             .write()
             .await
             .data
-            .remove::<OAuthLoginRedirectParams>()
-        {
-            return self
-                .handle_success(data, claims, redirect.redirect_url.as_str())
-                .await;
-        }
-        self.handle_success(data, claims, self.config.on_success_redirect.as_str())
-            .await
+            .remove::<OAuthLoginRedirectParams>();
+        let url = if let Some(redirect) = maybe_redirect {
+            redirect.redirect_url.clone()
+        } else {
+            self.config.on_success_redirect.clone()
+        };
+        self.handle_success(data, claims, &url).await
     }
 
     fn service_type(&self) -> ServiceType {

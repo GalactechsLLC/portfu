@@ -325,7 +325,9 @@ pub struct ServiceRegistry {
 }
 impl ServiceRegistry {
     pub fn register(&mut self, mut service: Service) {
-        service.wrappers.extend(self.wrappers.clone());
+        let mut wrappers = self.wrappers.clone();
+        wrappers.extend(service.wrappers);
+        service.wrappers = wrappers;
         service.filters.extend(self.filters.clone());
         self.services.push(Arc::new(service));
     }

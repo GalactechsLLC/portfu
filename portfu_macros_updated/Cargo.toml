@@ -1,0 +1,13 @@
+[package]
+name = "portfu_macros_updated"
+version = "2.0.0"
+edition = "2021"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+portfu_common = {path="../portfu_common"}
+proc-macro2 = "1.0.101"
+quote = "1.0.40"
+syn = { version="2.0.106", features = ["extra-traits"]}

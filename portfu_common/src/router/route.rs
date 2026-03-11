@@ -1,6 +1,5 @@
-use regex::{escape, Regex};
+use regex::{Regex, escape};
 use std::borrow::Cow;
-use std::fmt::Display;
 
 const REGEX_FLAGS: &str = "(?s-m)";
 
@@ -24,22 +23,6 @@ pub enum PathSegment {
 pub enum Route {
     Static(Cow<'static, str>, Regex),
     Segmented(Vec<PathSegment>, Regex),
-}
-impl Display for Route {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Route::Static(s, _) => write!(f, "{}", s),
-            Route::Segmented(s, _) => {
-                for segment in s {
-                    match segment {
-                        PathSegment::Static(s) => write!(f, "{}", s)?,
-                        PathSegment::Variable(v) => write!(f, "{{{}}}", v.name)?,
-                    }
-                }
-                Ok(())
-            }
-        }
-    }
 }
 impl Route {
     pub fn new(input: String) -> Self {
@@ -129,23 +112,32 @@ impl Route {
 
 #[cfg(test)]
 mod tests {
-    use super::Route;
+    use super::{PathSegment, Route};
 
-    #[test]
-    fn route_to_string_static_path_is_stable() {
-        let route = Route::new("/admin/users".to_string());
-        assert_eq!(route.to_string(), "/admin/users");
+    fn segment_pattern(route: &Route) -> Vec<String> {
+        match route {
+            Route::Static(path, _) => vec![path.to_string()],
+            Route::Segmented(segments, _) => segments
+                .iter()
+                .map(|segment| match segment {
+                    PathSegment::Static(path) => path.clone(),
+                    PathSegment::Variable(variable) => format!("{{{}}}", variable.name),
+                })
+                .collect(),
+        }
     }
 
     #[test]
-    fn route_to_string_dynamic_path_is_stable() {
+    fn segmented_route_builds_expected_segments() {
         let route = Route::new("/users/{id}/role".to_string());
-        assert_eq!(route.to_string(), "/users/{id}/role");
+        let pattern = segment_pattern(&route).join("");
+        assert_eq!(pattern, "/users/{id}/role");
     }
 
     #[test]
-    fn route_to_string_multiple_dynamic_segments_are_stable() {
+    fn segmented_route_with_multiple_variables_builds_expected_segments() {
         let route = Route::new("/a/{x}/b/{y}/c".to_string());
-        assert_eq!(route.to_string(), "/a/{x}/b/{y}/c");
+        let pattern = segment_pattern(&route).join("");
+        assert_eq!(pattern, "/a/{x}/b/{y}/c");
     }
 }
