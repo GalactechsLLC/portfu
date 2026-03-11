@@ -264,6 +264,7 @@ impl ToTokens for Endpoint {
             if let Type::Path(path) = &ident_type {
                 if let Some(segment) = path.path.segments.first() {
                     let state_ident: Ident = Ident::new("State", segment.ident.span());
+                    let headers: Ident = Ident::new("RequestHeaders", segment.ident.span());
                     if state_ident == segment.ident {
                         if let Some(_inner_type) = match &segment.arguments {
                             PathArguments::None => panic!("State Inner Object Cannot be None"),
@@ -292,6 +293,14 @@ impl ToTokens for Endpoint {
                                 #ident_val,
                             });
                         }
+                        continue;
+                    } else if headers == segment.ident {
+                        dyn_vars.push(quote! {
+                            let #ident_val: ::portfu::pfcore::services::RequestHeaders = handle_data.request.headers().clone();
+                        });
+                        additional_function_vars.push(quote! {
+                            #ident_val,
+                        });
                         continue;
                     }
                 }
