@@ -1,12 +1,19 @@
 use crate::service::StreamingBody;
 use crate::stream::IntoStreamBody;
-use http::HeaderValue;
-use http::header::Entry;
+use http::header::{CONTENT_TYPE, Entry};
 use http::response::Parts;
+use http::{HeaderMap, HeaderValue, StatusCode};
 use http_body::Body;
 use http_body_util::Full;
 use hyper::body::Bytes;
 use log::error;
+use serde::Serialize;
+
+const TEXT_PLAIN_UTF8: &str = "text/plain; charset=utf-8";
+const APPLICATION_JSON: &str = "application/json";
+const APPLICATION_OCTET_STREAM: &str = "application/octet-stream";
+
+pub trait Serialized: Serialize {}
 
 pub enum ResponseType {
     Stream(http::Response<StreamingBody>),
@@ -29,6 +36,47 @@ impl Response {
     pub fn new() -> Self {
         Self::default()
     }
+    pub fn headers(&self) -> &HeaderMap<HeaderValue> {
+        match &self.response_type {
+            ResponseType::Stream(r) => r.headers(),
+            ResponseType::Sized(r) => r.headers(),
+            ResponseType::Consumed(r) => &r.headers,
+            ResponseType::Empty(r) => r.headers(),
+        }
+    }
+    pub fn headers_mut(&mut self) -> &mut HeaderMap<HeaderValue> {
+        match &mut self.response_type {
+            ResponseType::Stream(r) => r.headers_mut(),
+            ResponseType::Sized(r) => r.headers_mut(),
+            ResponseType::Consumed(r) => &mut r.headers,
+            ResponseType::Empty(r) => r.headers_mut(),
+        }
+    }
+    pub fn status(&self) -> StatusCode {
+        match &self.response_type {
+            ResponseType::Stream(r) => r.status(),
+            ResponseType::Sized(r) => r.status(),
+            ResponseType::Consumed(r) => r.status,
+            ResponseType::Empty(r) => r.status(),
+        }
+    }
+    pub fn status_mut(&mut self) -> &mut StatusCode {
+        match &mut self.response_type {
+            ResponseType::Stream(r) => r.status_mut(),
+            ResponseType::Sized(r) => r.status_mut(),
+            ResponseType::Consumed(r) => &mut r.status,
+            ResponseType::Empty(r) => r.status_mut(),
+        }
+    }
+    pub fn content_type(mut self, value: &'static str) -> Self {
+        if let Ok(value) = HeaderValue::from_str(value) {
+            self.headers_mut().insert(CONTENT_TYPE, value);
+        }
+        self
+    }
+    pub fn json<T: Serialize>(value: T) -> Self {
+        Json::from(value).into()
+    }
     pub fn from_status_and_message<T: AsRef<[u8]>>(status: http::StatusCode, msg: T) -> Self {
         let bytes = msg.as_ref();
         let response_type = if bytes.is_empty() {
@@ -45,7 +93,14 @@ impl Response {
                 }
             }
         };
-        Self { response_type }
+        let mut response = Self { response_type };
+        *response.status_mut() = status;
+        if !bytes.is_empty() && !response.headers().contains_key(CONTENT_TYPE) {
+            response
+                .headers_mut()
+                .insert(CONTENT_TYPE, HeaderValue::from_static(TEXT_PLAIN_UTF8));
+        }
+        response
     }
     pub fn not_found<T: AsRef<[u8]>>(msg: T) -> Self {
         Self::from_status_and_message(http::StatusCode::NOT_FOUND, msg)
@@ -98,8 +153,91 @@ impl From<Response> for http::Response<StreamingBody> {
         }
     }
 }
-impl<T: AsRef<[u8]>> From<T> for Response {
-    fn from(value: T) -> Self {
-        Self::ok(value)
+impl From<http::Response<Full<Bytes>>> for Response {
+    fn from(value: http::Response<Full<Bytes>>) -> Self {
+        Self {
+            response_type: ResponseType::Sized(value),
+        }
     }
 }
+impl From<http::Response<StreamingBody>> for Response {
+    fn from(value: http::Response<StreamingBody>) -> Self {
+        Self {
+            response_type: ResponseType::Stream(value),
+        }
+    }
+}
+impl From<http::Response<()>> for Response {
+    fn from(value: http::Response<()>) -> Self {
+        Self {
+            response_type: ResponseType::Empty(value),
+        }
+    }
+}
+impl From<()> for Response {
+    fn from(_: ()) -> Self {
+        Self::default()
+    }
+}
+
+impl From<String> for Response {
+    fn from(value: String) -> Self {
+        Self::ok(value).content_type(TEXT_PLAIN_UTF8)
+    }
+}
+
+impl From<&str> for Response {
+    fn from(value: &str) -> Self {
+        Self::ok(value).content_type(TEXT_PLAIN_UTF8)
+    }
+}
+
+impl From<Vec<u8>> for Response {
+    fn from(value: Vec<u8>) -> Self {
+        Self::ok(value).content_type(APPLICATION_OCTET_STREAM)
+    }
+}
+
+impl From<&[u8]> for Response {
+    fn from(value: &[u8]) -> Self {
+        Self::ok(value).content_type(APPLICATION_OCTET_STREAM)
+    }
+}
+
+impl From<Bytes> for Response {
+    fn from(value: Bytes) -> Self {
+        Self::ok(value).content_type(APPLICATION_OCTET_STREAM)
+    }
+}
+
+pub struct Json<T: Serialize>(pub T);
+impl<T: Serialize> From<T> for Json<T> {
+    fn from(value: T) -> Self {
+        Self(value)
+    }
+}
+impl<T: Serialize> From<Json<T>> for Response {
+    fn from(value: Json<T>) -> Self {
+        match serde_json::to_string(&value.0) {
+            Ok(json) => Self::ok(json).content_type(APPLICATION_JSON),
+            Err(e) => {
+                error!("Failed to serialize JSON: {e}");
+                Self::internal_error("Failed to serialize JSON")
+            }
+        }
+    }
+}
+
+impl From<serde_json::Value> for Response {
+    fn from(value: serde_json::Value) -> Self {
+        Self::json(value)
+    }
+}
+
+impl<T: Serialized> From<T> for Response {
+    fn from(value: T) -> Self {
+        Self::json(value)
+    }
+}
+
+pub type JsonResponse<T> = Json<T>;

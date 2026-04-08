@@ -16,6 +16,11 @@ impl Path {
         self.0.as_str()
     }
 }
+impl Display for Path {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(&self.0, f)
+    }
+}
 impl<N: PathName> From<PathImpl<N>> for Path {
     fn from(path_impl: PathImpl<N>) -> Self {
         Self(path_impl.0)

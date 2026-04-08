@@ -10,7 +10,9 @@ pub struct SslConfig {
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
+    pub enable_ssl: bool,
     pub ssl_config: Option<SslConfig>,
+    pub sni_ssl_configs: Vec<SslConfig>,
     pub client_ssl_config: Option<SslConfig>,
     pub keep_alive: bool,
     pub half_close: bool,
@@ -25,7 +27,9 @@ impl Default for ServerConfig {
         Self {
             host: "localhost".to_string(),
             port: 8080,
+            enable_ssl: false,
             ssl_config: None,
+            sni_ssl_configs: vec![],
             client_ssl_config: None,
             keep_alive: true,
             half_close: true,

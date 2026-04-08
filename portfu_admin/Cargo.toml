@@ -31,6 +31,7 @@ regex.workspace = true
 default = []
 auth = ["oauth2"]
 github_auth = ["auth", "octocrab"]
+keycloak_auth = ["auth"]
 postgres = ["sqlx", "sqlx/postgres"]
 mysql = ["sqlx", "sqlx/mysql"]
 sqlite = ["sqlx", "sqlx/sqlite"]

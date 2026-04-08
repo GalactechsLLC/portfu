@@ -2,12 +2,38 @@ use crate::method::Method;
 use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
 use quote::quote;
 use std::collections::HashSet;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use syn::LitStr;
 
-pub(crate) fn parse_path_variables(path: &LitStr) -> (Vec<TokenStream2>, Vec<String>) {
+fn route_build_error(path: &LitStr, message: String) -> syn::Error {
+    syn::Error::new_spanned(
+        path,
+        format!("Invalid route pattern `{}`: {message}", path.value()),
+    )
+}
+
+pub(crate) fn validate_route(path: &LitStr) -> syn::Result<()> {
+    catch_unwind(AssertUnwindSafe(|| {
+        let _ = portfu_common::router::route::Route::new(path.value());
+    }))
+    .map_err(|payload| {
+        let message = if let Some(s) = payload.downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = payload.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "route parser panicked".to_string()
+        };
+        route_build_error(path, message)
+    })?;
+    Ok(())
+}
+
+pub(crate) fn parse_path_variables(path: &LitStr) -> syn::Result<(Vec<TokenStream2>, Vec<String>)> {
+    validate_route(path)?;
     let mut path_vars = vec![];
     match portfu_common::router::route::Route::new(path.value()) {
-        portfu_common::router::route::Route::Static(_, _) => (vec![quote! {}], vec![]),
+        portfu_common::router::route::Route::Static(_, _) => Ok((vec![quote! {}], vec![])),
         portfu_common::router::route::Route::Segmented(segments, _) => {
             let mut variables = vec![];
             for segment in segments.iter().filter_map(|v| match v {
@@ -32,7 +58,7 @@ pub(crate) fn parse_path_variables(path: &LitStr) -> (Vec<TokenStream2>, Vec<Str
                 );
                 path_vars.push(format!("{segment}"));
             }
-            (variables, path_vars)
+            Ok((variables, path_vars))
         }
     }
 }

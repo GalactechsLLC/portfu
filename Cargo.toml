@@ -10,6 +10,7 @@ members = [
     "portfu_common",
     "portfu_macros_updated",
     "examples",
+    "tests",
 ]
 
 [workspace.dependencies]
@@ -34,6 +35,8 @@ portfu_admin = {path = "./portfu_admin", version = "1.3.3", default-features = f
 portfu_core = {path = "./portfu_core", version = "1.3.3", default-features = false}
 portfu_macros = {path = "./portfu_macros", version = "1.3.3", default-features = false}
 portfu_examples = {path = "./examples", version = "2.0.0", default-features = false}
+portfu_tests = {path = "./tests", version = "2.0.0", default-features = false}
+portfu_common = {path = "./portfu_common", version = "2.0.0", default-features = false}
 portfu_updated = {path = "./portfu_updated", version = "2.0.0", default-features = false}
 portfu_macros_updated = {path = "./portfu_macros_updated", version = "2.0.0", default-features = false}
 prometheus = "0.14.0"

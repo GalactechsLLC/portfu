@@ -83,6 +83,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94bffc006df10ac2a68c83692d734a465f8ee6c5b384d8545a636f81d858f4bf"
 dependencies = [
  "aws-lc-sys",
+ "untrusted 0.7.1",
  "zeroize",
 ]
 
@@ -1189,6 +1190,7 @@ version = "10.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0529410abe238729a60b108898784df8984c87f6054c9c4fcacc47e4803c1ce1"
 dependencies = [
+ "aws-lc-rs",
  "base64 0.22.1",
  "getrandom 0.2.16",
  "js-sys",
@@ -1657,6 +1659,10 @@ dependencies = [
 name = "portfu_common"
 version = "2.0.0"
 dependencies = [
+ "cookie",
+ "dashmap",
+ "futures-util",
+ "hex",
  "http 1.4.0",
  "http-body 1.0.1",
  "http-body-util",
@@ -1664,11 +1670,23 @@ dependencies = [
  "hyper-util",
  "inventory",
  "log",
+ "oauth2",
  "once_cell",
+ "rcgen",
  "regex",
+ "rsa",
+ "rustls 0.23.37",
+ "rustls-pemfile 2.2.0",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "sha2",
  "tokio",
+ "tokio-rustls 0.26.4",
+ "tokio-tungstenite",
  "urlencoding",
  "uuid",
+ "x509-cert",
 ]
 
 [[package]]
@@ -1709,6 +1727,7 @@ dependencies = [
 name = "portfu_examples"
 version = "2.0.0"
 dependencies = [
+ "futures-util",
  "log",
  "portfu_updated",
  "simple_logger",
@@ -1743,15 +1762,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "portfu_tests"
+version = "2.0.0"
+dependencies = [
+ "futures-util",
+ "http 1.4.0",
+ "http-body-util",
+ "hyper 1.8.1",
+ "portfu_common",
+ "portfu_updated",
+ "serde",
+ "tokio",
+ "tokio-tungstenite",
+]
+
+[[package]]
 name = "portfu_updated"
 version = "2.0.0"
 dependencies = [
+ "futures-util",
  "http 1.4.0",
+ "http-body 1.0.1",
+ "http-body-util",
+ "hyper 1.8.1",
+ "hyper-util",
  "inventory",
+ "log",
  "portfu_common",
  "portfu_macros_updated",
  "regex",
+ "rustls 0.23.37",
  "tokio",
+ "tokio-rustls 0.26.4",
+ "tokio-tungstenite",
+ "webpki-roots 1.0.6",
 ]
 
 [[package]]
@@ -1924,6 +1968,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c8d0fd677905edcbeedbf2edb6494d676f0e98d54d5cf9bda0b061cb8fb8aba"
 
 [[package]]
+name = "rcgen"
+version = "0.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75e669e5202259b5314d1ea5397316ad400819437857b90861765f24c4cf80a2"
+dependencies = [
+ "pem",
+ "ring",
+ "rustls-pki-types",
+ "time",
+ "yasna",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2046,7 +2103,7 @@ dependencies = [
  "cfg-if",
  "getrandom 0.2.16",
  "libc",
- "untrusted",
+ "untrusted 0.9.0",
  "windows-sys 0.52.0",
 ]
 
@@ -2159,7 +2216,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b6275d1ee7a1cd780b64aca7726599a1dbc893b1e64144529e55c3c2f745765"
 dependencies = [
  "ring",
- "untrusted",
+ "untrusted 0.9.0",
 ]
 
 [[package]]
@@ -2170,7 +2227,7 @@ checksum = "64ca1bc8749bd4cf37b5ce386cc146580777b4e8572c7b97baf22c83f444bee9"
 dependencies = [
  "ring",
  "rustls-pki-types",
- "untrusted",
+ "untrusted 0.9.0",
 ]
 
 [[package]]
@@ -2182,7 +2239,7 @@ dependencies = [
  "aws-lc-rs",
  "ring",
  "rustls-pki-types",
- "untrusted",
+ "untrusted 0.9.0",
 ]
 
 [[package]]
@@ -2228,7 +2285,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da046153aa2352493d6cb7da4b6e5c0c057d8a1d0a9aa8560baffdd945acd414"
 dependencies = [
  "ring",
- "untrusted",
+ "untrusted 0.9.0",
 ]
 
 [[package]]
@@ -3199,6 +3256,12 @@ checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
 
 [[package]]
 name = "untrusted"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a156c684c91ea7d62626509bce3cb4e1d9ed5c4d978f7b4352658f96a4c26b4a"
+
+[[package]]
+name = "untrusted"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
@@ -3907,6 +3970,15 @@ dependencies = [
  "signature",
  "spki",
  "tls_codec",
+]
+
+[[package]]
+name = "yasna"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e17bb3549cc1321ae1296b9cdc2698e2b6cb1992adfa19a8c72e5b7a738f44cd"
+dependencies = [
+ "time",
 ]
 
 [[package]]

@@ -1,11 +1,10 @@
 use crate::method::Method;
-use crate::utils::{extract_method_filters, parse_path_variables};
+use crate::utils::{extract_method_filters, parse_path_variables, validate_route};
 use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote, ToTokens};
 use std::collections::HashSet;
 use syn::{
-    parse_quote, punctuated::Punctuated, FnArg, GenericArgument, GenericParam, Generics, LitStr,
-    Pat, Path, PathArguments, Token, Type,
+    parse_quote, punctuated::Punctuated, FnArg, GenericParam, Generics, LitStr, Pat, Token, Type,
 };
 
 pub struct EndpointArgs {
@@ -24,7 +23,7 @@ impl syn::parse::Parse for EndpointArgs {
         })?;
 
         // verify that path pattern is valid
-        let _ = portfu_common::router::route::Route::new(path.value());
+        validate_route(&path)?;
 
         // if there's no comma, assume that no options are provided
         if !input.peek(Token![,]) {
@@ -129,6 +128,8 @@ impl ToTokens for Endpoint {
         let Args {
             path,
             resource_name,
+            scope,
+            domains,
             filters,
             wrappers,
             methods,
@@ -136,10 +137,18 @@ impl ToTokens for Endpoint {
         let resource_name = resource_name
             .as_ref()
             .map_or_else(|| name.to_string(), LitStr::value);
-        let filters_name = format!("{resource_name}_filters");
+        let scope = scope
+            .as_ref()
+            .map_or_else(|| "default".to_string(), LitStr::value);
         let method_filters = extract_method_filters(methods);
         let mut additional_function_vars = vec![];
-        let (mut dyn_vars, path_vars) = parse_path_variables(path);
+        let (mut dyn_vars, path_vars) = match parse_path_variables(path) {
+            Ok(v) => v,
+            Err(err) => {
+                token_out.extend(err.into_compile_error());
+                return;
+            }
+        };
         let mut has_generics = false;
         let generic_vals: Vec<Ident> = generics
             .params
@@ -153,8 +162,9 @@ impl ToTokens for Endpoint {
                     has_generics = true;
                     t.ident.clone()
                 }
-                GenericParam::Const(_) => {
-                    panic!("CONST Generics not Supported Yet");
+                GenericParam::Const(c) => {
+                    has_generics = true;
+                    c.ident.clone()
                 }
             })
             .collect();
@@ -218,8 +228,10 @@ impl ToTokens for Endpoint {
                 fn #factory_name(_registry: &mut ::portfu_updated::prelude::ServiceRegistry) -> ::portfu_updated::prelude::Service {
                     ::portfu_updated::prelude::ServiceBuilder::new(#path)
                         .name(#resource_name)
+                        .scope(#scope)
+                        #(.domain(#domains))*
                         #method_filters
-                        #(.filter(::portfu_updated::prelude::filters::all(#filters_name.to_string(), #filters)))*
+                        #(.filter(#filters))*
                         #(.wrap(#wrappers))*
                         .handler(::std::sync::Arc::new(#name::default()))
                         .build()
@@ -250,54 +262,57 @@ impl ToTokens for Endpoint {
                             (parse_quote! { #ty }, parse_quote! { #ident })
                         }
                     } else {
-                        panic!("Invalid Type Passed to Endpoint: {typed:?}");
+                        token_out.extend(
+                            syn::Error::new_spanned(
+                                &typed.pat,
+                                "Unsupported argument pattern in endpoint signature; use a simple identifier binding",
+                            )
+                            .into_compile_error(),
+                        );
+                        return;
                     }
                 }
             };
-            if let Type::Path(path) = &ident_type {
-                if let Some(segment) = path.path.segments.first() {
-                    let state_ident: Ident = Ident::new("State", segment.ident.span());
-                    if state_ident == segment.ident {
-                        if let Some(_inner_type) = match &segment.arguments {
-                            PathArguments::None => panic!("State Inner Object Cannot be None"),
-                            PathArguments::AngleBracketed(args) => {
-                                if let Some(GenericArgument::Type(ty)) = args.args.first() {
-                                    Some(ty)
-                                } else {
-                                    continue;
-                                }
-                            }
-                            PathArguments::Parenthesized(args) => args.inputs.first(),
-                        } {
-                            dyn_vars.push(quote! {
-                                let #ident_val: #ident_type = match request.get()
-                                    .cloned()
-                                    .map(|data| ::portfu_updated::prelude::State(data)).ok_or(
-                                        ::std::io::Error::new(::std::io::ErrorKind::NotFound, format!("Failed to find State of type {}", stringify!(#ident_type)))
-                                    ) {
-                                    Ok(v) => v,
-                                    Err(e) => {
-                                        return Ok(::portfu_updated::prelude::Response::internal_error(
-                                            format!("{e:?}")
-                                        ));
-                                    }
-                                };
-                            });
-                            additional_function_vars.push(quote! {
-                                #ident_val,
-                            });
-                        }
-                        continue;
-                    }
-                }
-            } else if let Type::Reference(reference) = &ident_type {
+            if let Type::Reference(reference) = &ident_type {
                 if let Type::Path(path) = &reference.elem.as_ref() {
                     if let Some(segment) = path.path.segments.first() {
                         let request: Ident = Ident::new("Request", segment.ident.span());
+                        let request_headers: Ident =
+                            Ident::new("RequestHeaders", segment.ident.span());
+                        let response_headers: Ident =
+                            Ident::new("ResponseHeaders", segment.ident.span());
                         if request == segment.ident {
                             dyn_vars.push(quote! {
                                 let #ident_val = request;
                             });
+                            additional_function_vars.push(quote! {
+                                #ident_val,
+                            });
+                            continue;
+                        } else if request_headers == segment.ident {
+                            if reference.mutability.is_some() {
+                                dyn_vars.push(quote! {
+                                    let #ident_val: &mut ::portfu_updated::prelude::RequestHeaders = request.headers_mut();
+                                });
+                            } else {
+                                dyn_vars.push(quote! {
+                                    let #ident_val: &::portfu_updated::prelude::RequestHeaders = request.headers();
+                                });
+                            }
+                            additional_function_vars.push(quote! {
+                                #ident_val,
+                            });
+                            continue;
+                        } else if response_headers == segment.ident {
+                            if reference.mutability.is_some() {
+                                dyn_vars.push(quote! {
+                                    let #ident_val: &mut ::portfu_updated::prelude::ResponseHeaders = response.headers_mut();
+                                });
+                            } else {
+                                dyn_vars.push(quote! {
+                                    let #ident_val: &::portfu_updated::prelude::ResponseHeaders = response.headers();
+                                });
+                            }
                             additional_function_vars.push(quote! {
                                 #ident_val,
                             });
@@ -360,7 +375,9 @@ impl ToTokens for Endpoint {
 struct Args {
     path: syn::LitStr,
     resource_name: Option<syn::LitStr>,
-    filters: Vec<Path>,
+    scope: Option<syn::LitStr>,
+    domains: Vec<syn::LitStr>,
+    filters: Vec<syn::Expr>,
     wrappers: Vec<syn::Expr>,
     methods: HashSet<Method>,
 }
@@ -368,6 +385,8 @@ struct Args {
 impl Args {
     fn new(args: EndpointArgs, method: Vec<Method>) -> syn::Result<Self> {
         let mut resource_name = None;
+        let mut scope = None;
+        let mut domains = Vec::new();
         let mut filters = Vec::new();
         let mut wrappers = Vec::new();
         let mut methods = HashSet::from_iter(method);
@@ -385,31 +404,53 @@ impl Args {
                         "Attribute name expects literal string",
                     ));
                 }
-            } else if nv.path.is_ident("filter") {
+            } else if nv.path.is_ident("scope") {
                 if let syn::Expr::Lit(syn::ExprLit {
                     lit: syn::Lit::Str(lit),
                     ..
                 }) = nv.value
                 {
-                    filters.push(lit.parse::<Path>()?);
+                    scope = Some(lit);
                 } else {
                     return Err(syn::Error::new_spanned(
                         nv.value,
-                        "Attribute filter expects literal string",
+                        "Attribute scope expects literal string",
                     ));
                 }
-            } else if nv.path.is_ident("wrap") {
+            } else if nv.path.is_ident("domain") {
                 if let syn::Expr::Lit(syn::ExprLit {
                     lit: syn::Lit::Str(lit),
                     ..
                 }) = nv.value
+                {
+                    domains.push(lit);
+                } else {
+                    return Err(syn::Error::new_spanned(
+                        nv.value,
+                        "Attribute domain expects literal string",
+                    ));
+                }
+            } else if nv.path.is_ident("filter") {
+                let value = nv.value;
+                if let syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(lit),
+                    ..
+                }) = &value
+                {
+                    filters.push(lit.parse::<syn::Expr>()?);
+                } else {
+                    filters.push(value);
+                }
+            } else if nv.path.is_ident("wrap") {
+                let value = nv.value;
+                if let syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(lit),
+                    ..
+                }) = &value
                 {
                     wrappers.push(lit.parse()?);
                 } else {
-                    return Err(syn::Error::new_spanned(
-                        nv.value,
-                        "Attribute wrap expects type",
-                    ));
+                    wrappers.push(value);
                 }
             } else if nv.path.is_ident("method") {
                 if let syn::Expr::Lit(syn::ExprLit {
@@ -432,7 +473,7 @@ impl Args {
             } else {
                 return Err(syn::Error::new_spanned(
                     nv.path,
-                    "Unknown attribute key is specified; allowed: filter, method and wrap",
+                    "Unknown attribute key is specified; allowed: name, scope, domain, filter, method and wrap",
                 ));
             }
         }
@@ -440,9 +481,97 @@ impl Args {
         Ok(Args {
             path: args.path,
             resource_name,
+            scope,
+            domains,
             filters,
             wrappers,
             methods,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Args, Endpoint, EndpointArgs};
+    use crate::method::Method;
+    use quote::ToTokens;
+
+    #[test]
+    fn endpoint_args_rejects_malformed_route_without_panicking() {
+        let parsed = syn::parse_str::<EndpointArgs>(r#""/users/{id""#);
+        assert!(parsed.is_err());
+        let message = parsed.err().unwrap().to_string();
+        assert!(message.contains("Invalid route pattern"));
+    }
+
+    #[test]
+    fn args_reject_duplicate_method_entries() {
+        let args = syn::parse_str::<EndpointArgs>(r#""/users", method = "GET", method = "GET""#)
+            .expect("args should parse");
+        let parsed = Args::new(args, vec![]);
+        assert!(parsed.is_err());
+        let message = parsed.err().unwrap().to_string();
+        assert!(message.contains("HTTP method defined more than once"));
+    }
+
+    #[test]
+    fn args_accept_scope_option() {
+        let args =
+            syn::parse_str::<EndpointArgs>(r#""/users", scope = "admin", name = "users-list""#)
+                .expect("args should parse");
+        let parsed = Args::new(args, vec![Method::Get]).expect("options should parse");
+        let scope = parsed.scope.expect("scope should be set");
+        assert_eq!(scope.value(), "admin");
+    }
+
+    #[test]
+    fn args_accept_filter_and_wrap_expressions() {
+        let args = syn::parse_str::<EndpointArgs>(
+            r#""/users", filter = ::portfu_updated::prelude::filters::method::GET.clone(), wrap = my_wrapper()"#,
+        )
+        .expect("args should parse");
+        let parsed = Args::new(args, vec![Method::Get]).expect("options should parse");
+        assert_eq!(parsed.filters.len(), 1);
+        assert_eq!(parsed.wrappers.len(), 1);
+    }
+
+    #[test]
+    fn args_keep_filter_and_wrap_string_compat() {
+        let args = syn::parse_str::<EndpointArgs>(
+            r#""/users", filter = "::portfu_updated::prelude::filters::method::GET.clone()", wrap = "my_wrapper()""#,
+        )
+        .expect("args should parse");
+        let parsed = Args::new(args, vec![Method::Get]).expect("options should parse");
+        assert_eq!(parsed.filters.len(), 1);
+        assert_eq!(parsed.wrappers.len(), 1);
+    }
+
+    #[test]
+    fn unsupported_argument_pattern_emits_compile_error() {
+        let args = syn::parse_str::<EndpointArgs>(r#""/users/{id}""#).expect("args should parse");
+        let ast: syn::ItemFn = syn::parse_quote! {
+            async fn list_users((id, _): (String, String)) -> Result<String, ::portfu_updated::prelude::PortfuError> {
+                Ok(id)
+            }
+        };
+        let endpoint = Endpoint::new(args, ast, vec![Method::Get]).expect("endpoint should build");
+        let rendered = endpoint.to_token_stream().to_string();
+        assert!(rendered.contains("compile_error"));
+        assert!(rendered.contains("Unsupported argument pattern"));
+    }
+
+    #[test]
+    fn const_generic_endpoints_no_longer_panic_during_expansion() {
+        let args = syn::parse_str::<EndpointArgs>(r#""/n/{id}""#).expect("args should parse");
+        let ast: syn::ItemFn = syn::parse_quote! {
+            async fn generic<const N: usize>(id: ::portfu_updated::prelude::Path) -> Result<String, ::portfu_updated::prelude::PortfuError> {
+                let _ = N;
+                Ok(id.inner().to_string())
+            }
+        };
+        let endpoint = Endpoint::new(args, ast, vec![Method::Get]).expect("endpoint should build");
+        let rendered = endpoint.to_token_stream().to_string();
+        assert!(rendered.contains("compile_error"));
+        assert!(rendered.contains("Generic endpoints cannot be auto-registered"));
     }
 }
