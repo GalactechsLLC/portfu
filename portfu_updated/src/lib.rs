@@ -1,6 +1,15 @@
+pub mod client;
+
 pub mod prelude {
+    pub use crate::client;
+    pub use crate::client::SupportedBody;
     pub use http;
+    pub use http_body_util;
+    pub use hyper;
+    pub use hyper_util;
     pub use inventory;
+    pub use log;
+    pub use portfu_common::auth;
     pub use portfu_common::error::PortfuError;
     pub use portfu_common::router::filter as filters;
     pub use portfu_common::router::path::Path;
@@ -10,13 +19,28 @@ pub mod prelude {
     pub use portfu_common::server::ServiceRegister;
     pub use portfu_common::server::ServiceRegistration;
     pub use portfu_common::server::ServiceRegistry;
+    pub use portfu_common::server::TaskRegistration;
     pub use portfu_common::server::builder::ServerBuilder;
+    pub use portfu_common::server::config::SslConfig;
+    pub use portfu_common::service::RequestHeaders;
+    pub use portfu_common::service::ResponseHeaders;
     pub use portfu_common::service::Service;
     pub use portfu_common::service::State;
     pub use portfu_common::service::builder::ServiceBuilder;
+    pub use portfu_common::service::request::Body;
     pub use portfu_common::service::request::FromRequest;
+    pub use portfu_common::service::request::Json;
+    pub use portfu_common::service::request::Query;
     pub use portfu_common::service::request::Request;
+    pub use portfu_common::service::request::RequestType;
     pub use portfu_common::service::response::Response;
     pub use portfu_common::service::traits::Service as ServiceTrait;
+    pub use portfu_common::websocket::Message;
+    pub use portfu_common::websocket::Peers;
+    pub use portfu_common::websocket::WebSocket;
+    pub use portfu_common::websocket::WebSocketClient;
+    pub use portfu_common::websocket::WebsocketConnection;
+    pub use portfu_common::wrappers;
     pub use portfu_macros_updated::*;
+    pub use tokio_tungstenite;
 }

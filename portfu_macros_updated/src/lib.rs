@@ -1,7 +1,19 @@
+mod client_websocket;
 mod endpoint;
+mod files;
+mod interval;
 mod method;
+mod static_files;
+mod task;
 mod utils;
+mod websocket;
 
+use crate::client_websocket::WebSocketClient;
+use crate::files::Files;
+use crate::interval::Interval;
+use crate::static_files::StaticFiles;
+use crate::task::Task;
+use crate::websocket::WebSocketRoute;
 use proc_macro::TokenStream;
 use quote::ToTokens;
 
@@ -68,3 +80,99 @@ method_macro!(Connect, connect);
 method_macro!(Options, options);
 method_macro!(Trace, trace);
 method_macro!(Patch, patch);
+
+#[proc_macro_attribute]
+pub fn static_files(args: TokenStream, input: TokenStream) -> TokenStream {
+    let args = match syn::parse(args) {
+        Ok(args) => args,
+        Err(err) => return input_and_compile_error(input, err),
+    };
+    let ast = match syn::parse::<syn::ItemStruct>(input.clone()) {
+        Ok(ast) => ast,
+        Err(err) => return input_and_compile_error(input, err),
+    };
+    match StaticFiles::new(args, ast.ident) {
+        Ok(route) => route.into_token_stream().into(),
+        Err(err) => input_and_compile_error(input, err),
+    }
+}
+
+#[proc_macro_attribute]
+pub fn files(args: TokenStream, input: TokenStream) -> TokenStream {
+    let args = match syn::parse(args) {
+        Ok(args) => args,
+        Err(err) => return input_and_compile_error(input, err),
+    };
+    let ast = match syn::parse::<syn::ItemStruct>(input.clone()) {
+        Ok(ast) => ast,
+        Err(err) => return input_and_compile_error(input, err),
+    };
+    match Files::new(args, ast.ident) {
+        Ok(route) => route.into_token_stream().into(),
+        Err(err) => input_and_compile_error(input, err),
+    }
+}
+
+#[proc_macro_attribute]
+pub fn task(args: TokenStream, input: TokenStream) -> TokenStream {
+    let args = match syn::parse(args) {
+        Ok(args) => args,
+        Err(err) => return input_and_compile_error(input, err),
+    };
+    let ast = match syn::parse::<syn::ItemFn>(input.clone()) {
+        Ok(ast) => ast,
+        Err(err) => return input_and_compile_error(input, err),
+    };
+    match Task::new(args, ast) {
+        Ok(route) => route.into_token_stream().into(),
+        Err(err) => input_and_compile_error(input, err),
+    }
+}
+
+#[proc_macro_attribute]
+pub fn interval(args: TokenStream, input: TokenStream) -> TokenStream {
+    let args = match syn::parse(args) {
+        Ok(args) => args,
+        Err(err) => return input_and_compile_error(input, err),
+    };
+    let ast = match syn::parse::<syn::ItemFn>(input.clone()) {
+        Ok(ast) => ast,
+        Err(err) => return input_and_compile_error(input, err),
+    };
+    match Interval::new(args, ast) {
+        Ok(route) => route.into_token_stream().into(),
+        Err(err) => input_and_compile_error(input, err),
+    }
+}
+
+#[proc_macro_attribute]
+pub fn websocket(args: TokenStream, input: TokenStream) -> TokenStream {
+    let args = match syn::parse(args) {
+        Ok(args) => args,
+        Err(err) => return input_and_compile_error(input, err),
+    };
+    let ast = match syn::parse::<syn::ItemFn>(input.clone()) {
+        Ok(ast) => ast,
+        Err(err) => return input_and_compile_error(input, err),
+    };
+    match WebSocketRoute::new(args, ast) {
+        Ok(route) => route.into_token_stream().into(),
+        Err(err) => input_and_compile_error(input, err),
+    }
+}
+
+#[proc_macro_attribute]
+pub fn client_websocket(args: TokenStream, input: TokenStream) -> TokenStream {
+    let args = match syn::parse(args) {
+        Ok(args) => args,
+        Err(err) => return input_and_compile_error(input, err),
+    };
+    let ast = match syn::parse::<syn::ItemFn>(input.clone()) {
+        Ok(ast) => ast,
+        Err(err) => return input_and_compile_error(input, err),
+    };
+    match WebSocketClient::new(args, ast) {
+        Ok(route) => route.into_token_stream().into(),
+        Err(err) => input_and_compile_error(input, err),
+    }
+}

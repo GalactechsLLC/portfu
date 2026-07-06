@@ -1,0 +1,15 @@
+[package]
+name = "portfu_tests"
+version = "2.0.0"
+edition = "2024"
+
+[dependencies]
+futures-util = { workspace = true }
+http = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true }
+portfu_common = { workspace = true }
+portfu_updated = { workspace = true }
+serde = { workspace = true }
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }

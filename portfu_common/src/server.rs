@@ -1,5 +1,6 @@
 pub mod builder;
 pub mod config;
+mod ssl;
 pub mod state;
 
 use crate::error::PortfuError;
@@ -17,12 +18,19 @@ use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
 use log::{error, info, warn};
 use once_cell::sync::Lazy;
+use std::collections::HashMap;
+use std::env;
+use std::future::Future;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::net::{TcpListener, TcpSocket};
 use tokio::sync::{RwLock, watch};
 use tokio::{select, spawn};
+use tokio_rustls::TlsAcceptor;
+
+use crate::server::ssl::load_ssl_certs;
 
 pub trait ServiceRegister: Send + Sync {
     fn register(self, registry: &mut ServiceRegistry);
@@ -34,6 +42,14 @@ pub struct ServiceRegistration {
 
 inventory::collect!(ServiceRegistration);
 
+pub type TaskFuture = Pin<Box<dyn Future<Output = Result<(), PortfuError>> + Send + 'static>>;
+
+pub struct TaskRegistration {
+    pub run: fn(server: Arc<Server>) -> TaskFuture,
+}
+
+inventory::collect!(TaskRegistration);
+
 #[derive(Clone, Default)]
 pub struct ServiceRegistry {
     pub services: Vec<Service>,
@@ -42,6 +58,7 @@ pub struct ServiceRegistry {
 
 pub static SERVICE_REGISTRY: Lazy<Arc<ServiceRegistry>> = Lazy::new(|| Arc::new(load_registry()));
 static DEFAULT_ROUTE: Lazy<Arc<Route>> = Lazy::new(|| Arc::new(Route::new("/".to_string())));
+const DEFAULT_SCOPE: &str = "default";
 
 fn load_registry() -> ServiceRegistry {
     let mut registry = ServiceRegistry::default();
@@ -57,15 +74,22 @@ fn load_registry() -> ServiceRegistry {
 pub struct Server {
     pub run: Arc<AtomicBool>,
     pub config: ServerConfig,
-    pub global_state: Arc<RwLock<Extensions>>,
+    pub scoped_state: Arc<RwLock<HashMap<String, Extensions>>>,
     pub default_service: Option<Service>,
+    pub health_service: Option<Service>,
 }
 impl Server {
     pub async fn run(self) -> Result<(), PortfuError> {
         let server = Arc::new(self);
         {
             let slf = server.clone();
-            server.global_state.write().await.insert(slf);
+            server
+                .scoped_state
+                .write()
+                .await
+                .entry(DEFAULT_SCOPE.to_string())
+                .or_default()
+                .insert(slf);
         }
         let socket_addr = SocketAddr::from((
             server
@@ -100,6 +124,20 @@ impl Server {
         http.preserve_header_case(server.config.preserve_header_case);
         http.max_buf_size(server.config.max_buf_size);
         let http = Arc::new(http);
+        let tls_acceptor = if server.config.enable_ssl
+            || server.config.ssl_config.is_some()
+            || !server.config.sni_ssl_configs.is_empty()
+            || (env::var("PRIVATE_CA_CRT").ok().is_some()
+                && env::var("PRIVATE_CA_KEY").ok().is_some())
+            || (env::var("SSL_CERTS").ok().is_some()
+                && env::var("SSL_PRIVATE_KEY").ok().is_some()
+                && env::var("SSL_ROOT_CERTS").ok().is_some())
+        {
+            let certs = load_ssl_certs(&server.config)?;
+            Some(TlsAcceptor::from(certs))
+        } else {
+            None
+        };
         let server_run_handle = server.run.clone();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let shutdown_tx_handle = shutdown_tx.clone();
@@ -109,9 +147,19 @@ impl Server {
             let _ = shutdown_tx_handle.send(true);
         });
         let mut acceptor_handles = Vec::with_capacity(listeners.len());
+        let mut task_handles = Vec::new();
+        for task in inventory::iter::<TaskRegistration> {
+            let server = server.clone();
+            task_handles.push(spawn(async move {
+                if let Err(e) = (task.run)(server).await {
+                    error!("Background task failed: {e:?}");
+                }
+            }));
+        }
         for listener in listeners {
             let server = server.clone();
             let http = http.clone();
+            let tls_acceptor = tls_acceptor.clone();
             let mut shutdown_rx = shutdown_rx.clone();
             acceptor_handles.push(spawn(async move {
                 loop {
@@ -124,14 +172,33 @@ impl Server {
                                 Ok((stream, address)) => {
                                     let server = server.clone();
                                     let http = http.clone();
+                                    let tls_acceptor = tls_acceptor.clone();
                                     spawn(async move {
-                                        let service = service_fn(move |req| {
-                                            let server = server.clone();
-                                            Self::connection_handler(server, req, address)
-                                        });
-                                        let connection = http.serve_connection(TokioIo::new(stream), service).with_upgrades();
-                                        if let Err(err) = connection.await {
-                                            error!("Error serving connection: {err:?}");
+                                        if let Some(acceptor) = tls_acceptor.as_ref() {
+                                            match acceptor.accept(stream).await {
+                                                Ok(stream) => {
+                                                    let service = service_fn(move |req| {
+                                                        let server = server.clone();
+                                                        Self::connection_handler(server, req, address)
+                                                    });
+                                                    let connection = http.serve_connection(TokioIo::new(stream), service).with_upgrades();
+                                                    if let Err(err) = connection.await {
+                                                        error!("Error serving tls connection: {err:?}");
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    error!("Error accepting tls connection: {e:?}");
+                                                }
+                                            }
+                                        } else {
+                                            let service = service_fn(move |req| {
+                                                let server = server.clone();
+                                                Self::connection_handler(server, req, address)
+                                            });
+                                            let connection = http.serve_connection(TokioIo::new(stream), service).with_upgrades();
+                                            if let Err(err) = connection.await {
+                                                error!("Error serving connection: {err:?}");
+                                            }
                                         }
                                     });
                                 }
@@ -152,6 +219,10 @@ impl Server {
         let _ = shutdown_rx.changed().await;
         info!("Got Shutdown Signal");
         for handle in acceptor_handles {
+            let _ = handle.await;
+        }
+        for handle in task_handles {
+            handle.abort();
             let _ = handle.await;
         }
         info!("Server Exiting");
@@ -182,25 +253,73 @@ impl Server {
     #[inline]
     async fn connection_handler(
         server: Arc<Self>,
-        mut request: http::Request<Incoming>,
+        request: http::Request<Incoming>,
         address: SocketAddr,
     ) -> Result<http::Response<StreamingBody>, PortfuError> {
-        request.extensions_mut().insert(address);
-        let global_state = server.global_state.read().await.clone();
-        request.extensions_mut().extend(global_state);
+        let scoped_state = server.scoped_state.read().await.clone();
         let mut request = Request::new(
             RequestType::Stream(request.map(|b| b.stream_body())),
             DEFAULT_ROUTE.clone(),
         );
+        if request.uri().path() == "/health" {
+            return match &server.health_service {
+                Some(service) => {
+                    Self::set_request_scope_state(
+                        &mut request,
+                        &scoped_state,
+                        service.scope(),
+                        address,
+                    );
+                    *request.route_mut() = service.route().clone();
+                    if service.serves(&request).await {
+                        service.serve(&mut request).await.map(Into::into)
+                    } else {
+                        Ok(Response::ok("OK").into())
+                    }
+                }
+                None => Ok(Response::ok("OK").into()),
+            };
+        }
         for service in &SERVICE_REGISTRY.services {
+            Self::set_request_scope_state(&mut request, &scoped_state, service.scope(), address);
             if service.serves(&request).await {
                 *request.route_mut() = service.route().clone();
                 return service.serve(&mut request).await.map(Into::into);
             }
         }
         match &server.default_service {
-            Some(service) => service.serve(&mut request).await.map(Into::into),
+            Some(service) => {
+                Self::set_request_scope_state(
+                    &mut request,
+                    &scoped_state,
+                    service.scope(),
+                    address,
+                );
+                service.serve(&mut request).await.map(Into::into)
+            }
             None => Ok(Response::not_found("Failed to find service for request").into()),
         }
+    }
+
+    fn set_request_scope_state(
+        request: &mut Request,
+        scoped_state: &HashMap<String, Extensions>,
+        scope: &str,
+        address: SocketAddr,
+    ) {
+        if let Some(extensions) = request.shared_state_mut() {
+            extensions.insert(address);
+            extensions.extend(Self::scope_state(scoped_state, scope));
+        }
+    }
+
+    fn scope_state(scoped_state: &HashMap<String, Extensions>, scope: &str) -> Extensions {
+        let mut extensions = scoped_state.get(DEFAULT_SCOPE).cloned().unwrap_or_default();
+        if scope != DEFAULT_SCOPE
+            && let Some(scope_extensions) = scoped_state.get(scope)
+        {
+            extensions.extend(scope_extensions.clone());
+        }
+        extensions
     }
 }

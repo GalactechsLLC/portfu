@@ -22,6 +22,8 @@ use tokio::sync::RwLock;
 
 #[cfg(feature = "github_auth")]
 pub mod github;
+#[cfg(feature = "keycloak_auth")]
+pub mod keycloak;
 
 #[derive(Default, Clone, Deserialize)]
 pub struct BasicLoginRequest {

@@ -44,6 +44,8 @@ pub type ResponseHeaders = HeaderMap<HeaderValue>;
 pub struct Service {
     route: Arc<Route>,
     name: String,
+    scope: String,
+    domains: Vec<String>,
     uuid: Uuid,
     filters: Vec<Arc<dyn Filter + Sync + Send>>,
     middleware: Vec<Arc<dyn Middleware + Sync + Send>>,
@@ -51,6 +53,9 @@ pub struct Service {
 }
 impl Service {
     pub async fn serves(&self, req: &Request) -> bool {
+        if !self.matches_host(req) {
+            return false;
+        }
         if self.route.matches(req.uri().path()) {
             for f in self.filters.iter() {
                 if f.filter(req).await != FilterResult::Allow {
@@ -75,7 +80,7 @@ impl Service {
             Response::default()
         };
         for func in self.middleware.iter() {
-            match func.after(&mut response).await? {
+            match func.after_with_request(req, &mut response).await? {
                 MiddlewareResult::Continue => {}
                 MiddlewareResult::Return(resp) => return Ok(resp),
             };
@@ -85,10 +90,27 @@ impl Service {
     pub fn name(&self) -> &str {
         self.name.as_str()
     }
+    pub fn scope(&self) -> &str {
+        self.scope.as_str()
+    }
+    pub fn domains(&self) -> &[String] {
+        self.domains.as_slice()
+    }
     pub fn uuid(&self) -> &Uuid {
         &self.uuid
     }
     pub fn route(&self) -> Arc<Route> {
         self.route.clone()
+    }
+
+    fn matches_host(&self, req: &Request) -> bool {
+        if self.domains.is_empty() {
+            return true;
+        }
+        let Some(host) = req.host() else {
+            return false;
+        };
+        let host = host.to_ascii_lowercase();
+        self.domains.iter().any(|d| d == &host)
     }
 }
