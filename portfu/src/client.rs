@@ -136,7 +136,7 @@ pub async fn new_websocket(url: &str, headers: Option<HeaderMap>) -> Result<WebS
         .into_client_request()
         .map_err(|e| Error::other(format!("{e:?}")))?;
     if let Some(headers) = headers {
-        request.headers_mut().extend(headers.into_iter())
+        request.headers_mut().extend(headers)
     }
     let (ws_stream, response) = match connect_async(request).await {
         Ok(result) => result,
