@@ -7,8 +7,6 @@ use dashmap::DashMap;
 use http::header;
 use http::{Extensions, HeaderName, HeaderValue};
 use once_cell::sync::Lazy;
-use sha2::{Digest, Sha256};
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
@@ -42,15 +40,9 @@ impl Default for SessionManager {
 }
 
 impl SessionManager {
-    async fn create_session_cookie(
-        &self,
-        request: &Request,
-    ) -> (Cookie<'static>, Arc<RwLock<Session>>) {
-        let salt = request_best_guess_ip(request);
+    async fn create_session_cookie(&self) -> (Cookie<'static>, Arc<RwLock<Session>>) {
         let client_session_id = Uuid::new_v4();
-        let mut hasher = Sha256::new();
-        hasher.update([client_session_id.to_string().as_bytes(), salt.as_bytes()].concat());
-        let server_session_id = hex::encode(hasher.finalize());
+        let server_session_id = client_session_id.to_string();
         let cookie = Cookie::build((SESSION_HEADER, client_session_id.to_string()))
             .path("/")
             .secure(self.secure)
@@ -67,15 +59,11 @@ impl SessionManager {
         (cookie.into_owned(), session)
     }
 
-    pub async fn get_session(
-        &self,
-        request: &Request,
-        session_cookie: Cookie<'_>,
-    ) -> Option<Arc<RwLock<Session>>> {
-        let salt = request_best_guess_ip(request);
-        let mut hasher = Sha256::new();
-        hasher.update([session_cookie.value_trimmed().as_bytes(), salt.as_bytes()].concat());
-        let server_session_id = hex::encode(hasher.finalize());
+    pub async fn get_session(&self, session_cookie: Cookie<'_>) -> Option<Arc<RwLock<Session>>> {
+        let server_session_id = SESSION_CLIENT_IDS
+            .get(session_cookie.value_trimmed())
+            .map(|value| value.value().clone())
+            .unwrap_or_else(|| session_cookie.value_trimmed().to_string());
         if let Some(session) = SESSIONS.get(&server_session_id).map(|v| v.value().clone()) {
             if Instant::now().duration_since(session.read().await.last_update)
                 >= self.session_duration
@@ -112,23 +100,6 @@ impl SessionManager {
     }
 }
 
-fn request_best_guess_ip(request: &Request) -> String {
-    if let Some(real_ip) = request.headers().get("x-real-ip")
-        && let Ok(as_str) = real_ip.to_str()
-    {
-        return as_str.to_string();
-    }
-    if let Some(cloudflare_ip) = request.headers().get("cf-connecting-ip")
-        && let Ok(as_str) = cloudflare_ip.to_str()
-    {
-        return as_str.to_string();
-    }
-    request
-        .get::<SocketAddr>()
-        .map(|s| s.ip().to_string())
-        .unwrap_or_else(|| "127.0.0.1".to_string())
-}
-
 pub fn get_session_cookie_from_request(request: &Request) -> Option<Cookie<'_>> {
     let mut session_cookie = None;
     'outer: for value in request.headers().get_all(header::COOKIE) {
@@ -150,11 +121,7 @@ pub fn get_session_cookie_from_request(request: &Request) -> Option<Cookie<'_>> 
 
 pub async fn get_session_from_request(request: &Request) -> Option<Arc<RwLock<Session>>> {
     let cookie = get_session_cookie_from_request(request)?;
-    let salt = request_best_guess_ip(request);
-    let mut hasher = Sha256::new();
-    hasher.update([cookie.value_trimmed().as_bytes(), salt.as_bytes()].concat());
-    let server_session_id = hex::encode(hasher.finalize());
-    SESSIONS.get(&server_session_id).map(|v| v.value().clone())
+    SessionManager::get_session_from_id(cookie.value_trimmed())
 }
 
 impl Middleware for SessionManager {
@@ -172,17 +139,17 @@ impl Middleware for SessionManager {
             self.cleanup_expired().await;
             let session = match get_session_cookie_from_request(request) {
                 None => {
-                    let (cookie, session) = self.create_session_cookie(request).await;
+                    let (cookie, session) = self.create_session_cookie().await;
                     if let Ok(value) = HeaderValue::from_str(&cookie.to_string()) {
                         request.insert(PendingSessionCookie(value));
                     }
                     session
                 }
                 Some(cookie) => {
-                    if let Some(session) = self.get_session(request, cookie).await {
+                    if let Some(session) = self.get_session(cookie).await {
                         session
                     } else {
-                        let (cookie, session) = self.create_session_cookie(request).await;
+                        let (cookie, session) = self.create_session_cookie().await;
                         if let Ok(value) = HeaderValue::from_str(&cookie.to_string()) {
                             request.insert(PendingSessionCookie(value));
                         }

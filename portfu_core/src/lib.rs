@@ -210,23 +210,47 @@ pub struct ServiceData {
 }
 impl ServiceData {
     pub fn get_best_guess_public_ip(&self, address: &SocketAddr) -> String {
-        let remote = if let Some(real_ip) = self.request.headers().get("x-real-ip") {
-            format!("{real_ip:?}")
-        } else {
-            address.ip().to_string()
-        };
-        debug!("Found Remote IP: {remote}");
-        if is_cloudflare(&remote) {
-            debug!("Detected Cloudflare");
-            if let Some(real_ip) = self.request.headers().get("cf-connecting-ip") {
-                let ip = format!("{real_ip:?}");
-                debug!("Cloudflare: Real IP: {ip}");
-                ip
-            } else {
-                address.ip().to_string()
-            }
+        resolve_public_ip_from_headers(address.ip(), self.request.headers())
+    }
+}
+
+fn resolve_public_ip_from_headers(remote_ip: IpAddr, headers: &http::HeaderMap) -> String {
+    let remote = remote_ip.to_string();
+    debug!("Found Remote IP: {remote}");
+    if is_cloudflare(&remote) {
+        debug!("Detected Cloudflare");
+        if let Some(ip) = header_ip(headers, "cf-connecting-ip") {
+            debug!("Cloudflare: Real IP: {ip}");
+            ip
         } else {
             remote
+        }
+    } else if is_private_proxy_ip(&remote_ip) {
+        header_ip(headers, "x-real-ip")
+            .or_else(|| header_ip(headers, "x-forwarded-for"))
+            .unwrap_or(remote)
+    } else {
+        remote
+    }
+}
+
+fn header_ip(headers: &http::HeaderMap, name: &str) -> Option<String> {
+    let value = headers.get(name)?.to_str().ok()?;
+    let candidate = value.split(',').next()?.trim();
+    let parsed = IpAddr::from_str(candidate).ok()?;
+    Some(parsed.to_string())
+}
+
+fn is_private_proxy_ip(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            ip.is_private() || ip.is_loopback() || ip.is_link_local() || ip.is_unspecified()
+        }
+        IpAddr::V6(ip) => {
+            ip.is_loopback()
+                || ip.is_unique_local()
+                || ip.is_unicast_link_local()
+                || ip.is_unspecified()
         }
     }
 }
@@ -300,6 +324,31 @@ fn ip_in_prefix(ip: &IpAddr, base: &IpAddr, prefix_len: u8) -> bool {
             (ip & mask) == (base & mask)
         }
         _ => false, // mismatch between IPv4 and IPv6
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn private_proxy_can_forward_real_ip() {
+        let mut headers = http::HeaderMap::new();
+        headers.insert("x-real-ip", "198.51.100.44".parse().unwrap());
+        assert_eq!(
+            resolve_public_ip_from_headers(IpAddr::from([10, 0, 0, 10]), &headers),
+            "198.51.100.44"
+        );
+    }
+
+    #[test]
+    fn public_remote_does_not_trust_x_real_ip() {
+        let mut headers = http::HeaderMap::new();
+        headers.insert("x-real-ip", "198.51.100.44".parse().unwrap());
+        assert_eq!(
+            resolve_public_ip_from_headers(IpAddr::from([203, 0, 113, 10]), &headers),
+            "203.0.113.10"
+        );
     }
 }
 

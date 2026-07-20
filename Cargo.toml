@@ -44,7 +44,7 @@ proc-macro2 = "1.0.106"
 quote = "1.0.45"
 rand = "0.10.0"
 regex = "1.12.3"
-reqwest = {version="0.13.2", default-features = false, features = ["json", "stream"] }
+reqwest = {version="0.13.2", default-features = false, features = ["json", "stream", "rustls"] }
 rustls = {version = "0.23.37" }
 rustls-pemfile = "2.2.0"
 rsa = { version = "0.9.10", features = ["std", "pem", "sha2"] }

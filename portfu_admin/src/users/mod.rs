@@ -197,6 +197,7 @@ impl FromStr for UserRole {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
+            "none" => Ok(UserRole::None),
             "user" => Ok(UserRole::User),
             "viewer" => Ok(UserRole::Viewer),
             "contributor" => Ok(UserRole::Contributor),

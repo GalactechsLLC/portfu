@@ -7,9 +7,7 @@ use pfcore::router::middleware::{Middleware, MiddlewareResult};
 use pfcore::runtime::thread::ServerThread;
 use pfcore::utils::signal::await_termination;
 use portfu_core::ServiceData;
-use sha2::{Digest, Sha256};
 use std::io::Error;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
@@ -39,22 +37,20 @@ impl Default for SessionManager {
 }
 
 impl SessionManager {
-    async fn create_session_cookie(
-        &self,
-        data: &ServiceData,
-    ) -> (Cookie<'static>, Arc<RwLock<Session>>) {
-        let address: &SocketAddr = data.request.get().unwrap();
-        let salt = data.get_best_guess_public_ip(address);
-        let client_session_id = Uuid::new_v4();
-        let mut hasher = Sha256::new();
-        hasher.update([client_session_id.to_string().as_bytes(), salt.as_bytes()].concat());
-        let server_session_id = hex::encode(hasher.finalize());
-        let cookie = Cookie::build((SESSION_HEADER, client_session_id.to_string()))
+    fn build_session_cookie(&self, client_session_id: Uuid) -> Cookie<'static> {
+        Cookie::build((SESSION_HEADER, client_session_id.to_string()))
             .path("/")
             .secure(self.secure)
             .http_only(true)
             .same_site(cookie::SameSite::Lax)
-            .build();
+            .build()
+            .into_owned()
+    }
+
+    async fn create_session_cookie(&self) -> (Cookie<'static>, Arc<RwLock<Session>>) {
+        let client_session_id = Uuid::new_v4();
+        let server_session_id = client_session_id.to_string();
+        let cookie = self.build_session_cookie(client_session_id);
         let session = Arc::new(RwLock::new(Session {
             data: Extensions::new(),
             last_update: Instant::now(),
@@ -62,18 +58,43 @@ impl SessionManager {
         }));
         SESSIONS.insert(server_session_id.clone(), session.clone());
         SESSION_CLIENT_IDS.insert(client_session_id.to_string(), server_session_id);
-        (cookie.into_owned(), session)
+        (cookie, session)
     }
-    pub async fn get_session(
-        &self,
-        data: &ServiceData,
-        session_cookie: Cookie<'_>,
-    ) -> Option<Arc<RwLock<Session>>> {
-        let address: &SocketAddr = data.request.get().unwrap();
-        let salt = data.get_best_guess_public_ip(address);
-        let mut hasher = Sha256::new();
-        hasher.update([session_cookie.value_trimmed().as_bytes(), salt.as_bytes()].concat());
-        let server_session_id = hex::encode(hasher.finalize());
+
+    pub async fn rotate_session_cookie(
+        session: Arc<RwLock<Session>>,
+        secure: bool,
+    ) -> Cookie<'static> {
+        let old_client_session_id = session.read().await.id.to_string();
+        let old_server_session_id = SESSION_CLIENT_IDS
+            .remove(&old_client_session_id)
+            .map(|(_, value)| value)
+            .unwrap_or_else(|| old_client_session_id.clone());
+        SESSIONS.remove(&old_server_session_id);
+
+        let new_client_session_id = Uuid::new_v4();
+        let new_server_session_id = new_client_session_id.to_string();
+        {
+            let mut session_guard = session.write().await;
+            session_guard.id = new_client_session_id;
+            session_guard.last_update = Instant::now();
+        }
+        SESSIONS.insert(new_server_session_id.clone(), session);
+        SESSION_CLIENT_IDS.insert(new_client_session_id.to_string(), new_server_session_id);
+
+        Cookie::build((SESSION_HEADER, new_client_session_id.to_string()))
+            .path("/")
+            .secure(secure)
+            .http_only(true)
+            .same_site(cookie::SameSite::Lax)
+            .build()
+            .into_owned()
+    }
+    pub async fn get_session(&self, session_cookie: Cookie<'_>) -> Option<Arc<RwLock<Session>>> {
+        let server_session_id = SESSION_CLIENT_IDS
+            .get(session_cookie.value_trimmed())
+            .map(|value| value.value().clone())
+            .unwrap_or_else(|| session_cookie.value_trimmed().to_string());
         if let Some(session) = SESSIONS.get(&server_session_id).map(|v| v.value().clone()) {
             if Instant::now().duration_since(session.read().await.last_update)
                 >= self.session_duration
@@ -114,12 +135,7 @@ pub fn get_session_cookie_from_request(data: &ServiceData) -> Option<Cookie<'_>>
 }
 pub async fn get_session_from_request(data: &ServiceData) -> Option<Arc<RwLock<Session>>> {
     let cookie = get_session_cookie_from_request(data)?;
-    let address: &SocketAddr = data.request.get().unwrap();
-    let salt = data.get_best_guess_public_ip(address);
-    let mut hasher = Sha256::new();
-    hasher.update([cookie.value_trimmed().as_bytes(), salt.as_bytes()].concat());
-    let server_session_id = hex::encode(hasher.finalize());
-    SESSIONS.get(&server_session_id).map(|v| v.value().clone())
+    SessionManager::get_session_from_id(cookie.value_trimmed())
 }
 #[async_trait]
 impl ServerThread for SessionManager {
@@ -160,7 +176,7 @@ impl Middleware for SessionManager {
     async fn before(&self, data: &mut ServiceData) -> Result<MiddlewareResult, Error> {
         let session = match get_session_cookie_from_request(data) {
             None => {
-                let (cookie, session) = self.create_session_cookie(data).await;
+                let (cookie, session) = self.create_session_cookie().await;
                 if let Ok(value) = HeaderValue::from_str(&cookie.to_string()) {
                     data.request
                         .headers_mut()
@@ -172,10 +188,10 @@ impl Middleware for SessionManager {
                 session
             }
             Some(cookie) => {
-                if let Some(session) = self.get_session(data, cookie).await {
+                if let Some(session) = self.get_session(cookie).await {
                     session
                 } else {
-                    let (cookie, session) = self.create_session_cookie(data).await;
+                    let (cookie, session) = self.create_session_cookie().await;
                     if let Ok(value) = HeaderValue::from_str(&cookie.to_string()) {
                         data.request
                             .headers_mut()
@@ -194,5 +210,43 @@ impl Middleware for SessionManager {
 
     async fn after(&self, _: &mut ServiceData) -> Result<MiddlewareResult, Error> {
         Ok(MiddlewareResult::Continue)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn rotate_session_cookie_replaces_client_session_id_and_preserves_data() {
+        let manager = SessionManager {
+            session_duration: Duration::from_secs(60),
+            secure: true,
+        };
+        let (_cookie, session) = manager.create_session_cookie().await;
+        let old_id = session.read().await.id.to_string();
+        session
+            .write()
+            .await
+            .data
+            .insert("authenticated".to_string());
+
+        let replacement = SessionManager::rotate_session_cookie(session.clone(), true).await;
+        let new_id = session.read().await.id.to_string();
+
+        assert_ne!(old_id, new_id);
+        assert_eq!(replacement.value_trimmed(), new_id);
+        assert!(SessionManager::get_session_from_id(&old_id).is_none());
+        let rotated =
+            SessionManager::get_session_from_id(&new_id).expect("new session id is mapped");
+        assert_eq!(
+            rotated
+                .read()
+                .await
+                .data
+                .get::<String>()
+                .map(String::as_str),
+            Some("authenticated")
+        );
     }
 }

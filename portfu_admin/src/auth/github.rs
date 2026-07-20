@@ -1,5 +1,5 @@
 use crate::auth::Claims;
-use crate::services::{redirect_to_url, send_internal_error};
+use crate::services::{redirect_to_url, sanitize_relative_redirect_target, send_internal_error};
 use crate::users::UserRole;
 use http::HeaderValue;
 use hyper::{header, StatusCode};
@@ -127,7 +127,8 @@ impl ServiceHandler for OAuthLoginHandler {
                 .await
                 .map(|q| q.inner())
         {
-            Some(q)
+            sanitize_relative_redirect_target(&q.redirect_url)
+                .map(|redirect_url| OAuthLoginRedirectParams { redirect_url })
         } else {
             None
         };
@@ -438,7 +439,8 @@ impl ServiceHandler for OAuthAuthHandler {
             .data
             .remove::<OAuthLoginRedirectParams>();
         let url = if let Some(redirect) = maybe_redirect {
-            redirect.redirect_url.clone()
+            sanitize_relative_redirect_target(&redirect.redirect_url)
+                .unwrap_or_else(|| self.config.on_success_redirect.clone())
         } else {
             self.config.on_success_redirect.clone()
         };

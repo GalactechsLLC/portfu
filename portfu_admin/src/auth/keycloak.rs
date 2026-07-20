@@ -1,6 +1,7 @@
 use crate::auth::Claims;
-use crate::services::{redirect_to_url, send_internal_error};
+use crate::services::{redirect_to_url, sanitize_relative_redirect_target, send_internal_error};
 use crate::users::UserRole;
+use base64::Engine;
 use http::HeaderValue;
 use hyper::{header, StatusCode};
 use log::{debug, info, warn};
@@ -16,6 +17,7 @@ use portfu::pfcore::{FromRequest, Json, Query, ServiceData, ServiceHandler, Serv
 use portfu::prelude::async_trait;
 use portfu::wrappers::sessions::Session;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::future::Future;
@@ -39,18 +41,23 @@ pub struct OAuthConfig {
     pub claims_audience: String,
     pub claims_issuer: String,
     pub claims_expire_time: usize,
+    pub require_verified_email: bool,
     pub default_role: UserRole,
     pub allowed_roles: Vec<String>,
     pub admin_roles: Vec<String>,
-    pub allowed_users: Vec<String>,
-    pub admin_users: Vec<String>,
     pub callbacks: Vec<OAuthCallbackFn>,
 }
 
 #[derive(Default, Clone, Deserialize)]
 pub struct AuthRequest {
+    #[serde(default)]
     code: String,
+    #[serde(default)]
     state: String,
+    #[serde(default)]
+    error: String,
+    #[serde(default)]
+    error_description: String,
 }
 
 #[derive(Default, Clone, Deserialize)]
@@ -66,11 +73,117 @@ struct UserInfo {
     #[serde(default)]
     email: String,
     #[serde(default)]
+    email_verified: bool,
+    #[serde(default)]
     preferred_username: String,
     #[serde(default)]
     realm_access: Option<RoleCollection>,
     #[serde(default)]
     resource_access: HashMap<String, RoleCollection>,
+}
+
+#[derive(Default, Clone, Deserialize)]
+struct AccessTokenClaims {
+    #[serde(default)]
+    realm_access: Option<RoleCollection>,
+    #[serde(default)]
+    resource_access: HashMap<String, RoleCollection>,
+}
+
+fn resolve_authorized_role(
+    default_role: UserRole,
+    extracted_roles: &HashSet<String>,
+    admin_roles: &HashSet<String>,
+    allowed_roles: &HashSet<String>,
+) -> UserRole {
+    if !admin_roles.is_empty()
+        && extracted_roles
+            .iter()
+            .any(|role| admin_roles.contains(role))
+    {
+        return UserRole::Admin;
+    }
+
+    if !allowed_roles.is_empty()
+        && extracted_roles
+            .iter()
+            .any(|role| allowed_roles.contains(role))
+    {
+        return if default_role == UserRole::None {
+            UserRole::User
+        } else {
+            default_role
+        };
+    }
+
+    UserRole::None
+}
+
+fn sorted_strings(values: &HashSet<String>) -> Vec<String> {
+    let mut values: Vec<String> = values.iter().cloned().collect();
+    values.sort();
+    values
+}
+
+fn extract_roles_from_collections(
+    realm_access: &Option<RoleCollection>,
+    resource_access: &HashMap<String, RoleCollection>,
+) -> HashSet<String> {
+    let mut extracted_roles: HashSet<String> = HashSet::new();
+    if let Some(realm_access) = realm_access {
+        for role in &realm_access.roles {
+            if !role.is_empty() {
+                extracted_roles.insert(role.to_ascii_lowercase());
+            }
+        }
+    }
+    for resource in resource_access.values() {
+        for role in &resource.roles {
+            if !role.is_empty() {
+                extracted_roles.insert(role.to_ascii_lowercase());
+            }
+        }
+    }
+    extracted_roles
+}
+
+fn decode_jwt_payload(token: &str) -> Option<Value> {
+    let payload = token.split('.').nth(1)?;
+    let normalized = payload.replace('-', "+").replace('_', "/");
+    let padding = (4 - normalized.len() % 4) % 4;
+    let padded = format!("{normalized}{}", "=".repeat(padding));
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(padded)
+        .ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn extract_roles_from_access_token(token: &str) -> Option<HashSet<String>> {
+    let claims: AccessTokenClaims = serde_json::from_value(decode_jwt_payload(token)?).ok()?;
+    Some(extract_roles_from_collections(
+        &claims.realm_access,
+        &claims.resource_access,
+    ))
+}
+
+fn trusted_userinfo_email(user_info: &UserInfo, require_verified_email: bool) -> Option<String> {
+    let email = user_info.email.trim();
+    if !email.is_empty() && (!require_verified_email || user_info.email_verified) {
+        Some(email.to_string())
+    } else {
+        None
+    }
+}
+
+fn resolved_subject(user_info: &UserInfo, trusted_email: Option<&str>) -> String {
+    let preferred_username = user_info.preferred_username.trim();
+    if !preferred_username.is_empty() {
+        preferred_username.to_string()
+    } else if let Some(email) = trusted_email {
+        email.to_string()
+    } else {
+        user_info.sub.trim().to_string()
+    }
 }
 
 pub enum CallbackResult {
@@ -133,7 +246,8 @@ impl ServiceHandler for OAuthLoginHandler {
                 .await
                 .map(|q| q.inner())
         {
-            Some(q)
+            sanitize_relative_redirect_target(&q.redirect_url)
+                .map(|redirect_url| OAuthLoginRedirectParams { redirect_url })
         } else {
             None
         };
@@ -274,6 +388,24 @@ impl ServiceHandler for OAuthAuthHandler {
             },
             Some(v) => v,
         };
+        if !body.error.trim().is_empty() {
+            warn!(
+                "OAuth callback returned provider error={} description={}",
+                body.error, body.error_description
+            );
+            return self
+                .handle_failure(data, self.config.on_failure_redirect.as_str())
+                .await;
+        }
+        if body.code.trim().is_empty() || body.state.trim().is_empty() {
+            warn!(
+                "OAuth callback missing code or state query={:?}",
+                data.request.uri().query()
+            );
+            return self
+                .handle_failure(data, self.config.on_failure_redirect.as_str())
+                .await;
+        }
         let existing_token = if let Some(token) = session.read().await.data.get::<CsrfToken>() {
             token.clone()
         } else {
@@ -310,7 +442,8 @@ impl ServiceHandler for OAuthAuthHandler {
                     .await;
             }
         };
-        let token_val = format!("Bearer {}", token.access_token().secret());
+        let access_token = token.access_token().secret().to_string();
+        let token_val = format!("Bearer {}", access_token);
         let client = match reqwest::Client::builder().build() {
             Ok(client) => client,
             Err(e) => {
@@ -364,27 +497,18 @@ impl ServiceHandler for OAuthAuthHandler {
             rol: self.config.default_role,
             org: vec![],
         });
+        let trusted_email = trusted_userinfo_email(&user_info, self.config.require_verified_email);
         claims.uid = user_info.sub.clone();
-        claims.eml = user_info.email.clone();
-        claims.sub = if !user_info.preferred_username.is_empty() {
-            user_info.preferred_username.clone()
-        } else if !user_info.email.is_empty() {
-            user_info.email.clone()
-        } else {
-            user_info.sub.clone()
-        };
-        let mut extracted_roles: HashSet<String> = HashSet::new();
-        if let Some(realm_access) = &user_info.realm_access {
-            for role in &realm_access.roles {
-                if !role.is_empty() {
-                    extracted_roles.insert(role.to_ascii_lowercase());
-                }
-            }
-        }
-        for resource in user_info.resource_access.values() {
-            for role in &resource.roles {
-                if !role.is_empty() {
-                    extracted_roles.insert(role.to_ascii_lowercase());
+        claims.eml = trusted_email.clone().unwrap_or_default();
+        claims.sub = resolved_subject(&user_info, trusted_email.as_deref());
+        let mut extracted_roles =
+            extract_roles_from_collections(&user_info.realm_access, &user_info.resource_access);
+        let mut used_access_token_role_fallback = false;
+        if extracted_roles.is_empty() {
+            if let Some(token_roles) = extract_roles_from_access_token(&access_token) {
+                if !token_roles.is_empty() {
+                    extracted_roles = token_roles;
+                    used_access_token_role_fallback = true;
                 }
             }
         }
@@ -400,55 +524,47 @@ impl ServiceHandler for OAuthAuthHandler {
             .iter()
             .map(|v| v.to_ascii_lowercase())
             .collect();
-        let has_role_constraints = !(admin_roles.is_empty() && allowed_roles.is_empty());
-        let has_user_constraints =
-            !(self.config.admin_users.is_empty() && self.config.allowed_users.is_empty());
-        let mut authorized = !(has_role_constraints || has_user_constraints);
-        if !admin_roles.is_empty()
-            && extracted_roles
-                .iter()
-                .any(|role| admin_roles.contains(role))
-        {
-            claims.rol = UserRole::Admin;
-            authorized = true;
-        } else if !allowed_roles.is_empty()
-            && extracted_roles
-                .iter()
-                .any(|role| allowed_roles.contains(role))
-        {
-            claims.rol = UserRole::User;
-            authorized = true;
-        }
-        let user_identifiers = vec![user_info.sub, user_info.email, user_info.preferred_username];
-        if !self.config.admin_users.is_empty()
-            && user_identifiers
-                .iter()
-                .filter(|v| !v.is_empty())
-                .any(|identifier| {
-                    self.config
-                        .admin_users
-                        .iter()
-                        .any(|candidate| candidate.eq_ignore_ascii_case(identifier))
-                })
-        {
-            claims.rol = UserRole::Admin;
-            authorized = true;
-        } else if !self.config.allowed_users.is_empty()
-            && user_identifiers
-                .iter()
-                .filter(|v| !v.is_empty())
-                .any(|identifier| {
-                    self.config
-                        .allowed_users
-                        .iter()
-                        .any(|candidate| candidate.eq_ignore_ascii_case(identifier))
-                })
-        {
-            claims.rol = UserRole::User;
-            authorized = true;
-        }
-        if !authorized {
-            claims.rol = UserRole::None;
+        info!(
+            "Keycloak userinfo resolved sub={} eml={} email_verified={} require_verified_email={} preferred_username={} extracted_roles={:?} used_access_token_role_fallback={} admin_roles={:?} allowed_roles={:?} default_role={:?}",
+            claims.uid,
+            claims.eml,
+            user_info.email_verified,
+            self.config.require_verified_email,
+            claims.sub,
+            sorted_strings(&extracted_roles),
+            used_access_token_role_fallback,
+            sorted_strings(&admin_roles),
+            sorted_strings(&allowed_roles),
+            self.config.default_role,
+        );
+        claims.rol = resolve_authorized_role(
+            self.config.default_role,
+            &extracted_roles,
+            &admin_roles,
+            &allowed_roles,
+        );
+        if claims.rol == UserRole::None {
+            warn!(
+                "Keycloak authorization denied sub={} eml={} email_verified={} require_verified_email={} preferred_username={} extracted_roles={:?} used_access_token_role_fallback={} admin_roles={:?} allowed_roles={:?} default_role={:?}",
+                claims.uid,
+                claims.eml,
+                user_info.email_verified,
+                self.config.require_verified_email,
+                claims.sub,
+                sorted_strings(&extracted_roles),
+                used_access_token_role_fallback,
+                sorted_strings(&admin_roles),
+                sorted_strings(&allowed_roles),
+                self.config.default_role,
+            );
+        } else {
+            info!(
+                "Keycloak authorization granted sub={} eml={} preferred_username={} resolved_role={:?}",
+                claims.uid,
+                claims.eml,
+                claims.sub,
+                claims.rol,
+            );
         }
         session.write().await.data.insert(claims.clone());
         info!("Running OAuth success handlers");
@@ -458,7 +574,8 @@ impl ServiceHandler for OAuthAuthHandler {
             .data
             .remove::<OAuthLoginRedirectParams>();
         let url = if let Some(redirect) = maybe_redirect {
-            redirect.redirect_url.clone()
+            sanitize_relative_redirect_target(&redirect.redirect_url)
+                .unwrap_or_else(|| self.config.on_success_redirect.clone())
         } else {
             self.config.on_success_redirect.clone()
         };
@@ -484,12 +601,11 @@ pub struct OAuthLoginBuilder {
     pub claims_audience: Option<String>,
     pub claims_issuer: Option<String>,
     pub claims_expire_time: Option<usize>,
+    pub require_verified_email: Option<bool>,
     pub default_role: Option<UserRole>,
     pub callbacks: Vec<OAuthCallbackFn>,
     pub allowed_roles: Vec<String>,
     pub admin_roles: Vec<String>,
-    pub allowed_users: Vec<String>,
-    pub admin_users: Vec<String>,
 }
 
 impl OAuthLoginBuilder {
@@ -547,7 +663,15 @@ impl OAuthLoginBuilder {
         let default_role = env::var("KEYCLOAK_DEFAULT_ROLE")
             .ok()
             .and_then(|v| UserRole::from_str(v.trim()).ok())
-            .unwrap_or(UserRole::User);
+            .unwrap_or(UserRole::None);
+        let require_verified_email = env::var("KEYCLOAK_REQUIRE_VERIFIED_EMAIL")
+            .ok()
+            .and_then(|v| match v.trim().to_ascii_lowercase().as_str() {
+                "true" | "1" | "yes" | "on" => Some(true),
+                "false" | "0" | "no" | "off" => Some(false),
+                _ => None,
+            })
+            .unwrap_or(true);
         Some(
             OAuthLoginBuilder::new()
                 .client_id(client_id.clone())
@@ -573,11 +697,10 @@ impl OAuthLoginBuilder {
                         .map(|s| s.parse().unwrap_or(30usize * 60usize))
                         .unwrap_or(30usize * 60usize),
                 )
+                .require_verified_email(require_verified_email)
                 .default_role(default_role)
                 .allowed_roles(&csv_env("KEYCLOAK_ALLOWED_ROLES"))
-                .admin_roles(&csv_env("KEYCLOAK_ADMIN_ROLES"))
-                .allowed_users(&csv_env("KEYCLOAK_ALLOWED_USERS"))
-                .admin_users(&csv_env("KEYCLOAK_ADMIN_USERS")),
+                .admin_roles(&csv_env("KEYCLOAK_ADMIN_ROLES")),
         )
     }
 
@@ -640,6 +763,11 @@ impl OAuthLoginBuilder {
         s.claims_expire_time = Some(claims_expire_time);
         s
     }
+    pub fn require_verified_email(self, require_verified_email: bool) -> Self {
+        let mut s = self;
+        s.require_verified_email = Some(require_verified_email);
+        s
+    }
     pub fn default_role(self, default_role: UserRole) -> Self {
         let mut s = self;
         s.default_role = Some(default_role);
@@ -658,16 +786,6 @@ impl OAuthLoginBuilder {
     pub fn admin_roles(self, admin_roles: &[String]) -> Self {
         let mut s = self;
         s.admin_roles.extend(admin_roles.iter().cloned());
-        s
-    }
-    pub fn allowed_users(self, allowed_users: &[String]) -> Self {
-        let mut s = self;
-        s.allowed_users.extend(allowed_users.iter().cloned());
-        s
-    }
-    pub fn admin_users(self, admin_users: &[String]) -> Self {
-        let mut s = self;
-        s.admin_users.extend(admin_users.iter().cloned());
         s
     }
     pub fn callbacks(self, callback: OAuthCallbackFn) -> Self {
@@ -727,11 +845,10 @@ impl OAuthLoginBuilder {
             claims_audience: self.claims_audience.unwrap_or_default(),
             claims_issuer: self.claims_issuer.unwrap_or_default(),
             claims_expire_time: self.claims_expire_time.unwrap_or(0),
-            default_role: self.default_role.unwrap_or(UserRole::User),
+            require_verified_email: self.require_verified_email.unwrap_or(true),
+            default_role: self.default_role.unwrap_or(UserRole::None),
             allowed_roles: self.allowed_roles,
             admin_roles: self.admin_roles,
-            allowed_users: self.allowed_users,
-            admin_users: self.admin_users,
             callbacks: self.callbacks,
         });
         debug!("Configured keycloak oauth issuer={}", config.issuer_url);
@@ -761,4 +878,144 @@ fn csv_env(var_name: &str) -> Vec<String> {
         .filter(|entry| !entry.is_empty())
         .map(ToOwned::to_owned)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn set(values: &[&str]) -> HashSet<String> {
+        values.iter().map(|value| value.to_string()).collect()
+    }
+
+    #[test]
+    fn default_role_does_not_bypass_role_allowlist() {
+        let role = resolve_authorized_role(
+            UserRole::User,
+            &HashSet::new(),
+            &set(&["nebula-admin"]),
+            &HashSet::new(),
+        );
+
+        assert_eq!(role, UserRole::None);
+    }
+
+    #[test]
+    fn admin_role_overrides_default_role() {
+        let role = resolve_authorized_role(
+            UserRole::User,
+            &set(&["nebula-admin"]),
+            &set(&["nebula-admin"]),
+            &HashSet::new(),
+        );
+
+        assert_eq!(role, UserRole::Admin);
+    }
+
+    #[test]
+    fn allowed_roles_still_gate_non_admin_access() {
+        let denied_role = resolve_authorized_role(
+            UserRole::User,
+            &HashSet::new(),
+            &set(&["nebula-admin"]),
+            &set(&["nebula-user"]),
+        );
+        let allowed_role = resolve_authorized_role(
+            UserRole::User,
+            &set(&["nebula-user"]),
+            &set(&["nebula-admin"]),
+            &set(&["nebula-user"]),
+        );
+
+        assert_eq!(denied_role, UserRole::None);
+        assert_eq!(allowed_role, UserRole::User);
+    }
+
+    #[test]
+    fn allowed_roles_fall_back_to_user_when_default_role_is_none() {
+        let allowed_role = resolve_authorized_role(
+            UserRole::None,
+            &set(&["nebula-user"]),
+            &set(&["nebula-admin"]),
+            &set(&["nebula-user"]),
+        );
+
+        assert_eq!(allowed_role, UserRole::User);
+    }
+
+    #[test]
+    fn extracts_roles_from_access_token_payload() {
+        let token = "eyJhbGciOiJub25lIn0.eyJyZWFsbV9hY2Nlc3MiOnsicm9sZXMiOlsibmVidWxhLWFkbWluIl19LCJyZXNvdXJjZV9hY2Nlc3MiOnsibmVidWxhLWNtcy1kZXYtcmVhbG0iOnsicm9sZXMiOlsibmVidWxhLXVzZXIiXX19fQ.";
+        let roles = extract_roles_from_access_token(token).unwrap();
+
+        assert!(roles.contains("nebula-admin"));
+        assert!(roles.contains("nebula-user"));
+    }
+
+    #[test]
+    fn unverified_email_is_not_trusted_for_subject_or_authorization() {
+        let user_info = UserInfo {
+            sub: "subject-id".to_string(),
+            email: "person@example.com".to_string(),
+            email_verified: false,
+            preferred_username: String::new(),
+            ..Default::default()
+        };
+
+        let trusted_email = trusted_userinfo_email(&user_info, true);
+        assert!(trusted_email.is_none());
+        assert_eq!(
+            resolved_subject(&user_info, trusted_email.as_deref()),
+            "subject-id"
+        );
+    }
+
+    #[test]
+    fn verified_email_is_available_for_authorization_when_present() {
+        let user_info = UserInfo {
+            sub: "subject-id".to_string(),
+            email: "person@example.com".to_string(),
+            email_verified: true,
+            preferred_username: "nebula-user".to_string(),
+            ..Default::default()
+        };
+
+        let trusted_email = trusted_userinfo_email(&user_info, true);
+        assert_eq!(trusted_email.as_deref(), Some("person@example.com"));
+        assert_eq!(
+            resolved_subject(&user_info, trusted_email.as_deref()),
+            "nebula-user"
+        );
+    }
+
+    #[test]
+    fn unverified_email_can_be_used_when_requirement_is_disabled() {
+        let user_info = UserInfo {
+            sub: "subject-id".to_string(),
+            email: "person@example.com".to_string(),
+            email_verified: false,
+            preferred_username: String::new(),
+            ..Default::default()
+        };
+
+        let trusted_email = trusted_userinfo_email(&user_info, false);
+        assert_eq!(trusted_email.as_deref(), Some("person@example.com"));
+        assert_eq!(
+            resolved_subject(&user_info, trusted_email.as_deref()),
+            "person@example.com"
+        );
+    }
+
+    #[test]
+    fn auth_request_defaults_missing_callback_fields() {
+        let body: AuthRequest = serde_json::from_value(serde_json::json!({
+            "state": "abc123"
+        }))
+        .expect("auth request should deserialize with defaults");
+
+        assert_eq!(body.code, "");
+        assert_eq!(body.state, "abc123");
+        assert_eq!(body.error, "");
+        assert_eq!(body.error_description, "");
+    }
 }

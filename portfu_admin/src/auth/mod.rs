@@ -43,23 +43,15 @@ pub trait BasicAuth {
 
 #[get("/auth/jwt")]
 pub async fn get_jwt(data: &mut ServiceData) -> Result<String, Error> {
-    if let Some(session) = data.request.get::<Arc<RwLock<Session>>>() {
+    let session = data.request.get::<Arc<RwLock<Session>>>().cloned();
+    if let Some(session) = session.as_ref() {
         debug!("Found Session: {}", session.read().await.id);
         if let Some(claims) = session.read().await.data.get::<Claims>() {
             debug!("Found Claims for Session: {}", session.read().await.id);
-            return encode(
-                &Header::default(),
-                claims,
-                &EncodingKey::from_secret(CURRENT_SECRET.as_bytes()),
-            )
-            .map_err(|e| {
-                Error::new(
-                    ErrorKind::InvalidInput,
-                    format!("Failed to Encode JWT: {e:?}"),
-                )
-            });
+            return encode_claims(claims);
         }
     }
+
     *data.response.status_mut() = StatusCode::NOT_FOUND;
     Ok(String::new())
 }
@@ -96,19 +88,19 @@ pub async fn basic_login<B: BasicAuth + Send + Sync + 'static>(
     })
 }
 
-pub static CURRENT_SECRET: Lazy<String> =
-    Lazy::new(|| env::var("JWT_SECRET").unwrap_or_else(|_| Uuid::new_v4().to_string()));
-
-pub static VALIDATIONS: Lazy<Validation> = Lazy::new(|| {
-    let mut val = Validation::default();
-    val.set_audience(&["localhost"]);
-    val.set_issuer(&["localhost"]);
-    val.set_required_spec_claims(&[
-        "aud", "exp", "iat", "iat", "iss", "nbf", "sub", "eml", "rol", "org",
-    ]);
-    val.validate_exp = false;
-    val
+pub static CURRENT_SECRET: Lazy<String> = Lazy::new(|| match env::var("JWT_SECRET") {
+    Ok(secret) if !secret.trim().is_empty() => secret,
+    _ if require_jwt_secret() => {
+        panic!("JWT_SECRET is required when REQUIRE_JWT_SECRET is enabled")
+    }
+    _ => {
+        warn!("JWT_SECRET is unset; falling back to an ephemeral secret");
+        Uuid::new_v4().to_string()
+    }
 });
+
+pub static VALIDATIONS: Lazy<Validation> =
+    Lazy::new(|| build_validation(&current_audience(), &current_issuer(), true));
 
 const UNAUTHORIZED_BODY: &[u8] = br#"{"error":"unauthorized"}"#;
 const FORBIDDEN_BODY: &[u8] = br#"{"error":"forbidden"}"#;
@@ -138,6 +130,64 @@ fn extract_jwt_from_headers(data: &ServiceData) -> Option<String> {
     }
 
     None
+}
+
+fn current_issuer() -> String {
+    env::var("JWT_ISSUER")
+        .or_else(|_| env::var("KEYCLOAK_ISSUER"))
+        .unwrap_or_else(|_| "localhost".to_string())
+}
+
+fn require_jwt_secret() -> bool {
+    env::var("REQUIRE_JWT_SECRET")
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn current_audience() -> String {
+    env::var("JWT_AUDIENCE")
+        .or_else(|_| env::var("KEYCLOAK_AUDIENCE"))
+        .or_else(|_| env::var("KEYCLOAK_CLIENT_ID"))
+        .unwrap_or_else(|_| "localhost".to_string())
+}
+
+fn build_validation(audience: &str, issuer: &str, validate_exp: bool) -> Validation {
+    let mut val = Validation::default();
+    val.set_audience(&[audience]);
+    val.set_issuer(&[issuer]);
+    val.set_required_spec_claims(&[
+        "aud", "exp", "iat", "iat", "iss", "nbf", "sub", "eml", "rol", "org",
+    ]);
+    val.validate_exp = validate_exp;
+    val
+}
+
+fn decode_claims(token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
+    decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(CURRENT_SECRET.as_bytes()),
+        &VALIDATIONS,
+    )
+    .map(|token_data| token_data.claims)
+}
+
+fn encode_claims(claims: &Claims) -> Result<String, Error> {
+    encode(
+        &Header::default(),
+        claims,
+        &EncodingKey::from_secret(CURRENT_SECRET.as_bytes()),
+    )
+    .map_err(|e| {
+        Error::new(
+            ErrorKind::InvalidInput,
+            format!("Failed to Encode JWT: {e:?}"),
+        )
+    })
 }
 
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
@@ -201,25 +251,21 @@ macro_rules! user_role_macro {
                 }
 
                 if let Some(jwt_token) = extract_jwt_from_headers(data) {
-                    match decode::<Claims>(
-                        &jwt_token,
-                        &DecodingKey::from_secret(CURRENT_SECRET.as_bytes()),
-                        &*VALIDATIONS,
-                    ) {
-                        Ok(token_data) => {
+                    match decode_claims(&jwt_token) {
+                        Ok(claims) => {
                             debug!(
                                 "Admin auth JWT decoded path={} role={:?} uid={} sub={}",
                                 path,
-                                token_data.claims.rol,
-                                token_data.claims.uid,
-                                token_data.claims.sub
+                                claims.rol,
+                                claims.uid,
+                                claims.sub
                             );
 
                             if let Some(session_ref) = session.as_ref() {
-                                session_ref.write().await.data.insert(token_data.claims.clone());
+                                session_ref.write().await.data.insert(claims.clone());
                             }
 
-                            if token_data.claims.rol >= UserRole::$object {
+                            if claims.rol >= UserRole::$object {
                                 return Ok(MiddlewareResult::Continue);
                             }
 
@@ -227,7 +273,7 @@ macro_rules! user_role_macro {
                                 "Admin auth forbidden after JWT decode path={} required_role={:?} actual_role={:?}",
                                 path,
                                 UserRole::$object,
-                                token_data.claims.rol
+                                claims.rol
                             );
                             set_auth_error(data, StatusCode::FORBIDDEN, FORBIDDEN_BODY);
                             return Ok(MiddlewareResult::Return);
@@ -273,3 +319,49 @@ user_role_macro!(EDITOR, Editor);
 user_role_macro!(MANAGER, Manager);
 user_role_macro!(ADMIN, Admin);
 user_role_macro!(SUPERADMIN, SuperAdmin);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_claims() -> Claims {
+        Claims {
+            aud: "localhost".to_string(),
+            exp: 4_102_444_800,
+            iat: 1_700_000_000,
+            iss: "localhost".to_string(),
+            nbf: 1_700_000_000,
+            sub: "42".to_string(),
+            eml: "user@example.com".to_string(),
+            uid: "42".to_string(),
+            rol: UserRole::User,
+            org: vec![],
+        }
+    }
+
+    #[test]
+    fn build_validation_uses_supplied_audience_and_issuer() {
+        let validation = build_validation("nebula-dev", "https://issuer.example", false);
+        assert_eq!(
+            validation.aud,
+            Some(std::collections::HashSet::from(["nebula-dev".to_string()]))
+        );
+        assert_eq!(
+            validation.iss,
+            Some(std::collections::HashSet::from([
+                "https://issuer.example".to_string()
+            ]))
+        );
+        assert!(!validation.validate_exp);
+    }
+
+    #[test]
+    fn decode_claims_accepts_locally_issued_token() {
+        let claims = sample_claims();
+        let token = encode_claims(&claims).expect("token should encode");
+        let decoded = decode_claims(&token).expect("token should decode");
+        assert_eq!(decoded.sub, "42");
+        assert_eq!(decoded.uid, "42");
+        assert_eq!(decoded.eml, "user@example.com");
+    }
+}
