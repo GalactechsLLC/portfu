@@ -1,11 +1,15 @@
 pub mod builder;
 pub mod config;
+#[cfg(feature = "tls")]
 mod ssl;
 pub mod state;
 
 use crate::error::PortfuError;
+use crate::router::middleware::{Middleware, MiddlewareResult};
 use crate::router::route::Route;
 use crate::server::config::ServerConfig;
+#[cfg(feature = "tls")]
+use crate::server::ssl::load_ssl_certs;
 use crate::service::request::{Request, RequestType};
 use crate::service::response::Response;
 use crate::service::{Service, StreamingBody};
@@ -28,9 +32,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::net::{TcpListener, TcpSocket};
 use tokio::sync::{RwLock, watch};
 use tokio::{select, spawn};
+#[cfg(feature = "tls")]
 use tokio_rustls::TlsAcceptor;
-
-use crate::server::ssl::load_ssl_certs;
 
 pub trait ServiceRegister: Send + Sync {
     fn register(self, registry: &mut ServiceRegistry);
@@ -75,6 +78,8 @@ pub struct Server {
     pub run: Arc<AtomicBool>,
     pub config: ServerConfig,
     pub scoped_state: Arc<RwLock<HashMap<String, Extensions>>>,
+    pub services: Vec<Service>,
+    pub middleware: Vec<Arc<dyn Middleware + Send + Sync>>,
     pub default_service: Option<Service>,
     pub health_service: Option<Service>,
 }
@@ -124,6 +129,7 @@ impl Server {
         http.preserve_header_case(server.config.preserve_header_case);
         http.max_buf_size(server.config.max_buf_size);
         let http = Arc::new(http);
+        #[cfg(feature = "tls")]
         let tls_acceptor = if server.config.enable_ssl
             || server.config.ssl_config.is_some()
             || !server.config.sni_ssl_configs.is_empty()
@@ -138,6 +144,20 @@ impl Server {
         } else {
             None
         };
+        #[cfg(not(feature = "tls"))]
+        if server.config.enable_ssl
+            || server.config.ssl_config.is_some()
+            || !server.config.sni_ssl_configs.is_empty()
+            || (env::var("PRIVATE_CA_CRT").ok().is_some()
+                && env::var("PRIVATE_CA_KEY").ok().is_some())
+            || (env::var("SSL_CERTS").ok().is_some()
+                && env::var("SSL_PRIVATE_KEY").ok().is_some()
+                && env::var("SSL_ROOT_CERTS").ok().is_some())
+        {
+            return Err(PortfuError::Internal(
+                "TLS support requires the `tls` feature".to_string(),
+            ));
+        }
         let server_run_handle = server.run.clone();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let shutdown_tx_handle = shutdown_tx.clone();
@@ -159,6 +179,7 @@ impl Server {
         for listener in listeners {
             let server = server.clone();
             let http = http.clone();
+            #[cfg(feature = "tls")]
             let tls_acceptor = tls_acceptor.clone();
             let mut shutdown_rx = shutdown_rx.clone();
             acceptor_handles.push(spawn(async move {
@@ -172,8 +193,10 @@ impl Server {
                                 Ok((stream, address)) => {
                                     let server = server.clone();
                                     let http = http.clone();
+                                    #[cfg(feature = "tls")]
                                     let tls_acceptor = tls_acceptor.clone();
                                     spawn(async move {
+                                        #[cfg(feature = "tls")]
                                         if let Some(acceptor) = tls_acceptor.as_ref() {
                                             match acceptor.accept(stream).await {
                                                 Ok(stream) => {
@@ -190,15 +213,15 @@ impl Server {
                                                     error!("Error accepting tls connection: {e:?}");
                                                 }
                                             }
-                                        } else {
-                                            let service = service_fn(move |req| {
-                                                let server = server.clone();
-                                                Self::connection_handler(server, req, address)
-                                            });
-                                            let connection = http.serve_connection(TokioIo::new(stream), service).with_upgrades();
-                                            if let Err(err) = connection.await {
-                                                error!("Error serving connection: {err:?}");
-                                            }
+                                            return;
+                                        }
+                                        let service = service_fn(move |req| {
+                                            let server = server.clone();
+                                            Self::connection_handler(server, req, address)
+                                        });
+                                        let connection = http.serve_connection(TokioIo::new(stream), service).with_upgrades();
+                                        if let Err(err) = connection.await {
+                                            error!("Error serving connection: {err:?}");
                                         }
                                     });
                                 }
@@ -261,6 +284,7 @@ impl Server {
             RequestType::Stream(request.map(|b| b.stream_body())),
             DEFAULT_ROUTE.clone(),
         );
+        Self::set_request_scope_state(&mut request, &scoped_state, DEFAULT_SCOPE, address);
         if request.uri().path() == "/health" {
             return match &server.health_service {
                 Some(service) => {
@@ -272,19 +296,44 @@ impl Server {
                     );
                     *request.route_mut() = service.route().clone();
                     if service.serves(&request).await {
-                        service.serve(&mut request).await.map(Into::into)
+                        Self::serve_with_global_middleware(&server, service, &mut request)
+                            .await
+                            .map(Into::into)
                     } else {
-                        Ok(Response::ok("OK").into())
+                        Self::finalize_with_global_middleware(
+                            &server.middleware,
+                            &request,
+                            Response::ok("OK"),
+                        )
+                        .await
+                        .map(Into::into)
                     }
                 }
-                None => Ok(Response::ok("OK").into()),
+                None => Self::finalize_with_global_middleware(
+                    &server.middleware,
+                    &request,
+                    Response::ok("OK"),
+                )
+                .await
+                .map(Into::into),
             };
+        }
+        for service in &server.services {
+            Self::set_request_scope_state(&mut request, &scoped_state, service.scope(), address);
+            if service.serves(&request).await {
+                *request.route_mut() = service.route().clone();
+                return Self::serve_with_global_middleware(&server, service, &mut request)
+                    .await
+                    .map(Into::into);
+            }
         }
         for service in &SERVICE_REGISTRY.services {
             Self::set_request_scope_state(&mut request, &scoped_state, service.scope(), address);
             if service.serves(&request).await {
                 *request.route_mut() = service.route().clone();
-                return service.serve(&mut request).await.map(Into::into);
+                return Self::serve_with_global_middleware(&server, service, &mut request)
+                    .await
+                    .map(Into::into);
             }
         }
         match &server.default_service {
@@ -295,10 +344,58 @@ impl Server {
                     service.scope(),
                     address,
                 );
-                service.serve(&mut request).await.map(Into::into)
+                Self::serve_with_global_middleware(&server, service, &mut request)
+                    .await
+                    .map(Into::into)
             }
-            None => Ok(Response::not_found("Failed to find service for request").into()),
+            None => Self::finalize_with_global_middleware(
+                &server.middleware,
+                &request,
+                Response::not_found("Failed to find service for request"),
+            )
+            .await
+            .map(Into::into),
         }
+    }
+
+    async fn serve_with_global_middleware(
+        server: &Arc<Self>,
+        service: &Service,
+        request: &mut Request,
+    ) -> Result<Response, PortfuError> {
+        for middleware in &server.middleware {
+            match middleware.before(request).await? {
+                MiddlewareResult::Continue => {}
+                MiddlewareResult::Return(response) => {
+                    return Self::finalize_with_global_middleware(
+                        &server.middleware,
+                        request,
+                        response,
+                    )
+                    .await;
+                }
+            }
+        }
+
+        let response = service.serve(request).await?;
+        Self::finalize_with_global_middleware(&server.middleware, request, response).await
+    }
+
+    async fn finalize_with_global_middleware(
+        middleware: &[Arc<dyn Middleware + Send + Sync>],
+        request: &Request,
+        mut response: Response,
+    ) -> Result<Response, PortfuError> {
+        for middleware in middleware {
+            match middleware
+                .after_with_request(request, &mut response)
+                .await?
+            {
+                MiddlewareResult::Continue => {}
+                MiddlewareResult::Return(response) => return Ok(response),
+            }
+        }
+        Ok(response)
     }
 
     fn set_request_scope_state(
@@ -308,8 +405,9 @@ impl Server {
         address: SocketAddr,
     ) {
         if let Some(extensions) = request.shared_state_mut() {
-            extensions.insert(address);
-            extensions.extend(Self::scope_state(scoped_state, scope));
+            let mut scoped_extensions = Self::scope_state(scoped_state, scope);
+            scoped_extensions.insert(address);
+            *extensions = scoped_extensions;
         }
     }
 
@@ -321,5 +419,53 @@ impl Server {
             extensions.extend(scope_extensions.clone());
         }
         extensions
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DEFAULT_SCOPE, Route, Server};
+    use crate::service::request::{Request, RequestType};
+    use http::Extensions;
+    use http_body_util::Full;
+    use hyper::body::Bytes;
+    use std::collections::HashMap;
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use std::sync::Arc;
+
+    struct DefaultState;
+    struct TenantState;
+    struct PreviousState;
+
+    #[test]
+    fn set_request_scope_state_replaces_previous_candidate_scope_state() {
+        let mut scoped_state = HashMap::new();
+        let mut default_extensions = Extensions::new();
+        default_extensions.insert(Arc::new(DefaultState));
+        scoped_state.insert(DEFAULT_SCOPE.to_string(), default_extensions);
+
+        let mut tenant_extensions = Extensions::new();
+        tenant_extensions.insert(Arc::new(TenantState));
+        scoped_state.insert("tenant".to_string(), tenant_extensions);
+
+        let request = http::Request::builder()
+            .uri("/scoped")
+            .body(Full::new(Bytes::new()))
+            .expect("request build failed");
+        let mut request = Request::new(
+            RequestType::Sized(request),
+            Arc::new(Route::new("/scoped".to_string())),
+        );
+        request.insert(Arc::new(PreviousState));
+
+        let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080);
+        Server::set_request_scope_state(&mut request, &scoped_state, "tenant", address);
+        assert!(request.get::<Arc<PreviousState>>().is_none());
+        assert!(request.get::<Arc<DefaultState>>().is_some());
+        assert!(request.get::<Arc<TenantState>>().is_some());
+
+        Server::set_request_scope_state(&mut request, &scoped_state, "other", address);
+        assert!(request.get::<Arc<DefaultState>>().is_some());
+        assert!(request.get::<Arc<TenantState>>().is_none());
     }
 }

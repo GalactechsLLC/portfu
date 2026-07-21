@@ -1,18 +1,27 @@
 use http::Method;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
+use portfu_common::auth::oauth::{
+    OAUTH, OAuthIdentity, OAuthToken, SessionOAuthIdentity, SessionOAuthToken,
+};
 use portfu_common::error::PortfuError;
 use portfu_common::router::filter::{self, FilterResult, traits::Filter as FilterTrait};
 use portfu_common::router::route::Route;
+use portfu_common::server::builder::ServerBuilder;
 use portfu_common::service::builder::ServiceBuilder;
 use portfu_common::service::request::{Body, FromRequest, Json, Query, Request, RequestType};
 use portfu_common::service::response::{JsonResponse, Response, Serialized};
 use portfu_common::service::traits::Service as ServiceTrait;
+use portfu_common::wrappers::cors::Cors;
+use portfu_common::wrappers::metrics::MetricsWrapper;
+use portfu_common::wrappers::rate_limits::RateLimiter;
+use portfu_common::wrappers::sessions::{Session, SessionState};
 use serde::Deserialize;
 use serde::Serialize;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 #[derive(Clone)]
 struct OkService;
@@ -241,6 +250,100 @@ async fn filters_any_all_and_or_behave_as_expected() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn session_and_oauth_extractors_read_request_session() {
+    let mut request = request_with_session(Some(OAuthToken {
+        access_token: "access".to_string(),
+        refresh_token: None,
+        token_type: "Bearer".to_string(),
+        expires_in_seconds: Some(60),
+        scopes: vec!["profile".to_string(), "email".to_string()],
+    }))
+    .await;
+
+    let session = <SessionState as FromRequest<Request>>::try_from(&mut request)
+        .await
+        .expect("session extractor should succeed");
+    assert_eq!(
+        session.inner().read().await.id,
+        request
+            .get::<Arc<RwLock<Session>>>()
+            .unwrap()
+            .read()
+            .await
+            .id
+    );
+
+    let token = <OAuthToken as FromRequest<Request>>::try_from(&mut request)
+        .await
+        .expect("oauth token extractor should succeed");
+    assert_eq!(token.access_token, "access");
+    assert_eq!(
+        token.scopes,
+        vec!["profile".to_string(), "email".to_string()]
+    );
+
+    let identity = <OAuthIdentity as FromRequest<Request>>::try_from(&mut request)
+        .await
+        .expect("oauth identity extractor should succeed");
+    assert_eq!(identity.subject, "user-1");
+    assert_eq!(identity.email.as_deref(), Some("user@example.com"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn auth_filters_lock_routes_against_session_and_oauth_state() {
+    let anonymous = basic_request();
+    assert_eq!(
+        filter::auth::session().filter(&anonymous).await,
+        FilterResult::Block
+    );
+    assert_eq!(
+        filter::auth::oauth().filter(&anonymous).await,
+        FilterResult::Block
+    );
+
+    let session_only = request_with_session(None).await;
+    assert_eq!(
+        filter::auth::session().filter(&session_only).await,
+        FilterResult::Allow
+    );
+    assert_eq!(
+        filter::auth::oauth().filter(&session_only).await,
+        FilterResult::Block
+    );
+
+    let oauth_request = request_with_session(Some(OAuthToken {
+        access_token: "access".to_string(),
+        refresh_token: None,
+        token_type: "Bearer".to_string(),
+        expires_in_seconds: None,
+        scopes: vec!["read".to_string(), "write".to_string()],
+    }))
+    .await;
+    assert_eq!(
+        filter::auth::oauth().filter(&oauth_request).await,
+        FilterResult::Allow
+    );
+    assert_eq!(
+        filter::auth::oauth_scope("read")
+            .filter(&oauth_request)
+            .await,
+        FilterResult::Allow
+    );
+    assert_eq!(
+        filter::auth::oauth_all_scopes(["read", "admin"])
+            .filter(&oauth_request)
+            .await,
+        FilterResult::Block
+    );
+    assert_eq!(
+        filter::auth::oauth_any_scope(["admin", "write"])
+            .filter(&oauth_request)
+            .await,
+        FilterResult::Allow
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn service_builder_scope_domain_and_filters_are_enforced() {
     let service = ServiceBuilder::new("/scoped")
         .name("scoped-service")
@@ -287,4 +390,240 @@ async fn service_builder_scope_domain_and_filters_are_enforced() {
     assert!(service.serves(&matching).await);
     assert!(!service.serves(&non_matching_domain).await);
     assert!(!service.serves(&non_matching_method).await);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cors_wrapper_allows_all_origins_methods_and_headers() {
+    let service = ServiceBuilder::new("/cors")
+        .name("cors-allow-all")
+        .filter(filter::method::OPTIONS.clone())
+        .wrap(Arc::new(Cors::allow_all()))
+        .handler(Arc::new(OkService))
+        .build();
+
+    let request = http::Request::builder()
+        .method(Method::OPTIONS)
+        .uri("/cors")
+        .header(http::header::ORIGIN, "https://example.test")
+        .body(Full::new(Bytes::new()))
+        .expect("request build failed");
+    let mut request = Request::new(
+        RequestType::Sized(request),
+        Arc::new(Route::new("/cors".to_string())),
+    );
+
+    assert!(service.serves(&request).await);
+    let response = service.serve(&mut request).await.expect("service failed");
+
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|v| v.to_str().ok()),
+        Some("*")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-methods")
+            .and_then(|v| v.to_str().ok()),
+        Some("*")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-headers")
+            .and_then(|v| v.to_str().ok()),
+        Some("*")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-credentials")
+            .and_then(|v| v.to_str().ok()),
+        Some("false")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cors_wrapper_reflects_only_allowed_origin_and_requested_headers() {
+    let service = ServiceBuilder::new("/cors")
+        .name("cors-allow-list")
+        .filter(filter::method::GET.clone())
+        .wrap(Arc::new(Cors::new(
+            vec!["https://allowed.test".to_string()],
+            vec!["GET".to_string(), "POST".to_string()],
+            vec![
+                http::HeaderName::from_static("content-type"),
+                http::HeaderName::from_static("x-api-key"),
+            ],
+            true,
+        )))
+        .handler(Arc::new(OkService))
+        .build();
+
+    let allowed_request = http::Request::builder()
+        .method(Method::GET)
+        .uri("/cors")
+        .header(http::header::ORIGIN, "https://allowed.test")
+        .header(
+            "access-control-request-headers",
+            "X-Api-Key, X-Denied, Content-Type",
+        )
+        .body(Full::new(Bytes::new()))
+        .expect("request build failed");
+    let mut allowed_request = Request::new(
+        RequestType::Sized(allowed_request),
+        Arc::new(Route::new("/cors".to_string())),
+    );
+    let allowed_response = service
+        .serve(&mut allowed_request)
+        .await
+        .expect("service failed");
+
+    assert_eq!(
+        allowed_response
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|v| v.to_str().ok()),
+        Some("https://allowed.test")
+    );
+    assert_eq!(
+        allowed_response
+            .headers()
+            .get("access-control-allow-methods")
+            .and_then(|v| v.to_str().ok()),
+        Some("GET,POST")
+    );
+    assert_eq!(
+        allowed_response
+            .headers()
+            .get("access-control-allow-headers")
+            .and_then(|v| v.to_str().ok()),
+        Some("x-api-key,content-type")
+    );
+    assert_eq!(
+        allowed_response
+            .headers()
+            .get("access-control-allow-credentials")
+            .and_then(|v| v.to_str().ok()),
+        Some("true")
+    );
+
+    let denied_request = http::Request::builder()
+        .method(Method::GET)
+        .uri("/cors")
+        .header(http::header::ORIGIN, "https://denied.test")
+        .body(Full::new(Bytes::new()))
+        .expect("request build failed");
+    let mut denied_request = Request::new(
+        RequestType::Sized(denied_request),
+        Arc::new(Route::new("/cors".to_string())),
+    );
+    let denied_response = service
+        .serve(&mut denied_request)
+        .await
+        .expect("service failed");
+
+    assert!(
+        denied_response
+            .headers()
+            .get("access-control-allow-origin")
+            .is_none()
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rate_limiter_rejects_payloads_over_size_limit() {
+    let service = ServiceBuilder::new("/limited")
+        .name("limited")
+        .filter(filter::method::POST.clone())
+        .wrap(Arc::new(RateLimiter::default().request_size_limit(4)))
+        .handler(Arc::new(OkService))
+        .build();
+
+    let request = http::Request::builder()
+        .method(Method::POST)
+        .uri("/limited")
+        .body(Full::new(Bytes::from_static(b"too-large")))
+        .expect("request build failed");
+    let mut request = Request::new(
+        RequestType::Sized(request),
+        Arc::new(Route::new("/limited".to_string())),
+    );
+
+    let response = service.serve(&mut request).await.expect("service failed");
+    assert_eq!(response.status(), http::StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+#[test]
+fn server_builder_adds_wrapper_services_without_inventory() {
+    let server = ServerBuilder::new()
+        .enable_metrics()
+        .finish_metrics()
+        .enable_rate_limits()
+        .request_size_limit(1024)
+        .finish_rate_limits()
+        .enable_oauth(portfu_common::auth::oauth::OAUTH::CUSTOM)
+        .client_id("client")
+        .client_secret("secret")
+        .auth_url("https://example.com/auth")
+        .token_url("https://example.com/token")
+        .redirect_url("https://example.com/callback")
+        .build();
+
+    assert!(
+        server
+            .services
+            .iter()
+            .any(|service| service.name() == "metrics_endpoint")
+    );
+    assert!(
+        server
+            .services
+            .iter()
+            .any(|service| service.name() == "oauth_login")
+    );
+    assert!(
+        server
+            .services
+            .iter()
+            .any(|service| service.name() == "oauth_callback")
+    );
+    assert_eq!(server.middleware.len(), 3);
+
+    let _metrics = MetricsWrapper;
+}
+
+fn basic_request() -> Request {
+    let request = http::Request::builder()
+        .method(Method::GET)
+        .uri("/auth")
+        .body(Full::new(Bytes::new()))
+        .expect("request build failed");
+    Request::new(
+        RequestType::Sized(request),
+        Arc::new(Route::new("/auth".to_string())),
+    )
+}
+
+async fn request_with_session(token: Option<OAuthToken>) -> Request {
+    let mut request = basic_request();
+    let session = Arc::new(RwLock::new(Session::default()));
+    if let Some(token) = token {
+        let identity = OAuthIdentity {
+            provider: OAUTH::CUSTOM,
+            subject: "user-1".to_string(),
+            username: Some("user".to_string()),
+            email: Some("user@example.com".to_string()),
+            role: Some("user".to_string()),
+            scopes: token.scopes.clone(),
+            raw: serde_json::json!({"sub": "user-1"}),
+        };
+        let mut session = session.write().await;
+        session.data.insert(SessionOAuthToken(token));
+        session.data.insert(SessionOAuthIdentity(identity));
+    }
+    request.insert(session);
+    request
 }

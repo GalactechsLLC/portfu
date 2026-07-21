@@ -2,6 +2,8 @@ use log::LevelFilter;
 pub use portfu_updated::prelude::*;
 use simple_logger::SimpleLogger;
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 
 #[static_files("assets", name = "embedded-assets")]
@@ -39,6 +41,40 @@ pub async fn main() -> Result<(), PortfuError> {
         .unwrap();
 
     ServerBuilder::from_env()
+        .enable_metrics()
+        .path("/metrics")
+        .finish_metrics()
+        .enable_rate_limits()
+        .requests_per_window(120, 60)
+        .request_size_limit(1024 * 1024)
+        .body_read_timeout(Duration::from_secs(10))
+        .finish_rate_limits()
+        .enable_oauth(OAUTH::KEYCLOAK)
+        .client_id(env_or("KEYCLOAK_CLIENT_ID", "portfu-example"))
+        .client_secret(env_or("KEYCLOAK_CLIENT_SECRET", "example-secret"))
+        .auth_url(env_or(
+            "KEYCLOAK_AUTH_URL",
+            "http://localhost:8081/realms/portfu/protocol/openid-connect/auth",
+        ))
+        .token_url(env_or(
+            "KEYCLOAK_TOKEN_URL",
+            "http://localhost:8081/realms/portfu/protocol/openid-connect/token",
+        ))
+        .userinfo_url(env_or(
+            "KEYCLOAK_USERINFO_URL",
+            "http://localhost:8081/realms/portfu/protocol/openid-connect/userinfo",
+        ))
+        .redirect_url(env_or(
+            "PORTFU_OAUTH_REDIRECT_URL",
+            "http://localhost:8080/oauth/callback",
+        ))
+        .scopes(["openid", "profile", "email"])
+        .allowed_role("user")
+        .admin_role("admin")
+        .default_role("user")
+        .success_redirect("/auth/success")
+        .failure_redirect("/auth/failure")
+        .finish_oauth()
         .global_state(RwLock::new(HashMap::<u64, String>::new()))
         .scoped_state("site-a", "Site A".to_string())
         .scoped_state("site-b", "Site B".to_string())
@@ -48,6 +84,14 @@ pub async fn main() -> Result<(), PortfuError> {
 }
 
 type MockDb = RwLock<HashMap<u64, String>>;
+
+fn env_or(key: &str, fallback: &str) -> String {
+    std::env::var(key).unwrap_or_else(|_| fallback.to_string())
+}
+
+fn cors_allow_all() -> Arc<wrappers::cors::Cors> {
+    Arc::new(wrappers::cors::Cors::allow_all())
+}
 
 #[get("/", scope = "site-a", domain = "site-a.local")]
 pub async fn site_a_home(site: State<String>) -> Result<String, PortfuError> {
@@ -105,6 +149,51 @@ pub async fn user_delete(id: Path, db: State<MockDb>) -> Result<String, PortfuEr
         Some(name) => Ok(format!("deleted user_id={user_id} name={name}")),
         None => Ok(format!("user_id={user_id} not found")),
     }
+}
+
+#[get("/public/cors", wrap = cors_allow_all())]
+pub async fn cors_example() -> Result<String, PortfuError> {
+    Ok("cors headers are added by the route wrapper".to_string())
+}
+
+#[get("/auth/session", filter = filters::auth::session())]
+pub async fn session_guard(session: SessionState) -> Result<String, PortfuError> {
+    let id = session.inner().read().await.id;
+    Ok(format!("session_id={id}"))
+}
+
+#[get("/auth/success", filter = filters::auth::oauth())]
+pub async fn oauth_success(identity: OAuthIdentity) -> Result<String, PortfuError> {
+    Ok(format!(
+        "oauth_user={} role={}",
+        identity.subject,
+        identity.role.as_deref().unwrap_or("none")
+    ))
+}
+
+#[get(
+    "/auth/profile",
+    filter = filters::auth::oauth_any_scope(["profile", "read:user"])
+)]
+pub async fn oauth_profile(
+    identity: OAuthIdentity,
+    token: OAuthToken,
+) -> Result<String, PortfuError> {
+    Ok(format!(
+        "oauth_user={} scopes={}",
+        identity.subject,
+        token.scopes.join(",")
+    ))
+}
+
+#[get("/auth/admin", filter = filters::auth::oauth_scope("admin"))]
+pub async fn oauth_admin(identity: OAuthIdentity) -> Result<String, PortfuError> {
+    Ok(format!("admin oauth_user={}", identity.subject))
+}
+
+#[get("/auth/failure")]
+pub async fn oauth_failure() -> Result<String, PortfuError> {
+    Ok("oauth policy rejected the login".to_string())
 }
 
 #[head("/users/{id}")]

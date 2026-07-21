@@ -1,3 +1,4 @@
+use crate::router::middleware::Middleware;
 use crate::server::Server;
 use crate::server::config::{ServerConfig, SslConfig};
 use crate::server::state::SharedState;
@@ -14,18 +15,26 @@ pub struct ServerBuilder {
     pub run: Arc<AtomicBool>,
     pub config: ServerConfig,
     pub scoped_state: HashMap<String, Extensions>,
+    pub services: Vec<Service>,
+    pub middleware: Vec<Arc<dyn Middleware + Send + Sync>>,
     pub default_service: Option<Service>,
     pub health_service: Option<Service>,
 }
 impl ServerBuilder {
-    pub fn from_env() -> Self {
-        let mut builder = ServerBuilder {
+    pub fn new() -> Self {
+        Self {
             run: Arc::new(AtomicBool::new(true)),
             config: ServerConfig::default(),
             scoped_state: HashMap::new(),
+            services: vec![],
+            middleware: vec![],
             default_service: None,
             health_service: None,
-        };
+        }
+    }
+
+    pub fn from_env() -> Self {
+        let mut builder = ServerBuilder::new();
         if let Ok(host) = env::var("PORTFU_HOST") {
             builder.config.host = host;
         }
@@ -106,11 +115,21 @@ impl ServerBuilder {
         self.health_service = Some(service.into());
         self
     }
+    pub fn service<T: Into<Service>>(mut self, service: T) -> Self {
+        self.services.push(service.into());
+        self
+    }
+    pub fn wrap(mut self, middleware: Arc<dyn Middleware + Send + Sync>) -> Self {
+        self.middleware.push(middleware);
+        self
+    }
     pub fn build(self) -> Server {
         Server {
             run: self.run,
             config: self.config,
             scoped_state: Arc::new(RwLock::new(self.scoped_state)),
+            services: self.services,
+            middleware: self.middleware,
             default_service: self.default_service,
             health_service: self.health_service,
         }

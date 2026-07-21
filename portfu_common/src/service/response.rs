@@ -5,7 +5,7 @@ use http::response::Parts;
 use http::{HeaderMap, HeaderValue, StatusCode};
 use http_body::Body;
 use http_body_util::Full;
-use hyper::body::Bytes;
+use hyper::body::{Bytes, SizeHint};
 use log::error;
 use serde::Serialize;
 
@@ -66,6 +66,13 @@ impl Response {
             ResponseType::Sized(r) => r.status_mut(),
             ResponseType::Consumed(r) => &mut r.status,
             ResponseType::Empty(r) => r.status_mut(),
+        }
+    }
+    pub fn body_size_hint(&self) -> SizeHint {
+        match &self.response_type {
+            ResponseType::Stream(r) => r.body().size_hint(),
+            ResponseType::Sized(r) => r.body().size_hint(),
+            ResponseType::Consumed(_) | ResponseType::Empty(_) => SizeHint::with_exact(0),
         }
     }
     pub fn content_type(mut self, value: &'static str) -> Self {

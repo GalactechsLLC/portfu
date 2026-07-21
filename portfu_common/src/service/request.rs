@@ -3,13 +3,16 @@ use crate::router::route::Route;
 use crate::service::{DEFAULT_URI, StreamingBody};
 use http::request::Parts;
 use http::{Extensions, HeaderMap, HeaderValue, Method, Uri};
+use http_body::Body as HttpBody;
 use http_body_util::BodyExt;
 use http_body_util::Full;
-use hyper::body::Bytes;
+use hyper::body::{Bytes, SizeHint};
 use serde::de::DeserializeOwned;
 use std::mem::replace;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::time::timeout;
 
 pub enum RequestType {
     Stream(http::Request<StreamingBody>),
@@ -92,6 +95,40 @@ impl Request {
             RequestType::Empty(h) => h,
         }
     }
+    pub fn body_size_hint(&self) -> SizeHint {
+        match &self.request_type {
+            RequestType::Stream(r) => r.body().size_hint(),
+            RequestType::Sized(r) => r.body().size_hint(),
+            RequestType::Consumed(_) | RequestType::Empty(_) => SizeHint::with_exact(0),
+        }
+    }
+    pub fn set_body_bytes(&mut self, bytes: Bytes) {
+        match replace(&mut self.request_type, RequestType::Empty(HeaderMap::new())) {
+            RequestType::Stream(r) => {
+                let (parts, _) = r.into_parts();
+                self.request_type =
+                    RequestType::Sized(http::Request::from_parts(parts, Full::new(bytes)));
+            }
+            RequestType::Sized(r) => {
+                let (parts, _) = r.into_parts();
+                self.request_type =
+                    RequestType::Sized(http::Request::from_parts(parts, Full::new(bytes)));
+            }
+            RequestType::Consumed(parts) => {
+                self.request_type =
+                    RequestType::Sized(http::Request::from_parts(parts, Full::new(bytes)));
+            }
+            RequestType::Empty(mut headers) => {
+                if bytes.is_empty() {
+                    self.request_type = RequestType::Empty(headers);
+                } else {
+                    let mut request = http::Request::new(Full::new(bytes));
+                    request.headers_mut().extend(headers.drain());
+                    self.request_type = RequestType::Sized(request);
+                }
+            }
+        }
+    }
     pub async fn consume_body_bytes(&mut self) -> Result<Bytes, PortfuError> {
         match replace(&mut self.request_type, RequestType::Empty(HeaderMap::new())) {
             RequestType::Stream(r) => {
@@ -109,6 +146,75 @@ impl Request {
                 })?;
                 self.request_type = RequestType::Consumed(parts);
                 Ok(collected.to_bytes())
+            }
+            RequestType::Consumed(parts) => {
+                self.request_type = RequestType::Consumed(parts);
+                Ok(Bytes::new())
+            }
+            RequestType::Empty(headers) => {
+                self.request_type = RequestType::Empty(headers);
+                Ok(Bytes::new())
+            }
+        }
+    }
+    pub async fn consume_body_bytes_limited(
+        &mut self,
+        max_bytes: usize,
+        read_timeout: Duration,
+    ) -> Result<Bytes, PortfuError> {
+        match replace(&mut self.request_type, RequestType::Empty(HeaderMap::new())) {
+            RequestType::Stream(r) => {
+                let (parts, mut body) = r.into_parts();
+                let mut bytes = Vec::new();
+                loop {
+                    let frame = timeout(read_timeout, body.frame()).await.map_err(|_| {
+                        PortfuError::Internal(format!(
+                            "Timed out while reading request body after {:?}",
+                            read_timeout
+                        ))
+                    })?;
+                    let Some(frame) = frame else {
+                        break;
+                    };
+                    let frame = frame.map_err(|e| {
+                        PortfuError::Internal(format!("Failed to read request body: {e}"))
+                    })?;
+                    if let Some(chunk) = frame.data_ref() {
+                        if bytes.len().saturating_add(chunk.len()) > max_bytes {
+                            self.request_type = RequestType::Sized(http::Request::from_parts(
+                                parts,
+                                Full::new(Bytes::new()),
+                            ));
+                            return Err(PortfuError::Internal(format!(
+                                "Request body exceeded {max_bytes} bytes"
+                            )));
+                        }
+                        bytes.extend_from_slice(chunk);
+                    }
+                }
+                let bytes = Bytes::from(bytes);
+                self.request_type =
+                    RequestType::Sized(http::Request::from_parts(parts, Full::new(bytes.clone())));
+                Ok(bytes)
+            }
+            RequestType::Sized(r) => {
+                let (parts, body) = r.into_parts();
+                let collected = body.collect().await.map_err(|e| {
+                    PortfuError::Internal(format!("Failed to read request body: {e}"))
+                })?;
+                let bytes = collected.to_bytes();
+                if bytes.len() > max_bytes {
+                    self.request_type = RequestType::Sized(http::Request::from_parts(
+                        parts,
+                        Full::new(Bytes::new()),
+                    ));
+                    return Err(PortfuError::Internal(format!(
+                        "Request body exceeded {max_bytes} bytes"
+                    )));
+                }
+                self.request_type =
+                    RequestType::Sized(http::Request::from_parts(parts, Full::new(bytes.clone())));
+                Ok(bytes)
             }
             RequestType::Consumed(parts) => {
                 self.request_type = RequestType::Consumed(parts);

@@ -36,9 +36,9 @@ portfu_core = {path = "./portfu_core", version = "1.3.3", default-features = fal
 portfu_macros = {path = "./portfu_macros", version = "1.3.3", default-features = false}
 portfu_examples = {path = "./examples", version = "2.0.0", default-features = false}
 portfu_tests = {path = "./tests", version = "2.0.0", default-features = false}
-portfu_common = {path = "./portfu_common", version = "2.0.0", default-features = false}
-portfu_updated = {path = "./portfu_updated", version = "2.0.0", default-features = false}
-portfu_macros_updated = {path = "./portfu_macros_updated", version = "2.0.0", default-features = false}
+portfu_common = {path = "./portfu_common", version = "2.0.0"}
+portfu_updated = {path = "./portfu_updated", version = "2.0.0"}
+portfu_macros_updated = {path = "./portfu_macros_updated", version = "2.0.0"}
 prometheus = "0.14.0"
 proc-macro2 = "1.0.106"
 quote = "1.0.45"

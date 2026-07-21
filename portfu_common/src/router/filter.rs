@@ -2,10 +2,12 @@ use crate::service::request::Request;
 use std::pin::Pin;
 use std::sync::Arc;
 
+#[cfg(feature = "oauth")]
+pub mod auth;
 pub mod method;
 pub use method::*;
 
-#[derive(Clone, Copy, Ord, PartialOrd, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Ord, PartialOrd, PartialEq, Eq)]
 pub enum FilterResult {
     Allow,
     Block,
@@ -26,7 +28,7 @@ impl From<FilterResult> for bool {
         value == FilterResult::Allow
     }
 }
-#[derive(Clone, Copy, Ord, PartialOrd, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Ord, PartialOrd, PartialEq, Eq)]
 pub enum FilterMode {
     Any,
     All,

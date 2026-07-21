@@ -1,6 +1,6 @@
 use crate::error::PortfuError;
 use crate::router::middleware::{Middleware, MiddlewareResult};
-use crate::service::request::Request;
+use crate::service::request::{FromRequest, Request};
 use crate::service::response::Response;
 use cookie::Cookie;
 use dashmap::DashMap;
@@ -25,6 +25,43 @@ pub struct Session {
     pub data: Extensions,
     pub last_update: Instant,
     pub id: Uuid,
+}
+
+impl Default for Session {
+    fn default() -> Self {
+        Self {
+            data: Extensions::new(),
+            last_update: Instant::now(),
+            id: Uuid::new_v4(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct SessionState(pub Arc<RwLock<Session>>);
+
+impl SessionState {
+    pub fn inner(&self) -> Arc<RwLock<Session>> {
+        self.0.clone()
+    }
+}
+
+impl FromRequest<Request> for SessionState {
+    type Error = PortfuError;
+
+    fn try_from<'a>(
+        value: &'a mut Request,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<Self, Self::Error>> + 'a + Send + Sync>> {
+        Box::pin(async move {
+            value
+                .get::<Arc<RwLock<Session>>>()
+                .cloned()
+                .map(SessionState)
+                .ok_or_else(|| {
+                    PortfuError::Parsing("Failed to find active session on request".to_string())
+                })
+        })
+    }
 }
 
 pub struct SessionManager {
@@ -58,9 +95,8 @@ impl SessionManager {
             .same_site(cookie::SameSite::Lax)
             .build();
         let session = Arc::new(RwLock::new(Session {
-            data: Extensions::new(),
-            last_update: Instant::now(),
             id: client_session_id,
+            ..Default::default()
         }));
         SESSIONS.insert(server_session_id.clone(), session.clone());
         SESSION_CLIENT_IDS.insert(client_session_id.to_string(), server_session_id);
