@@ -102,7 +102,7 @@ impl ToTokens for MaudHttp {
                 fn serve<'a>(
                     &'a self,
                     request: &'a mut ::portfu::prelude::Request
-                ) -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = Result<::portfu::prelude::Response, ::portfu::prelude::PortfuError>> + 'a + Send + Sync>> {
+                ) -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = Result<::portfu::prelude::Response, ::portfu::prelude::PortfuError>> + 'a + Send>> {
                     Box::pin(async move {
                         if request.method() == ::portfu::prelude::http::method::Method::OPTIONS {
                             return Ok(::portfu::prelude::Response::ok("").content_type(#TEXT_HTML_UTF8));

@@ -118,7 +118,7 @@ impl ToTokens for StaticFiles {
                         fn serve<'a>(
                             &'a self,
                             request: &'a mut ::portfu::prelude::Request
-                        ) -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = Result<::portfu::prelude::Response, ::portfu::prelude::PortfuError>> + 'a + Send + Sync>> {
+                        ) -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = Result<::portfu::prelude::Response, ::portfu::prelude::PortfuError>> + 'a + Send>> {
                             Box::pin(async move {
                                 use ::portfu::prelude::http::Method;
                                 if request.method() == Method::OPTIONS {

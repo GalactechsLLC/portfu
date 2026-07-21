@@ -376,7 +376,7 @@ impl Service for OAuthLoginService {
     fn serve<'a>(
         &'a self,
         request: &'a mut Request,
-    ) -> Pin<Box<dyn Future<Output = Result<Response, PortfuError>> + 'a + Send + Sync>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Response, PortfuError>> + 'a + Send>> {
         Box::pin(async move {
             let session = session_from_request(request)?;
             let client = OAuthClient::new(self.config.config.clone())?;
@@ -401,7 +401,7 @@ impl Service for OAuthCallbackService {
     fn serve<'a>(
         &'a self,
         request: &'a mut Request,
-    ) -> Pin<Box<dyn Future<Output = Result<Response, PortfuError>> + 'a + Send + Sync>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Response, PortfuError>> + 'a + Send>> {
         Box::pin(async move {
             let session = session_from_request(request)?;
             let callback = <Query<OAuthCallbackQuery> as FromRequest<Request>>::try_from(request)

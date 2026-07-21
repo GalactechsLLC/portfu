@@ -153,7 +153,7 @@ impl Service for MetricsEndpoint {
     fn serve<'a>(
         &'a self,
         _request: &'a mut Request,
-    ) -> Pin<Box<dyn Future<Output = Result<Response, PortfuError>> + 'a + Send + Sync>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Response, PortfuError>> + 'a + Send>> {
         Box::pin(async move {
             let encoder = TextEncoder::new();
             match encoder.encode_to_string(&REGISTRY.gather()) {

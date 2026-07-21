@@ -35,7 +35,7 @@ pub mod traits {
         fn serve<'a>(
             &'a self,
             data: &'a mut Request,
-        ) -> Pin<Box<dyn Future<Output = Result<Response, PortfuError>> + 'a + Send + Sync>>;
+        ) -> Pin<Box<dyn Future<Output = Result<Response, PortfuError>> + 'a + Send>>;
     }
 }
 pub type RequestHeaders = HeaderMap<HeaderValue>;
