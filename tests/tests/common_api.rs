@@ -44,7 +44,7 @@ impl ServiceTrait for OkService {
     fn serve<'a>(
         &'a self,
         _data: &'a mut Request,
-    ) -> Pin<Box<dyn Future<Output = Result<Response, PortfuError>> + 'a + Send + Sync>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Response, PortfuError>> + 'a + Send>> {
         Box::pin(async move { Ok(Response::ok("ok")) })
     }
 }
@@ -124,6 +124,20 @@ impl Render for MaudIndexPage {
     fn render(&self) -> PreEscaped<String> {
         html! {
             h1 { "Hello from Maud" }
+        }
+    }
+}
+
+#[maud_http("/maud/users/{id}", "/maud/organizations/{id}", name = "maud-user")]
+#[derive(Clone, Debug, Default)]
+struct MaudUserPage {
+    id: String,
+}
+
+impl Render for MaudUserPage {
+    fn render(&self) -> PreEscaped<String> {
+        html! {
+            p { (self.id.as_str()) }
         }
     }
 }
@@ -1098,6 +1112,73 @@ async fn maud_http_macro_registers_html_service() {
             service.route(),
         );
         assert!(!service.serves(&post_request).await);
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn maud_http_macro_populates_path_fields() {
+    let services = load_registered_services();
+    let maud_services: Vec<_> = services
+        .iter()
+        .filter(|service| service.name() == "maud-user")
+        .collect();
+    assert_eq!(
+        maud_services.len(),
+        2,
+        "maud path aliases should each register a service"
+    );
+
+    for (uri, expected_body) in [
+        ("/maud/users/42", b"<p>42</p>".as_slice()),
+        (
+            "/maud/organizations/1?return_to=%2Forganizations",
+            b"<p>1</p>".as_slice(),
+        ),
+    ] {
+        let mut matched = None;
+        for service in &maud_services {
+            let request = Request::new(
+                RequestType::Sized(
+                    http::Request::builder()
+                        .method(Method::GET)
+                        .uri(uri)
+                        .body(Full::new(Bytes::new()))
+                        .expect("request build failed"),
+                ),
+                service.route(),
+            );
+            if service.serves(&request).await {
+                matched = Some(*service);
+                break;
+            }
+        }
+        let service = matched.expect("maud path should be registered");
+
+        let mut request = Request::new(
+            RequestType::Sized(
+                http::Request::builder()
+                    .method(Method::GET)
+                    .uri(uri)
+                    .body(Full::new(Bytes::new()))
+                    .expect("request build failed"),
+            ),
+            service.route(),
+        );
+        let response = service.serve(&mut request).await.expect("service failed");
+        assert_eq!(response.status(), http::StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(http::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok()),
+            Some("text/html; charset=utf-8")
+        );
+        let response: http::Response<_> = response.into();
+        let body = BodyExt::collect(response.into_body())
+            .await
+            .expect("maud body collection failed")
+            .to_bytes();
+        assert_eq!(&body[..], expected_body);
     }
 }
 
