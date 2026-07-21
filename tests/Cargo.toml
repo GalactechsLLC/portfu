@@ -8,8 +8,9 @@ futures-util = { workspace = true }
 http = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true }
+maud = { workspace = true }
 portfu_common = { workspace = true }
-portfu = { workspace = true }
+portfu = { workspace = true, features = ["full"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

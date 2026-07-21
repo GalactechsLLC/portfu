@@ -1,11 +1,13 @@
 use crate::error::PortfuError;
 use crate::router::middleware::{Middleware, MiddlewareResult};
+use crate::server::builder::ServerBuilder;
 use crate::service::request::Request;
 use crate::service::response::Response;
 use http::{HeaderName, HeaderValue};
 use log::error;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 const ACCESS_CONTROL_ALLOW_CREDENTIALS: &str = "access-control-allow-credentials";
 const ACCESS_CONTROL_ALLOW_HEADERS: &str = "access-control-allow-headers";
@@ -15,6 +17,7 @@ const ACCESS_CONTROL_REQUEST_HEADERS: &str = "access-control-request-headers";
 const ORIGIN: &str = "origin";
 const VARY: &str = "vary";
 
+#[derive(Default)]
 pub struct Cors {
     allow_all: bool,
     allow_credentials: bool,
@@ -147,6 +150,90 @@ impl Cors {
                     .then(|| header_name.as_str().to_string())
             })
             .collect()
+    }
+}
+
+pub struct CorsServerBuilder {
+    builder: ServerBuilder,
+    cors: Cors,
+}
+
+impl CorsServerBuilder {
+    pub fn allow_all(mut self) -> Self {
+        self.cors.allow_all = true;
+        self
+    }
+
+    pub fn allow_credentials(mut self, allow_credentials: bool) -> Self {
+        self.cors.allow_credentials = allow_credentials;
+        self
+    }
+
+    pub fn allowed_origin<S: Into<String>>(mut self, origin: S) -> Self {
+        self.cors.allowed_origins.push(origin.into());
+        self
+    }
+
+    pub fn allowed_origins<I, S>(mut self, origins: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.cors.allowed_origins = origins.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn allowed_method<S: Into<String>>(mut self, method: S) -> Self {
+        self.cors.allowed_methods.push(method.into());
+        self
+    }
+
+    pub fn allowed_methods<I, S>(mut self, methods: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.cors.allowed_methods = methods.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn allowed_header(mut self, header: HeaderName) -> Self {
+        self.cors.allowed_headers.push(header);
+        self
+    }
+
+    pub fn allowed_headers<I>(mut self, headers: I) -> Self
+    where
+        I: IntoIterator<Item = HeaderName>,
+    {
+        self.cors.allowed_headers = headers.into_iter().collect();
+        self
+    }
+
+    pub fn cors(mut self, cors: Cors) -> Self {
+        self.cors = cors;
+        self
+    }
+
+    pub fn finish_cors(self) -> ServerBuilder {
+        self.builder.wrap(Arc::new(self.cors))
+    }
+
+    pub fn build(self) -> crate::server::Server {
+        self.finish_cors().build()
+    }
+}
+
+impl ServerBuilder {
+    pub fn enable_cors(self) -> CorsServerBuilder {
+        CorsServerBuilder {
+            builder: self,
+            cors: Cors::default(),
+        }
+    }
+
+    pub fn cors(self, cors: Cors) -> Self {
+        self.wrap(Arc::new(cors))
     }
 }
 

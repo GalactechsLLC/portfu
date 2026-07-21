@@ -12,6 +12,10 @@ pub mod prelude {
     pub use hyper_util;
     pub use inventory;
     pub use log;
+    #[cfg(feature = "maud")]
+    pub use maud;
+    #[cfg(feature = "maud")]
+    pub use maud::{Markup, PreEscaped, Render, html};
     #[cfg(feature = "oauth")]
     pub use portfu_common::auth;
     #[cfg(feature = "oauth")]
@@ -60,6 +64,7 @@ pub mod prelude {
         feature = "client",
         feature = "endpoint",
         feature = "files",
+        feature = "maud",
         feature = "tasks",
         feature = "websocket"
     ))]

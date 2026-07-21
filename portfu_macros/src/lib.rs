@@ -6,6 +6,8 @@ mod endpoint;
 mod files;
 #[cfg(feature = "tasks")]
 mod interval;
+#[cfg(feature = "maud")]
+mod maud;
 #[cfg(any(feature = "endpoint", feature = "websocket"))]
 mod method;
 #[cfg(feature = "files")]
@@ -23,6 +25,8 @@ use crate::client_websocket::WebSocketClient;
 use crate::files::Files;
 #[cfg(feature = "tasks")]
 use crate::interval::Interval;
+#[cfg(feature = "maud")]
+use crate::maud::MaudHttp;
 #[cfg(feature = "files")]
 use crate::static_files::StaticFiles;
 #[cfg(feature = "tasks")]
@@ -33,6 +37,7 @@ use crate::websocket::WebSocketRoute;
     feature = "client",
     feature = "endpoint",
     feature = "files",
+    feature = "maud",
     feature = "tasks",
     feature = "websocket"
 ))]
@@ -41,6 +46,7 @@ use proc_macro::TokenStream;
     feature = "client",
     feature = "endpoint",
     feature = "files",
+    feature = "maud",
     feature = "tasks",
     feature = "websocket"
 ))]
@@ -59,6 +65,7 @@ use crate::endpoint::Endpoint;
     feature = "client",
     feature = "endpoint",
     feature = "files",
+    feature = "maud",
     feature = "tasks",
     feature = "websocket"
 ))]
@@ -183,6 +190,23 @@ pub fn interval(args: TokenStream, input: TokenStream) -> TokenStream {
         Err(err) => return input_and_compile_error(input, err),
     };
     match Interval::new(args, ast) {
+        Ok(route) => route.into_token_stream().into(),
+        Err(err) => input_and_compile_error(input, err),
+    }
+}
+
+#[cfg(feature = "maud")]
+#[proc_macro_attribute]
+pub fn maud_http(args: TokenStream, input: TokenStream) -> TokenStream {
+    let args = match syn::parse(args) {
+        Ok(args) => args,
+        Err(err) => return input_and_compile_error(input, err),
+    };
+    let ast = match syn::parse::<syn::ItemStruct>(input.clone()) {
+        Ok(ast) => ast,
+        Err(err) => return input_and_compile_error(input, err),
+    };
+    match MaudHttp::new(args, ast) {
         Ok(route) => route.into_token_stream().into(),
         Err(err) => input_and_compile_error(input, err),
     }

@@ -2,7 +2,6 @@ use log::LevelFilter;
 pub use portfu::prelude::*;
 use simple_logger::SimpleLogger;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 
@@ -49,6 +48,9 @@ pub async fn main() -> Result<(), PortfuError> {
         .request_size_limit(1024 * 1024)
         .body_read_timeout(Duration::from_secs(10))
         .finish_rate_limits()
+        .enable_cors()
+        .allow_all()
+        .finish_cors()
         .enable_oauth(OAUTH::KEYCLOAK)
         .client_id(env_or("KEYCLOAK_CLIENT_ID", "portfu-example"))
         .client_secret(env_or("KEYCLOAK_CLIENT_SECRET", "example-secret"))
@@ -87,10 +89,6 @@ type MockDb = RwLock<HashMap<u64, String>>;
 
 fn env_or(key: &str, fallback: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| fallback.to_string())
-}
-
-fn cors_allow_all() -> Arc<wrappers::cors::Cors> {
-    Arc::new(wrappers::cors::Cors::allow_all())
 }
 
 #[get("/", scope = "site-a", domain = "site-a.local")]
@@ -151,9 +149,9 @@ pub async fn user_delete(id: Path, db: State<MockDb>) -> Result<String, PortfuEr
     }
 }
 
-#[get("/public/cors", wrap = cors_allow_all())]
+#[get("/public/cors")]
 pub async fn cors_example() -> Result<String, PortfuError> {
-    Ok("cors headers are added by the route wrapper".to_string())
+    Ok("cors headers are added by the server wrapper".to_string())
 }
 
 #[get("/auth/session", filter = filters::auth::session())]

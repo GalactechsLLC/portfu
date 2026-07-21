@@ -1,6 +1,7 @@
 use http::Method;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
+use portfu::prelude::{PreEscaped, Render, html, inventory, maud_http};
 use portfu_common::auth::oauth::{
     OAUTH, OAuthIdentity, OAuthToken, SessionOAuthIdentity, SessionOAuthToken,
 };
@@ -84,6 +85,18 @@ struct MarkerJson {
 }
 
 impl Serialized for MarkerJson {}
+
+#[maud_http("/maud/index.html", name = "maud-index")]
+#[derive(Clone, Debug, Default)]
+struct MaudIndexPage;
+
+impl Render for MaudIndexPage {
+    fn render(&self) -> PreEscaped<String> {
+        html! {
+            h1 { "Hello from Maud" }
+        }
+    }
+}
 
 struct ItemId;
 
@@ -867,6 +880,80 @@ async fn metrics_wrapper_records_requests_and_endpoint_returns_text() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn maud_http_macro_registers_html_service() {
+    let services = load_registered_services();
+    let service = services
+        .iter()
+        .find(|service| service.name() == "maud-index")
+        .expect("maud service should be registered");
+
+    let mut get_request = Request::new(
+        RequestType::Sized(
+            http::Request::builder()
+                .method(Method::GET)
+                .uri("/maud/index.html")
+                .body(Full::new(Bytes::new()))
+                .expect("request build failed"),
+        ),
+        service.route(),
+    );
+    assert!(service.serves(&get_request).await);
+    let response = service
+        .serve(&mut get_request)
+        .await
+        .expect("maud service failed");
+    assert_eq!(response.status(), http::StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        Some("text/html; charset=utf-8")
+    );
+    let response: http::Response<_> = response.into();
+    let body = BodyExt::collect(response.into_body())
+        .await
+        .expect("maud body collection failed")
+        .to_bytes();
+    assert_eq!(&body[..], b"<h1>Hello from Maud</h1>");
+
+    let mut options_request = Request::new(
+        RequestType::Sized(
+            http::Request::builder()
+                .method(Method::OPTIONS)
+                .uri("/maud/index.html")
+                .body(Full::new(Bytes::new()))
+                .expect("request build failed"),
+        ),
+        service.route(),
+    );
+    assert!(service.serves(&options_request).await);
+    let options_response = service
+        .serve(&mut options_request)
+        .await
+        .expect("maud options failed");
+    assert_eq!(
+        options_response
+            .headers()
+            .get(http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        Some("text/html; charset=utf-8")
+    );
+
+    let post_request = Request::new(
+        RequestType::Sized(
+            http::Request::builder()
+                .method(Method::POST)
+                .uri("/maud/index.html")
+                .body(Full::new(Bytes::new()))
+                .expect("request build failed"),
+        ),
+        service.route(),
+    );
+    assert!(!service.serves(&post_request).await);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn service_builder_scope_domain_and_filters_are_enforced() {
     let service = ServiceBuilder::new("/scoped")
         .name("scoped-service")
@@ -1173,6 +1260,9 @@ fn server_builder_adds_wrapper_services_without_inventory() {
     let server = ServerBuilder::new()
         .enable_metrics()
         .finish_metrics()
+        .enable_cors()
+        .allow_all()
+        .finish_cors()
         .enable_rate_limits()
         .request_size_limit(1024)
         .finish_rate_limits()
@@ -1202,9 +1292,97 @@ fn server_builder_adds_wrapper_services_without_inventory() {
             .iter()
             .any(|service| service.name() == "oauth_callback")
     );
-    assert_eq!(server.middleware.len(), 3);
+    assert_eq!(server.middleware.len(), 4);
 
     let _metrics = MetricsWrapper;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn server_builder_configures_cors_and_sessions_as_default_wrappers() {
+    let server = ServerBuilder::new()
+        .enable_cors()
+        .allowed_origin("https://allowed.test")
+        .allowed_method("GET")
+        .allowed_header(http::HeaderName::from_static("x-api-key"))
+        .allow_credentials(true)
+        .finish_cors()
+        .enable_sessions()
+        .duration(Duration::from_secs(30))
+        .secure(false)
+        .finish_sessions()
+        .build();
+
+    assert_eq!(server.middleware.len(), 2);
+    assert_eq!(server.middleware[0].name(), "Cors Wrapper");
+    assert_eq!(server.middleware[1].name(), "SessionManager");
+
+    let request = http::Request::builder()
+        .method(Method::GET)
+        .uri("/wrapped")
+        .header(http::header::ORIGIN, "https://allowed.test")
+        .header("access-control-request-headers", "X-Api-Key, X-Denied")
+        .body(Full::new(Bytes::new()))
+        .expect("request build failed");
+    let mut request = Request::new(
+        RequestType::Sized(request),
+        Arc::new(Route::new("/wrapped".to_string())),
+    );
+    let mut response = Response::ok("ok");
+
+    assert!(matches!(
+        server.middleware[0]
+            .after_with_request(&request, &mut response)
+            .await
+            .expect("cors after failed"),
+        MiddlewareResult::Continue
+    ));
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|v| v.to_str().ok()),
+        Some("https://allowed.test")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-methods")
+            .and_then(|v| v.to_str().ok()),
+        Some("GET")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-headers")
+            .and_then(|v| v.to_str().ok()),
+        Some("x-api-key")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-credentials")
+            .and_then(|v| v.to_str().ok()),
+        Some("true")
+    );
+
+    assert!(matches!(
+        server.middleware[1]
+            .before(&mut request)
+            .await
+            .expect("session before failed"),
+        MiddlewareResult::Continue
+    ));
+    server.middleware[1]
+        .after_with_request(&request, &mut response)
+        .await
+        .expect("session after failed");
+    let cookie = response
+        .headers()
+        .get("set-cookie")
+        .and_then(|v| v.to_str().ok())
+        .expect("set-cookie should be present");
+    assert!(cookie.contains("HttpOnly"));
+    assert!(!cookie.contains("Secure"));
 }
 
 fn basic_request() -> Request {
@@ -1217,6 +1395,16 @@ fn basic_request() -> Request {
         RequestType::Sized(request),
         Arc::new(Route::new("/auth".to_string())),
     )
+}
+
+fn load_registered_services() -> Vec<portfu_common::service::Service> {
+    let mut registry = portfu_common::server::ServiceRegistry::default();
+    let services: Vec<_> = inventory::iter::<portfu_common::server::ServiceRegistration>
+        .into_iter()
+        .map(|reg| (reg.register)(&mut registry))
+        .collect();
+    registry.services.extend(services.clone());
+    services
 }
 
 fn limited_request(path: &str, ip: &str) -> Request {

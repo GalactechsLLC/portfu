@@ -1,5 +1,6 @@
 use crate::error::PortfuError;
 use crate::router::middleware::{Middleware, MiddlewareResult};
+use crate::server::builder::ServerBuilder;
 use crate::service::request::{FromRequest, Request};
 use crate::service::response::Response;
 use cookie::Cookie;
@@ -79,6 +80,13 @@ impl Default for SessionManager {
 }
 
 impl SessionManager {
+    pub fn new(session_duration: Duration, secure: bool) -> Self {
+        Self {
+            session_duration,
+            secure,
+        }
+    }
+
     async fn create_session_cookie(
         &self,
         request: &Request,
@@ -145,6 +153,53 @@ impl SessionManager {
         for key in to_remove {
             SESSIONS.remove(&key);
         }
+    }
+}
+
+pub struct SessionServerBuilder {
+    builder: ServerBuilder,
+    manager: SessionManager,
+}
+
+impl SessionServerBuilder {
+    pub fn session_duration(mut self, duration: Duration) -> Self {
+        self.manager.session_duration = duration;
+        self
+    }
+
+    pub fn duration(self, duration: Duration) -> Self {
+        self.session_duration(duration)
+    }
+
+    pub fn secure(mut self, secure: bool) -> Self {
+        self.manager.secure = secure;
+        self
+    }
+
+    pub fn session_manager(mut self, manager: SessionManager) -> Self {
+        self.manager = manager;
+        self
+    }
+
+    pub fn finish_sessions(self) -> ServerBuilder {
+        self.builder.wrap(Arc::new(self.manager))
+    }
+
+    pub fn build(self) -> crate::server::Server {
+        self.finish_sessions().build()
+    }
+}
+
+impl ServerBuilder {
+    pub fn enable_sessions(self) -> SessionServerBuilder {
+        SessionServerBuilder {
+            builder: self,
+            manager: SessionManager::default(),
+        }
+    }
+
+    pub fn session_manager(self, manager: SessionManager) -> Self {
+        self.wrap(Arc::new(manager))
     }
 }
 

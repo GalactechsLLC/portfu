@@ -8,10 +8,11 @@ proc-macro = true
 
 [features]
 default = ["full"]
-full = ["client", "endpoint", "files", "tasks", "websocket"]
+full = ["client", "endpoint", "files", "maud", "tasks", "websocket"]
 client = ["websocket"]
 endpoint = []
 files = []
+maud = ["endpoint"]
 tasks = []
 websocket = ["endpoint"]
 

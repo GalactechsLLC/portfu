@@ -10,6 +10,7 @@ full = [
     "cors",
     "endpoint",
     "files",
+    "maud",
     "metrics",
     "oauth",
     "rate-limit",
@@ -31,6 +32,7 @@ client = [
 cors = ["portfu_common/cors"]
 endpoint = ["portfu_macros/endpoint"]
 files = ["portfu_common/files", "portfu_macros/files"]
+maud = ["dep:maud", "portfu_macros/maud"]
 metrics = ["portfu_common/metrics"]
 oauth = ["portfu_common/oauth"]
 rate-limit = ["portfu_common/rate-limit"]
@@ -51,6 +53,7 @@ portfu_macros = {path="../portfu_macros", default-features = false}
 tokio = {version = "1.47.1", features=["rt-multi-thread", "sync", "signal", "macros", "process", "time", "fs", "net"]}
 regex = "1.12.3"
 hyper-util = {version = "0.1.20", features = ["tokio"]}
+maud = { workspace = true, optional = true }
 tokio-tungstenite = { version = "0.28.0", optional = true }
 rustls = { version = "0.23.20", optional = true }
 tokio-rustls = { version = "0.26.1", optional = true }
