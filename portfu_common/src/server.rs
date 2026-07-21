@@ -405,8 +405,12 @@ impl Server {
         address: SocketAddr,
     ) {
         if let Some(extensions) = request.shared_state_mut() {
+            let upgrade = extensions.remove::<hyper::upgrade::OnUpgrade>();
             let mut scoped_extensions = Self::scope_state(scoped_state, scope);
             scoped_extensions.insert(address);
+            if let Some(upgrade) = upgrade {
+                scoped_extensions.insert(upgrade);
+            }
             *extensions = scoped_extensions;
         }
     }
@@ -467,5 +471,30 @@ mod tests {
         Server::set_request_scope_state(&mut request, &scoped_state, "other", address);
         assert!(request.get::<Arc<DefaultState>>().is_some());
         assert!(request.get::<Arc<TenantState>>().is_none());
+    }
+
+    #[test]
+    fn set_request_scope_state_preserves_pending_http_upgrade() {
+        let mut scoped_state = HashMap::new();
+        let mut default_extensions = Extensions::new();
+        default_extensions.insert(Arc::new(DefaultState));
+        scoped_state.insert(DEFAULT_SCOPE.to_string(), default_extensions);
+
+        let upgrade = hyper::upgrade::on(http::Request::new(()));
+        let request = http::Request::builder()
+            .uri("/ws")
+            .body(Full::new(Bytes::new()))
+            .expect("request build failed");
+        let mut request = Request::new(
+            RequestType::Sized(request),
+            Arc::new(Route::new("/ws".to_string())),
+        );
+        request.insert(upgrade);
+
+        let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080);
+        Server::set_request_scope_state(&mut request, &scoped_state, DEFAULT_SCOPE, address);
+
+        assert!(request.get::<hyper::upgrade::OnUpgrade>().is_some());
+        assert!(request.get::<Arc<DefaultState>>().is_some());
     }
 }

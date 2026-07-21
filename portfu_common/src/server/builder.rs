@@ -139,6 +139,8 @@ impl ServerBuilder {
 #[cfg(test)]
 mod tests {
     use super::ServerBuilder;
+    use crate::server::config::SslConfig;
+    use std::sync::{Arc, atomic::Ordering};
     use std::sync::{Mutex, OnceLock};
 
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -189,5 +191,68 @@ mod tests {
         assert!(builder.config.reuse_port);
         assert!(!builder.config.enable_ssl);
         clear_env();
+    }
+
+    #[test]
+    fn from_env_parses_remaining_tunables_and_ignores_invalid_numbers() {
+        let _guard = env_lock().lock().expect("failed to lock env mutex");
+        clear_env();
+        // SAFETY: guarded by a process-wide mutex to avoid concurrent env mutation in tests.
+        unsafe {
+            std::env::set_var("PORTFU_PORT", "not-a-port");
+            std::env::set_var("PORTFU_BACKLOG", "2048");
+            std::env::set_var("PORTFU_ACCEPTORS", "3");
+            std::env::set_var("PORTFU_REUSEPORT", "false");
+            std::env::set_var("PORTFU_SSL_ENABLED", "true");
+        }
+        let builder = ServerBuilder::from_env();
+        assert_eq!(builder.config.port, 8080);
+        assert_eq!(builder.config.backlog, 2048);
+        assert_eq!(builder.config.acceptors, 3);
+        assert!(!builder.config.reuse_port);
+        assert!(builder.config.enable_ssl);
+        clear_env();
+    }
+
+    #[tokio::test]
+    async fn fluent_builder_methods_store_config_and_scoped_state() {
+        let ssl = SslConfig {
+            domain: "example.test".to_string(),
+            key: "key.pem".to_string(),
+            certs: "cert.pem".to_string(),
+            root_certs: "root.pem".to_string(),
+        };
+        let server = ServerBuilder::new()
+            .host("0.0.0.0")
+            .port(9090)
+            .enable_ssl(true)
+            .ssl_config(Some(ssl.clone()))
+            .sni_ssl_config(ssl.clone())
+            .global_state("global".to_string())
+            .scoped_state("tenant", 99_u32)
+            .build();
+
+        assert_eq!(server.config.host, "0.0.0.0");
+        assert_eq!(server.config.port, 9090);
+        assert!(server.config.enable_ssl);
+        assert_eq!(server.config.ssl_config, Some(ssl.clone()));
+        assert_eq!(server.config.sni_ssl_configs, vec![ssl]);
+        assert!(server.run.load(Ordering::Relaxed));
+
+        let state = server.scoped_state.read().await;
+        assert_eq!(
+            state
+                .get("default")
+                .and_then(|ext| ext.get::<Arc<String>>())
+                .map(|value| value.as_str()),
+            Some("global")
+        );
+        assert_eq!(
+            state
+                .get("tenant")
+                .and_then(|ext| ext.get::<Arc<u32>>())
+                .map(|value| **value),
+            Some(99)
+        );
     }
 }

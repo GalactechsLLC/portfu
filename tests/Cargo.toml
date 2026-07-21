@@ -9,7 +9,7 @@ http = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true }
 portfu_common = { workspace = true }
-portfu_updated = { workspace = true }
+portfu = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

@@ -6,21 +6,30 @@ use portfu_common::auth::oauth::{
 };
 use portfu_common::error::PortfuError;
 use portfu_common::router::filter::{self, FilterResult, traits::Filter as FilterTrait};
+use portfu_common::router::middleware::{Middleware, MiddlewareResult};
+use portfu_common::router::path::{Path, PathImpl, PathName};
 use portfu_common::router::route::Route;
 use portfu_common::server::builder::ServerBuilder;
+use portfu_common::service::State;
 use portfu_common::service::builder::ServiceBuilder;
 use portfu_common::service::request::{Body, FromRequest, Json, Query, Request, RequestType};
 use portfu_common::service::response::{JsonResponse, Response, Serialized};
 use portfu_common::service::traits::Service as ServiceTrait;
 use portfu_common::wrappers::cors::Cors;
 use portfu_common::wrappers::metrics::MetricsWrapper;
-use portfu_common::wrappers::rate_limits::RateLimiter;
-use portfu_common::wrappers::sessions::{Session, SessionState};
+use portfu_common::wrappers::rate_limits::{RateLimit, RateLimiter};
+use portfu_common::wrappers::sessions::{
+    Session, SessionManager, SessionState, get_session_cookie_from_request,
+    get_session_from_request,
+};
 use serde::Deserialize;
 use serde::Serialize;
+use std::error::Error;
 use std::future::Future;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 
 #[derive(Clone)]
@@ -76,6 +85,51 @@ struct MarkerJson {
 
 impl Serialized for MarkerJson {}
 
+struct ItemId;
+
+impl PathName for ItemId {
+    const NAME: &'static str = "id";
+}
+
+struct MissingPath;
+
+impl PathName for MissingPath {
+    const NAME: &'static str = "missing";
+}
+
+#[derive(Debug)]
+struct AppState {
+    value: String,
+}
+
+struct AfterOnlyMiddleware;
+
+impl Middleware for AfterOnlyMiddleware {
+    fn name(&self) -> &str {
+        "after-only"
+    }
+
+    fn before<'a>(
+        &'a self,
+        _data: &'a mut Request,
+    ) -> Pin<Box<dyn Future<Output = Result<MiddlewareResult, PortfuError>> + 'a + Send + Sync>>
+    {
+        Box::pin(async move { Ok(MiddlewareResult::Continue) })
+    }
+
+    fn after<'a>(
+        &'a self,
+        data: &'a mut Response,
+    ) -> Pin<Box<dyn Future<Output = Result<MiddlewareResult, PortfuError>> + 'a + Send + Sync>>
+    {
+        Box::pin(async move {
+            data.headers_mut()
+                .insert("x-after", http::HeaderValue::from_static("called"));
+            Ok(MiddlewareResult::Continue)
+        })
+    }
+}
+
 #[test]
 fn route_matches_and_extracts_variables() {
     let route = Route::new("/users/{id}/posts/{slug}".to_string());
@@ -104,6 +158,75 @@ fn route_tail_wildcard_matches_nested_paths() {
         route.extract("/assets/css/app.css", "file").as_deref(),
         Some("css/app.css")
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn path_and_state_extractors_cover_success_and_failure() {
+    let mut request = Request::new(
+        RequestType::Sized(
+            http::Request::builder()
+                .method(Method::GET)
+                .uri("/items/42")
+                .body(Full::new(Bytes::new()))
+                .expect("request build failed"),
+        ),
+        Arc::new(Route::new("/items/{id}".to_string())),
+    );
+    let state = Arc::new(AppState {
+        value: "ready".to_string(),
+    });
+    request.insert(state.clone());
+
+    let id = <PathImpl<ItemId> as FromRequest<Request>>::try_from(&mut request)
+        .await
+        .expect("path id should extract");
+    assert_eq!(id.name(), "id");
+    assert_eq!(id.value(), "42");
+    assert_eq!(id.to_string(), "42");
+
+    let path = PathImpl::<ItemId>::new(id.value()).into_path();
+    assert_eq!(path.value(), "42");
+    assert_eq!(path.to_string(), "42");
+    assert_eq!(Path::from(id).inner(), "42");
+    assert_eq!(Path::new("manual").value(), "manual");
+
+    let state_extractor = <State<AppState> as FromRequest<Request>>::try_from(&mut request)
+        .await
+        .expect("state should extract");
+    assert_eq!(state_extractor.value, "ready");
+    assert_eq!(state_extractor.as_ref().value, "ready");
+    assert!(Arc::ptr_eq(&state_extractor.inner(), &state));
+
+    let missing_path =
+        match <PathImpl<MissingPath> as FromRequest<Request>>::try_from(&mut request).await {
+            Ok(_) => panic!("missing path variable should fail"),
+            Err(err) => err,
+        };
+    assert!(missing_path.to_string().contains("missing"));
+
+    let missing_state = match <State<u64> as FromRequest<Request>>::try_from(&mut request).await {
+        Ok(_) => panic!("missing state should fail"),
+        Err(err) => err,
+    };
+    assert!(missing_state.to_string().contains("Failed to find State"));
+}
+
+#[test]
+fn portfu_error_display_and_sources_are_specific() {
+    let parsing = PortfuError::Parsing("bad input".to_string());
+    assert_eq!(parsing.to_string(), "bad input");
+    assert!(parsing.source().is_none());
+
+    let internal = PortfuError::Internal("bad state".to_string());
+    assert_eq!(internal.to_string(), "bad state");
+    assert!(internal.source().is_none());
+
+    let io = PortfuError::Io(std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        "denied",
+    ));
+    assert_eq!(io.to_string(), "denied");
+    assert!(io.source().is_some());
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -151,6 +274,127 @@ async fn request_extractors_and_host_parsing_work() {
         .await
         .expect("body extraction should not fail");
     assert!(body.into_bytes().is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn request_body_mutation_handles_sized_consumed_and_empty_requests() {
+    let mut sized = Request::new(
+        RequestType::Sized(
+            http::Request::builder()
+                .method(Method::POST)
+                .uri("/body")
+                .body(Full::new(Bytes::from_static(b"original")))
+                .expect("request build failed"),
+        ),
+        Arc::new(Route::new("/body".to_string())),
+    );
+    assert_eq!(sized.body_size_hint().exact(), Some(8));
+    sized.set_body_bytes(Bytes::from_static(b"replacement"));
+    assert_eq!(
+        sized
+            .consume_body_bytes()
+            .await
+            .expect("body read failed")
+            .as_ref(),
+        b"replacement"
+    );
+    assert_eq!(
+        sized
+            .consume_body_bytes()
+            .await
+            .expect("consumed body read should be empty")
+            .as_ref(),
+        b""
+    );
+
+    sized.set_body_bytes(Bytes::from_static(b"restored"));
+    assert_eq!(
+        sized
+            .consume_body_bytes_limited(16, Duration::from_secs(1))
+            .await
+            .expect("limited body read failed")
+            .as_ref(),
+        b"restored"
+    );
+
+    sized.set_body_bytes(Bytes::from_static(b"too-large"));
+    let err = sized
+        .consume_body_bytes_limited(4, Duration::from_secs(1))
+        .await
+        .expect_err("oversized body should fail");
+    assert!(err.to_string().contains("exceeded 4 bytes"));
+
+    let mut empty = Request::new(
+        RequestType::Empty(http::HeaderMap::new()),
+        Arc::new(Route::new("/empty".to_string())),
+    );
+    assert_eq!(empty.method(), &Method::OPTIONS);
+    assert_eq!(empty.uri(), &http::Uri::default());
+    assert_eq!(empty.body_size_hint().exact(), Some(0));
+    empty.headers_mut().insert(
+        http::header::HOST,
+        http::HeaderValue::from_static("empty.test"),
+    );
+    assert_eq!(
+        empty.headers().get(http::header::HOST).unwrap(),
+        "empty.test"
+    );
+    assert!(empty.shared_state_mut().is_none());
+    empty.set_body_bytes(Bytes::new());
+    assert_eq!(
+        empty
+            .consume_body_bytes()
+            .await
+            .expect("empty body read failed")
+            .as_ref(),
+        b""
+    );
+    empty.set_body_bytes(Bytes::from_static(b"created"));
+    assert_eq!(
+        empty
+            .consume_body_bytes_limited(16, Duration::from_secs(1))
+            .await
+            .expect("body created from empty request should read")
+            .as_ref(),
+        b"created"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn request_extractors_report_parse_failures() {
+    let mut bad_query = Request::new(
+        RequestType::Sized(
+            http::Request::builder()
+                .method(Method::GET)
+                .uri("/items?count=not-a-number")
+                .body(Full::new(Bytes::new()))
+                .expect("request build failed"),
+        ),
+        Arc::new(Route::new("/items".to_string())),
+    );
+    let query_err =
+        match <Query<QueryPayload> as FromRequest<Request>>::try_from(&mut bad_query).await {
+            Ok(_) => panic!("bad query should fail"),
+            Err(err) => err,
+        };
+    assert!(query_err.to_string().contains("Failed to parse query"));
+
+    let mut bad_json = Request::new(
+        RequestType::Sized(
+            http::Request::builder()
+                .method(Method::POST)
+                .uri("/items")
+                .body(Full::new(Bytes::from_static(b"{not-json")))
+                .expect("request build failed"),
+        ),
+        Arc::new(Route::new("/items".to_string())),
+    );
+    let json_err = match <Json<JsonPayload> as FromRequest<Request>>::try_from(&mut bad_json).await
+    {
+        Ok(_) => panic!("bad json should fail"),
+        Err(err) => err,
+    };
+    assert!(json_err.to_string().contains("Failed to parse JSON body"));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -210,6 +454,100 @@ async fn response_conversions_populate_status_headers_and_body() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn response_accessors_and_conversions_cover_empty_sized_and_consumed_shapes() {
+    let mut response = Response::new();
+    assert_eq!(response.status(), http::StatusCode::OK);
+    *response.status_mut() = http::StatusCode::ACCEPTED;
+    response
+        .headers_mut()
+        .insert("x-test", http::HeaderValue::from_static("yes"));
+    assert_eq!(
+        response
+            .headers()
+            .get("x-test")
+            .and_then(|v| v.to_str().ok()),
+        Some("yes")
+    );
+    assert_eq!(response.body_size_hint().exact(), Some(0));
+
+    let empty_message = Response::from_status_and_message(http::StatusCode::NO_CONTENT, "");
+    let empty_message: http::Response<_> = empty_message.into();
+    assert_eq!(empty_message.status(), http::StatusCode::NO_CONTENT);
+    assert_eq!(
+        empty_message
+            .headers()
+            .get(http::header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok()),
+        Some("0")
+    );
+
+    let bytes: Response = Bytes::from_static(b"bytes").into();
+    let bytes: http::Response<_> = bytes.into();
+    assert_eq!(
+        bytes
+            .headers()
+            .get(http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        Some("application/octet-stream")
+    );
+    let body = BodyExt::collect(bytes.into_body())
+        .await
+        .expect("bytes body collection failed")
+        .to_bytes();
+    assert_eq!(&body[..], b"bytes");
+
+    let vec_response: Response = vec![1_u8, 2, 3].into();
+    let vec_response: http::Response<_> = vec_response.into();
+    let body = BodyExt::collect(vec_response.into_body())
+        .await
+        .expect("vec body collection failed")
+        .to_bytes();
+    assert_eq!(&body[..], &[1, 2, 3]);
+
+    let slice_response: Response = (&b"slice"[..]).into();
+    let slice_response: http::Response<_> = slice_response.into();
+    let body = BodyExt::collect(slice_response.into_body())
+        .await
+        .expect("slice body collection failed")
+        .to_bytes();
+    assert_eq!(&body[..], b"slice");
+
+    let sized: Response = http::Response::builder()
+        .status(http::StatusCode::CREATED)
+        .body(Full::new(Bytes::from_static(b"created")))
+        .expect("response build failed")
+        .into();
+    let sized: http::Response<_> = sized.into();
+    assert_eq!(sized.status(), http::StatusCode::CREATED);
+    assert_eq!(
+        sized
+            .headers()
+            .get(http::header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok()),
+        Some("7")
+    );
+
+    let middleware = AfterOnlyMiddleware;
+    let request = basic_request();
+    let mut response = Response::ok("ok");
+    assert_eq!(middleware.name(), "after-only");
+    assert!(matches!(
+        middleware
+            .after_with_request(&request, &mut response)
+            .await
+            .expect("middleware after failed"),
+        MiddlewareResult::Continue
+    ));
+    assert_eq!(
+        response
+            .headers()
+            .get("x-after")
+            .and_then(|v| v.to_str().ok()),
+        Some("called")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn filters_any_all_and_or_behave_as_expected() {
     let allow = Arc::new(StaticFilter {
         name: "allow",
@@ -250,6 +588,40 @@ async fn filters_any_all_and_or_behave_as_expected() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn method_filters_name_and_match_expected_methods() {
+    let get_request = Request::new(
+        RequestType::Sized(
+            http::Request::builder()
+                .method(Method::GET)
+                .uri("/method")
+                .body(Full::new(Bytes::new()))
+                .expect("request build failed"),
+        ),
+        Arc::new(Route::new("/method".to_string())),
+    );
+    let post_request = Request::new(
+        RequestType::Sized(
+            http::Request::builder()
+                .method(Method::POST)
+                .uri("/method")
+                .body(Full::new(Bytes::new()))
+                .expect("request build failed"),
+        ),
+        Arc::new(Route::new("/method".to_string())),
+    );
+
+    assert_eq!(filter::method::GET.name(), "GET");
+    assert_eq!(
+        filter::method::GET.filter(&get_request).await,
+        FilterResult::Allow
+    );
+    assert_eq!(
+        filter::method::GET.filter(&post_request).await,
+        FilterResult::Block
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn session_and_oauth_extractors_read_request_session() {
     let mut request = request_with_session(Some(OAuthToken {
         access_token: "access".to_string(),
@@ -287,6 +659,99 @@ async fn session_and_oauth_extractors_read_request_session() {
         .expect("oauth identity extractor should succeed");
     assert_eq!(identity.subject, "user-1");
     assert_eq!(identity.email.as_deref(), Some("user@example.com"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn session_manager_creates_reuses_and_expires_sessions() {
+    let manager = SessionManager {
+        session_duration: Duration::from_secs(60),
+        secure: false,
+    };
+    let mut first = Request::new(
+        RequestType::Sized(
+            http::Request::builder()
+                .method(Method::GET)
+                .uri("/session")
+                .header("x-real-ip", "203.0.113.10")
+                .body(Full::new(Bytes::new()))
+                .expect("request build failed"),
+        ),
+        Arc::new(Route::new("/session".to_string())),
+    );
+
+    assert!(matches!(
+        manager
+            .before(&mut first)
+            .await
+            .expect("session before failed"),
+        MiddlewareResult::Continue
+    ));
+    let first_session = first
+        .get::<Arc<RwLock<Session>>>()
+        .expect("session should be attached")
+        .clone();
+    let mut response = Response::ok("ok");
+    manager
+        .after_with_request(&first, &mut response)
+        .await
+        .expect("session after failed");
+    let set_cookie = response
+        .headers()
+        .get("set-cookie")
+        .expect("set-cookie should be present")
+        .clone();
+    assert_eq!(
+        response
+            .headers()
+            .get("session_id")
+            .and_then(|v| v.to_str().ok()),
+        set_cookie.to_str().ok()
+    );
+
+    let cookie_header = set_cookie.to_str().expect("cookie should be valid");
+    let cookie_request = Request::new(
+        RequestType::Sized(
+            http::Request::builder()
+                .method(Method::GET)
+                .uri("/session")
+                .header(http::header::COOKIE, cookie_header)
+                .body(Full::new(Bytes::new()))
+                .expect("request build failed"),
+        ),
+        Arc::new(Route::new("/session".to_string())),
+    );
+    let cookie =
+        get_session_cookie_from_request(&cookie_request).expect("session cookie should parse");
+    let by_id = SessionManager::get_session_from_id(cookie.value_trimmed())
+        .expect("session should be indexed by client id");
+    assert!(Arc::ptr_eq(&first_session, &by_id));
+
+    let mut second = Request::new(
+        RequestType::Sized(
+            http::Request::builder()
+                .method(Method::GET)
+                .uri("/session")
+                .header("x-real-ip", "203.0.113.10")
+                .header(http::header::COOKIE, cookie_header)
+                .body(Full::new(Bytes::new()))
+                .expect("request build failed"),
+        ),
+        Arc::new(Route::new("/session".to_string())),
+    );
+    assert!(get_session_from_request(&second).await.is_some());
+    manager
+        .before(&mut second)
+        .await
+        .expect("session reuse before failed");
+    let second_session = second
+        .get::<Arc<RwLock<Session>>>()
+        .expect("reused session should be attached")
+        .clone();
+    assert!(Arc::ptr_eq(&first_session, &second_session));
+
+    first_session.write().await.last_update = std::time::Instant::now() - Duration::from_secs(120);
+    manager.cleanup_expired().await;
+    assert!(SessionManager::get_session_from_id(cookie.value_trimmed()).is_none());
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -344,6 +809,64 @@ async fn auth_filters_lock_routes_against_session_and_oauth_state() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn metrics_wrapper_records_requests_and_endpoint_returns_text() {
+    let service = ServiceBuilder::new("/metrics-target")
+        .name("metrics-target")
+        .filter(filter::method::GET.clone())
+        .wrap(Arc::new(MetricsWrapper))
+        .handler(Arc::new(OkService))
+        .build();
+    let mut request = Request::new(
+        RequestType::Sized(
+            http::Request::builder()
+                .method(Method::GET)
+                .uri("/metrics-target")
+                .body(Full::new(Bytes::from_static(b"abc")))
+                .expect("request build failed"),
+        ),
+        Arc::new(Route::new("/metrics-target".to_string())),
+    );
+
+    let response = service.serve(&mut request).await.expect("service failed");
+    assert_eq!(response.status(), http::StatusCode::OK);
+
+    let metrics = ServerBuilder::new().enable_metrics().build();
+    let endpoint = metrics
+        .services
+        .iter()
+        .find(|service| service.name() == "metrics_endpoint")
+        .expect("metrics endpoint should be registered");
+    let mut metrics_request = Request::new(
+        RequestType::Sized(
+            http::Request::builder()
+                .method(Method::GET)
+                .uri("/metrics")
+                .body(Full::new(Bytes::new()))
+                .expect("request build failed"),
+        ),
+        endpoint.route(),
+    );
+    let metrics_response = endpoint
+        .serve(&mut metrics_request)
+        .await
+        .expect("metrics endpoint failed");
+    assert_eq!(
+        metrics_response
+            .headers()
+            .get(http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        Some("text/plain; version=0.0.4")
+    );
+    let metrics_response: http::Response<_> = metrics_response.into();
+    let body = BodyExt::collect(metrics_response.into_body())
+        .await
+        .expect("metrics body collection failed")
+        .to_bytes();
+    let body = String::from_utf8(body.to_vec()).expect("metrics should be utf-8");
+    assert!(body.contains("portfu_metrics_response_sizes_histogram"));
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn service_builder_scope_domain_and_filters_are_enforced() {
     let service = ServiceBuilder::new("/scoped")
         .name("scoped-service")
@@ -390,6 +913,95 @@ async fn service_builder_scope_domain_and_filters_are_enforced() {
     assert!(service.serves(&matching).await);
     assert!(!service.serves(&non_matching_domain).await);
     assert!(!service.serves(&non_matching_method).await);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rate_limiter_enforces_request_windows_and_can_be_disabled() {
+    let limiter = Arc::new(RateLimiter::with_global_limit(RateLimit::new(1, 1, 0)));
+    let service = ServiceBuilder::new("/limited-window")
+        .name("limited-window")
+        .filter(filter::method::GET.clone())
+        .wrap(limiter.clone())
+        .handler(Arc::new(OkService))
+        .build();
+
+    let mut first = limited_request("/limited-window", "198.51.100.10");
+    let response = service
+        .serve(&mut first)
+        .await
+        .expect("first request failed");
+    assert_eq!(response.status(), http::StatusCode::OK);
+
+    let mut second = limited_request("/limited-window", "198.51.100.10");
+    let response = service
+        .serve(&mut second)
+        .await
+        .expect("second request failed");
+    assert_eq!(response.status(), http::StatusCode::TOO_MANY_REQUESTS);
+
+    limiter
+        .enabled
+        .store(false, std::sync::atomic::Ordering::Relaxed);
+    let mut third = limited_request("/limited-window", "198.51.100.10");
+    let response = service
+        .serve(&mut third)
+        .await
+        .expect("disabled request failed");
+    assert_eq!(response.status(), http::StatusCode::OK);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rate_limiter_uses_path_specific_limits_and_socket_fallback_ip() {
+    let limiter = Arc::new(RateLimiter::default().request_size_limit(0));
+    limiter
+        .set_path_limit("/tight", RateLimit::new(1, 1, 0))
+        .await;
+    let service = ServiceBuilder::new("/tight")
+        .name("tight")
+        .filter(filter::method::GET.clone())
+        .wrap(limiter)
+        .handler(Arc::new(OkService))
+        .build();
+
+    let mut first = Request::new(
+        RequestType::Sized(
+            http::Request::builder()
+                .method(Method::GET)
+                .uri("/tight")
+                .body(Full::new(Bytes::new()))
+                .expect("request build failed"),
+        ),
+        Arc::new(Route::new("/tight".to_string())),
+    );
+    first.insert(SocketAddr::new(
+        IpAddr::V4(Ipv4Addr::new(192, 0, 2, 55)),
+        8080,
+    ));
+    let response = service
+        .serve(&mut first)
+        .await
+        .expect("first request failed");
+    assert_eq!(response.status(), http::StatusCode::OK);
+
+    let mut second = Request::new(
+        RequestType::Sized(
+            http::Request::builder()
+                .method(Method::GET)
+                .uri("/tight")
+                .body(Full::new(Bytes::new()))
+                .expect("request build failed"),
+        ),
+        Arc::new(Route::new("/tight".to_string())),
+    );
+    second.insert(SocketAddr::new(
+        IpAddr::V4(Ipv4Addr::new(192, 0, 2, 55)),
+        8080,
+    ));
+    let response = service
+        .serve(&mut second)
+        .await
+        .expect("second request failed");
+    assert_eq!(response.status(), http::StatusCode::TOO_MANY_REQUESTS);
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -604,6 +1216,20 @@ fn basic_request() -> Request {
     Request::new(
         RequestType::Sized(request),
         Arc::new(Route::new("/auth".to_string())),
+    )
+}
+
+fn limited_request(path: &str, ip: &str) -> Request {
+    Request::new(
+        RequestType::Sized(
+            http::Request::builder()
+                .method(Method::GET)
+                .uri(path)
+                .header("cf-connecting-ip", ip)
+                .body(Full::new(Bytes::new()))
+                .expect("request build failed"),
+        ),
+        Arc::new(Route::new(path.to_string())),
     )
 }
 

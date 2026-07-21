@@ -324,3 +324,121 @@ impl WebSocketClient {
         .await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Message, WebSocketClient};
+    use futures_util::{SinkExt, StreamExt};
+    use serde::Serialize;
+    use std::collections::BTreeMap;
+    use std::io::ErrorKind;
+    use std::net::TcpListener as StdTcpListener;
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::{accept_async, connect_async};
+
+    #[derive(Serialize)]
+    struct JsonPayload {
+        id: u64,
+    }
+
+    #[tokio::test]
+    async fn websocket_client_sends_receives_json_binary_and_close_frames() {
+        let Some(listener) = bind_listener_or_skip().await else {
+            return;
+        };
+        let addr = listener.local_addr().expect("local addr failed");
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept failed");
+            let mut websocket = accept_async(stream).await.expect("accept websocket failed");
+            while let Some(message) = websocket.next().await {
+                let message = message.expect("websocket read failed");
+                if message.is_close() {
+                    break;
+                }
+                websocket
+                    .send(message)
+                    .await
+                    .expect("websocket echo failed");
+            }
+        });
+
+        let (stream, _) = connect_async(format!("ws://{addr}"))
+            .await
+            .expect("client connect failed");
+        let client = WebSocketClient::new(stream);
+
+        client.send_text("hello").await.expect("send text failed");
+        match client.next().await.expect("text read failed") {
+            Some(Message::Text(text)) => assert_eq!(text, "hello"),
+            other => panic!("unexpected text frame: {other:?}"),
+        }
+
+        client
+            .send_binary([1_u8, 2, 3])
+            .await
+            .expect("send binary failed");
+        match client.next_message().await.expect("binary read failed") {
+            Some(Message::Binary(bytes)) => assert_eq!(bytes.as_ref(), &[1, 2, 3]),
+            other => panic!("unexpected binary frame: {other:?}"),
+        }
+
+        client
+            .send_json(&JsonPayload { id: 7 })
+            .await
+            .expect("send json failed");
+        match client.next().await.expect("json read failed") {
+            Some(Message::Text(text)) => assert_eq!(text, r#"{"id":7}"#),
+            other => panic!("unexpected json frame: {other:?}"),
+        }
+
+        client.ping("ping").await.expect("send ping failed");
+        client.pong("pong").await.expect("send pong failed");
+        client
+            .close_with(1000, "done")
+            .await
+            .expect("close frame failed");
+        server.await.expect("server task failed");
+    }
+
+    #[tokio::test]
+    async fn websocket_client_reports_json_serialization_failures() {
+        let Some(listener) = bind_listener_or_skip().await else {
+            return;
+        };
+        let addr = listener.local_addr().expect("local addr failed");
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept failed");
+            let _websocket = accept_async(stream).await.expect("accept websocket failed");
+        });
+
+        let (stream, _) = connect_async(format!("ws://{addr}"))
+            .await
+            .expect("client connect failed");
+        let client = WebSocketClient::new(stream);
+        let mut invalid_json_key = BTreeMap::new();
+        invalid_json_key.insert(vec![1_u8, 2, 3], "value");
+
+        let err = client
+            .send_json(&invalid_json_key)
+            .await
+            .expect_err("non-string json object key should fail");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("Failed to serialize JSON"));
+
+        client.close().await.expect("close frame failed");
+        server.await.expect("server task failed");
+    }
+
+    async fn bind_listener_or_skip() -> Option<TcpListener> {
+        match StdTcpListener::bind("127.0.0.1:0") {
+            Ok(listener) => {
+                listener
+                    .set_nonblocking(true)
+                    .expect("set nonblocking failed");
+                Some(TcpListener::from_std(listener).expect("tokio listener conversion failed"))
+            }
+            Err(err) if err.kind() == ErrorKind::PermissionDenied => None,
+            Err(err) => panic!("listener bind failed: {err}"),
+        }
+    }
+}

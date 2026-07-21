@@ -1,7 +1,7 @@
 use futures_util::{SinkExt, StreamExt};
 use http::Method;
 use http_body_util::BodyExt;
-use portfu_updated::prelude::*;
+use portfu::prelude::*;
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::net::TcpListener;

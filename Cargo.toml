@@ -2,13 +2,9 @@
 resolver = "2"
 
 members = [
-    "portfu_admin",
     "portfu",
-    "portfu_core",
     "portfu_macros",
-    "portfu_updated",
     "portfu_common",
-    "portfu_macros_updated",
     "examples",
     "tests",
 ]
@@ -30,15 +26,11 @@ log = "0.4.29"
 mime_guess = "2.0.5"
 notify = "8.2.0"
 once_cell = "1.21.3"
-portfu = {path = "./portfu", version = "1.3.3", default-features = false}
-portfu_admin = {path = "./portfu_admin", version = "1.3.3", default-features = false}
-portfu_core = {path = "./portfu_core", version = "1.3.3", default-features = false}
-portfu_macros = {path = "./portfu_macros", version = "1.3.3", default-features = false}
+portfu = {path = "./portfu", version = "2.0.0", default-features = false}
 portfu_examples = {path = "./examples", version = "2.0.0", default-features = false}
 portfu_tests = {path = "./tests", version = "2.0.0", default-features = false}
 portfu_common = {path = "./portfu_common", version = "2.0.0"}
-portfu_updated = {path = "./portfu_updated", version = "2.0.0"}
-portfu_macros_updated = {path = "./portfu_macros_updated", version = "2.0.0"}
+portfu_macros = {path = "./portfu_macros", version = "2.0.0"}
 prometheus = "0.14.0"
 proc-macro2 = "1.0.106"
 quote = "1.0.45"

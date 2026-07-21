@@ -1,5 +1,5 @@
 use log::LevelFilter;
-pub use portfu_updated::prelude::*;
+pub use portfu::prelude::*;
 use simple_logger::SimpleLogger;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
