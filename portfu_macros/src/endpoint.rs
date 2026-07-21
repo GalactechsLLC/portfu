@@ -4,7 +4,8 @@ use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote, ToTokens};
 use std::collections::HashSet;
 use syn::{
-    parse_quote, punctuated::Punctuated, FnArg, GenericParam, Generics, LitStr, Pat, Token, Type,
+    parse_quote, punctuated::Punctuated, FnArg, GenericArgument, GenericParam, Generics, LitStr,
+    Pat, PathArguments, ReturnType, Token, Type,
 };
 
 pub struct EndpointArgs {
@@ -337,6 +338,7 @@ impl ToTokens for Endpoint {
                 #ident_val,
             });
         }
+        let ok_response = ok_response_conversion(&ast.sig.output);
         let stream = quote! {
             #(#doc_attributes)*
             #[allow(non_camel_case_types, missing_docs)]
@@ -357,9 +359,7 @@ impl ToTokens for Endpoint {
                         }
                         #(#dyn_vars)*
                         match Self::#name (#(#additional_function_vars)*).await {
-                            Ok(resp) => {
-                                Ok(resp.into())
-                            }
+                            Ok(resp) => #ok_response,
                             Err(e) => {
                                 Ok(::portfu::prelude::Response::internal_error(&format!("{e:?}")))
                             }
@@ -370,6 +370,101 @@ impl ToTokens for Endpoint {
         };
         token_out.extend(stream);
     }
+}
+
+fn ok_response_conversion(output: &ReturnType) -> TokenStream2 {
+    let Some(ok_type) = result_ok_type(output) else {
+        return quote! { Ok(resp.into()) };
+    };
+
+    if uses_json_response_fallback(ok_type) {
+        quote! { Ok(::portfu::prelude::Response::json(resp)) }
+    } else {
+        quote! { Ok(resp.into()) }
+    }
+}
+
+fn result_ok_type(output: &ReturnType) -> Option<&Type> {
+    let ReturnType::Type(_, ty) = output else {
+        return None;
+    };
+    let Type::Path(path) = ty.as_ref() else {
+        return None;
+    };
+    let segment = path.path.segments.last()?;
+    if segment.ident != "Result" {
+        return None;
+    }
+    let PathArguments::AngleBracketed(args) = &segment.arguments else {
+        return None;
+    };
+    args.args.iter().find_map(|arg| {
+        if let GenericArgument::Type(ty) = arg {
+            Some(ty)
+        } else {
+            None
+        }
+    })
+}
+
+fn uses_json_response_fallback(ty: &Type) -> bool {
+    match ty {
+        Type::Tuple(tuple) if tuple.elems.is_empty() => false,
+        Type::Reference(reference) => !is_text_or_bytes_reference(reference.elem.as_ref()),
+        Type::Path(path) => !is_known_response_type(path),
+        _ => true,
+    }
+}
+
+fn is_text_or_bytes_reference(ty: &Type) -> bool {
+    match ty {
+        Type::Path(path) => path
+            .path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == "str"),
+        Type::Slice(slice) => is_u8_type(slice.elem.as_ref()),
+        _ => false,
+    }
+}
+
+fn is_known_response_type(path: &syn::TypePath) -> bool {
+    let Some(segment) = path.path.segments.last() else {
+        return false;
+    };
+    if matches!(
+        segment.ident.to_string().as_str(),
+        "Response" | "Json" | "JsonResponse" | "String" | "Bytes"
+    ) {
+        return true;
+    }
+    if segment.ident == "Vec" {
+        return vec_inner_type(segment).is_some_and(is_u8_type);
+    }
+    false
+}
+
+fn vec_inner_type(segment: &syn::PathSegment) -> Option<&Type> {
+    let PathArguments::AngleBracketed(args) = &segment.arguments else {
+        return None;
+    };
+    args.args.iter().find_map(|arg| {
+        if let GenericArgument::Type(ty) = arg {
+            Some(ty)
+        } else {
+            None
+        }
+    })
+}
+
+fn is_u8_type(ty: &Type) -> bool {
+    let Type::Path(path) = ty else {
+        return false;
+    };
+    path.path
+        .segments
+        .last()
+        .is_some_and(|segment| segment.ident == "u8")
 }
 
 struct Args {
@@ -573,5 +668,52 @@ mod tests {
         let rendered = endpoint.to_token_stream().to_string();
         assert!(rendered.contains("compile_error"));
         assert!(rendered.contains("Generic endpoints cannot be auto-registered"));
+    }
+
+    #[test]
+    fn serialize_return_types_use_json_response_fallback() {
+        let args = syn::parse_str::<EndpointArgs>(r#""/users""#).expect("args should parse");
+        let ast: syn::ItemFn = syn::parse_quote! {
+            async fn users() -> Result<Vec<User>, ::portfu::prelude::PortfuError> {
+                Ok(vec![])
+            }
+        };
+        let endpoint = Endpoint::new(args, ast, vec![Method::Get]).expect("endpoint should build");
+        let rendered = endpoint.to_token_stream().to_string();
+        assert!(rendered.contains("Response :: json"));
+    }
+
+    #[test]
+    fn known_response_return_types_keep_into_conversion() {
+        for signature in [
+            quote::quote! {
+                async fn text() -> Result<String, ::portfu::prelude::PortfuError> {
+                    Ok(String::new())
+                }
+            },
+            quote::quote! {
+                async fn bytes() -> Result<Vec<u8>, ::portfu::prelude::PortfuError> {
+                    Ok(vec![])
+                }
+            },
+            quote::quote! {
+                async fn response() -> Result<::portfu::prelude::Response, ::portfu::prelude::PortfuError> {
+                    Ok(::portfu::prelude::Response::new())
+                }
+            },
+            quote::quote! {
+                async fn json() -> Result<::portfu::prelude::JsonResponse<Vec<User>>, ::portfu::prelude::PortfuError> {
+                    Ok(::portfu::prelude::JsonResponse::from(vec![]))
+                }
+            },
+        ] {
+            let args = syn::parse_str::<EndpointArgs>(r#""/value""#).expect("args should parse");
+            let ast: syn::ItemFn = syn::parse2(signature).expect("signature should parse");
+            let endpoint =
+                Endpoint::new(args, ast, vec![Method::Get]).expect("endpoint should build");
+            let rendered = endpoint.to_token_stream().to_string();
+            assert!(rendered.contains("Ok (resp . into ())"));
+            assert!(!rendered.contains("Response :: json"));
+        }
     }
 }

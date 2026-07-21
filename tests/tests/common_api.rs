@@ -1,7 +1,7 @@
 use http::Method;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
-use portfu::prelude::{PreEscaped, Render, html, inventory, maud_http};
+use portfu::prelude::{PreEscaped, Render, get, html, inventory, maud_http};
 use portfu_common::auth::oauth::{
     OAUTH, OAuthIdentity, OAuthToken, SessionOAuthIdentity, SessionOAuthToken,
 };
@@ -86,7 +86,37 @@ struct MarkerJson {
 
 impl Serialized for MarkerJson {}
 
-#[maud_http("/maud/index.html", name = "maud-index")]
+#[derive(Debug, Serialize)]
+struct PlainJson {
+    id: u64,
+    name: String,
+}
+
+struct BrokenJson;
+
+impl Serialize for BrokenJson {
+    fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        Err(serde::ser::Error::custom("broken json"))
+    }
+}
+
+#[get("/typed-json", name = "typed-json")]
+async fn typed_json_endpoint() -> Result<Vec<PlainJson>, PortfuError> {
+    Ok(vec![PlainJson {
+        id: 7,
+        name: "seven".to_string(),
+    }])
+}
+
+#[get("/broken-json", name = "broken-json")]
+async fn broken_json_endpoint() -> Result<BrokenJson, PortfuError> {
+    Ok(BrokenJson)
+}
+
+#[maud_http("/maud/", "/maud/index.html", name = "maud-index")]
 #[derive(Clone, Debug, Default)]
 struct MaudIndexPage;
 
@@ -880,55 +910,171 @@ async fn metrics_wrapper_records_requests_and_endpoint_returns_text() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn maud_http_macro_registers_html_service() {
+async fn endpoint_macro_serializes_plain_serialize_results_as_json() {
     let services = load_registered_services();
     let service = services
         .iter()
-        .find(|service| service.name() == "maud-index")
-        .expect("maud service should be registered");
+        .find(|service| service.name() == "typed-json")
+        .expect("typed-json service should be registered");
 
-    let mut get_request = Request::new(
+    let mut request = Request::new(
         RequestType::Sized(
             http::Request::builder()
                 .method(Method::GET)
-                .uri("/maud/index.html")
+                .uri("/typed-json")
                 .body(Full::new(Bytes::new()))
                 .expect("request build failed"),
         ),
         service.route(),
     );
-    assert!(service.serves(&get_request).await);
-    let response = service
-        .serve(&mut get_request)
-        .await
-        .expect("maud service failed");
+    assert!(service.serves(&request).await);
+    let response = service.serve(&mut request).await.expect("service failed");
     assert_eq!(response.status(), http::StatusCode::OK);
     assert_eq!(
         response
             .headers()
             .get(http::header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok()),
-        Some("text/html; charset=utf-8")
+        Some("application/json")
     );
+
     let response: http::Response<_> = response.into();
     let body = BodyExt::collect(response.into_body())
         .await
-        .expect("maud body collection failed")
+        .expect("json body collection failed")
         .to_bytes();
-    assert_eq!(&body[..], b"<h1>Hello from Maud</h1>");
+    assert_eq!(&body[..], br#"[{"id":7,"name":"seven"}]"#);
+}
 
-    let mut options_request = Request::new(
+#[tokio::test(flavor = "current_thread")]
+async fn endpoint_macro_reports_json_serialization_failures() {
+    let services = load_registered_services();
+    let service = services
+        .iter()
+        .find(|service| service.name() == "broken-json")
+        .expect("broken-json service should be registered");
+
+    let mut request = Request::new(
         RequestType::Sized(
             http::Request::builder()
-                .method(Method::OPTIONS)
-                .uri("/maud/index.html")
+                .method(Method::GET)
+                .uri("/broken-json")
                 .body(Full::new(Bytes::new()))
                 .expect("request build failed"),
         ),
         service.route(),
     );
-    assert!(service.serves(&options_request).await);
-    let options_response = service
+    assert!(service.serves(&request).await);
+    let response = service.serve(&mut request).await.expect("service failed");
+    assert_eq!(response.status(), http::StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        response
+            .headers()
+            .get(http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        Some("text/plain; charset=utf-8")
+    );
+
+    let response: http::Response<_> = response.into();
+    let body = BodyExt::collect(response.into_body())
+        .await
+        .expect("error body collection failed")
+        .to_bytes();
+    assert_eq!(&body[..], b"Failed to serialize JSON");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn maud_http_macro_registers_html_service() {
+    let services = load_registered_services();
+    let maud_services: Vec<_> = services
+        .iter()
+        .filter(|service| service.name() == "maud-index")
+        .collect();
+    assert_eq!(
+        maud_services.len(),
+        2,
+        "maud aliases should each register a service"
+    );
+
+    for path in ["/maud/", "/maud/index.html"] {
+        let mut matched = None;
+        for service in &maud_services {
+            let request = Request::new(
+                RequestType::Sized(
+                    http::Request::builder()
+                        .method(Method::GET)
+                        .uri(path)
+                        .body(Full::new(Bytes::new()))
+                        .expect("request build failed"),
+                ),
+                service.route(),
+            );
+            if service.serves(&request).await {
+                matched = Some(*service);
+                break;
+            }
+        }
+        let service = matched.expect("maud path should be registered");
+
+        let mut get_request = Request::new(
+            RequestType::Sized(
+                http::Request::builder()
+                    .method(Method::GET)
+                    .uri(path)
+                    .body(Full::new(Bytes::new()))
+                    .expect("request build failed"),
+            ),
+            service.route(),
+        );
+        let response = service
+            .serve(&mut get_request)
+            .await
+            .expect("maud service failed");
+        assert_eq!(response.status(), http::StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(http::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok()),
+            Some("text/html; charset=utf-8")
+        );
+        let response: http::Response<_> = response.into();
+        let body = BodyExt::collect(response.into_body())
+            .await
+            .expect("maud body collection failed")
+            .to_bytes();
+        assert_eq!(&body[..], b"<h1>Hello from Maud</h1>");
+    }
+
+    let mut matched_options = None;
+    for service in &maud_services {
+        let request = Request::new(
+            RequestType::Sized(
+                http::Request::builder()
+                    .method(Method::OPTIONS)
+                    .uri("/maud/")
+                    .body(Full::new(Bytes::new()))
+                    .expect("request build failed"),
+            ),
+            service.route(),
+        );
+        if service.serves(&request).await {
+            matched_options = Some(*service);
+            break;
+        }
+    }
+    let options_service = matched_options.expect("maud options path should be registered");
+    let mut options_request = Request::new(
+        RequestType::Sized(
+            http::Request::builder()
+                .method(Method::OPTIONS)
+                .uri("/maud/")
+                .body(Full::new(Bytes::new()))
+                .expect("request build failed"),
+        ),
+        options_service.route(),
+    );
+    let options_response = options_service
         .serve(&mut options_request)
         .await
         .expect("maud options failed");
@@ -940,17 +1086,19 @@ async fn maud_http_macro_registers_html_service() {
         Some("text/html; charset=utf-8")
     );
 
-    let post_request = Request::new(
-        RequestType::Sized(
-            http::Request::builder()
-                .method(Method::POST)
-                .uri("/maud/index.html")
-                .body(Full::new(Bytes::new()))
-                .expect("request build failed"),
-        ),
-        service.route(),
-    );
-    assert!(!service.serves(&post_request).await);
+    for service in maud_services {
+        let post_request = Request::new(
+            RequestType::Sized(
+                http::Request::builder()
+                    .method(Method::POST)
+                    .uri("/maud/")
+                    .body(Full::new(Bytes::new()))
+                    .expect("request build failed"),
+            ),
+            service.route(),
+        );
+        assert!(!service.serves(&post_request).await);
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]
