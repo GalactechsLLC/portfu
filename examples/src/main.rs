@@ -163,9 +163,9 @@ pub async fn session_guard(session: SessionState) -> Result<String, PortfuError>
 #[get("/auth/success", filter = filters::auth::oauth())]
 pub async fn oauth_success(identity: OAuthIdentity) -> Result<String, PortfuError> {
     Ok(format!(
-        "oauth_user={} role={}",
+        "oauth_user={} roles={}",
         identity.subject,
-        identity.role.as_deref().unwrap_or("none")
+        identity.roles.join(",")
     ))
 }
 

@@ -142,6 +142,48 @@ impl Render for MaudUserPage {
     }
 }
 
+#[maud_http(
+    "/maud/blocked",
+    name = "maud-blocked",
+    filter = Arc::new(StaticFilter {
+        name: "maud-block",
+        allow: false
+    })
+)]
+#[derive(Clone, Debug, Default)]
+struct MaudBlockedPage;
+
+impl Render for MaudBlockedPage {
+    fn render(&self) -> PreEscaped<String> {
+        html! {
+            p { "blocked" }
+        }
+    }
+}
+
+#[maud_http(
+    "/maud/post",
+    name = "maud-post",
+    scope = "maud-scope",
+    domain = "example.test",
+    method = "POST",
+    filter = Arc::new(StaticFilter {
+        name: "maud-allow",
+        allow: true
+    }),
+    wrap = Arc::new(AfterOnlyMiddleware)
+)]
+#[derive(Clone, Debug, Default)]
+struct MaudPostPage;
+
+impl Render for MaudPostPage {
+    fn render(&self) -> PreEscaped<String> {
+        html! {
+            p { "posted" }
+        }
+    }
+}
+
 struct ItemId;
 
 impl PathName for ItemId {
@@ -863,6 +905,60 @@ async fn auth_filters_lock_routes_against_session_and_oauth_state() {
             .await,
         FilterResult::Allow
     );
+    assert_eq!(
+        filter::auth::oauth_role("user")
+            .filter(&oauth_request)
+            .await,
+        FilterResult::Allow
+    );
+    assert_eq!(
+        filter::auth::oauth_role("admin")
+            .filter(&oauth_request)
+            .await,
+        FilterResult::Block
+    );
+    assert_eq!(
+        filter::auth::oauth_any_role(["admin", "user"])
+            .filter(&oauth_request)
+            .await,
+        FilterResult::Allow
+    );
+    assert_eq!(
+        filter::auth::oauth_all_roles(["user", "admin"])
+            .filter(&oauth_request)
+            .await,
+        FilterResult::Block
+    );
+    assert_eq!(
+        filter::auth::oauth_group("/engineering")
+            .filter(&oauth_request)
+            .await,
+        FilterResult::Allow
+    );
+    assert_eq!(
+        filter::auth::oauth_any_group(["/ops", "/engineering"])
+            .filter(&oauth_request)
+            .await,
+        FilterResult::Allow
+    );
+
+    let oauth_without_role = request_with_session_and_roles(
+        Some(OAuthToken {
+            access_token: "access".to_string(),
+            refresh_token: None,
+            token_type: "Bearer".to_string(),
+            expires_in_seconds: None,
+            scopes: vec!["read".to_string()],
+        }),
+        Vec::<String>::new(),
+    )
+    .await;
+    assert_eq!(
+        filter::auth::oauth_role("user")
+            .filter(&oauth_without_role)
+            .await,
+        FilterResult::Block
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1180,6 +1276,94 @@ async fn maud_http_macro_populates_path_fields() {
             .to_bytes();
         assert_eq!(&body[..], expected_body);
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn maud_http_macro_applies_endpoint_style_options() {
+    let services = load_registered_services();
+    let blocked = services
+        .iter()
+        .find(|service| service.name() == "maud-blocked")
+        .expect("blocked maud service should be registered");
+    let blocked_request = Request::new(
+        RequestType::Sized(
+            http::Request::builder()
+                .method(Method::GET)
+                .uri("/maud/blocked")
+                .body(Full::new(Bytes::new()))
+                .expect("request build failed"),
+        ),
+        blocked.route(),
+    );
+    assert!(!blocked.serves(&blocked_request).await);
+
+    let service = services
+        .iter()
+        .find(|service| service.name() == "maud-post")
+        .expect("post maud service should be registered");
+    assert_eq!(service.scope(), "maud-scope");
+    assert_eq!(service.domains(), &["example.test".to_string()]);
+
+    let wrong_host = Request::new(
+        RequestType::Sized(
+            http::Request::builder()
+                .method(Method::POST)
+                .uri("/maud/post")
+                .header(http::header::HOST, "other.test")
+                .body(Full::new(Bytes::new()))
+                .expect("request build failed"),
+        ),
+        service.route(),
+    );
+    assert!(!service.serves(&wrong_host).await);
+
+    let unsupported_method = Request::new(
+        RequestType::Sized(
+            http::Request::builder()
+                .method(Method::PUT)
+                .uri("/maud/post")
+                .header(http::header::HOST, "example.test")
+                .body(Full::new(Bytes::new()))
+                .expect("request build failed"),
+        ),
+        service.route(),
+    );
+    assert!(!service.serves(&unsupported_method).await);
+
+    let mut request = Request::new(
+        RequestType::Sized(
+            http::Request::builder()
+                .method(Method::POST)
+                .uri("/maud/post")
+                .header(http::header::HOST, "example.test")
+                .body(Full::new(Bytes::new()))
+                .expect("request build failed"),
+        ),
+        service.route(),
+    );
+    assert!(service.serves(&request).await);
+    let response = service.serve(&mut request).await.expect("service failed");
+    assert_eq!(response.status(), http::StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        Some("text/html; charset=utf-8")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-after")
+            .and_then(|v| v.to_str().ok()),
+        Some("called")
+    );
+    let response: http::Response<_> = response.into();
+    let body = BodyExt::collect(response.into_body())
+        .await
+        .expect("maud body collection failed")
+        .to_bytes();
+    assert_eq!(&body[..], b"<p>posted</p>");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1651,6 +1835,14 @@ fn limited_request(path: &str, ip: &str) -> Request {
 }
 
 async fn request_with_session(token: Option<OAuthToken>) -> Request {
+    request_with_session_and_roles(token, ["user"]).await
+}
+
+async fn request_with_session_and_roles<I, S>(token: Option<OAuthToken>, roles: I) -> Request
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
     let mut request = basic_request();
     let session = Arc::new(RwLock::new(Session::default()));
     if let Some(token) = token {
@@ -1659,7 +1851,8 @@ async fn request_with_session(token: Option<OAuthToken>) -> Request {
             subject: "user-1".to_string(),
             username: Some("user".to_string()),
             email: Some("user@example.com".to_string()),
-            role: Some("user".to_string()),
+            roles: roles.into_iter().map(Into::into).collect(),
+            groups: vec!["/engineering".to_string()],
             scopes: token.scopes.clone(),
             raw: serde_json::json!({"sub": "user-1"}),
         };

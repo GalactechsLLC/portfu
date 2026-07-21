@@ -186,7 +186,7 @@ impl Args {
         let mut domains = Vec::new();
         let mut filters = Vec::new();
         let mut wrappers = Vec::new();
-        let methods = HashSet::from([Method::Get, Method::Options]);
+        let mut methods = HashSet::from([Method::Get, Method::Options]);
 
         for nv in args.options {
             if nv.path.is_ident("name") {
@@ -250,10 +250,28 @@ impl Args {
                 } else {
                     wrappers.push(value);
                 }
+            } else if nv.path.is_ident("method") {
+                if let syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(lit),
+                    ..
+                }) = nv.value.clone()
+                {
+                    if !methods.insert(Method::try_from(&lit)?) {
+                        return Err(syn::Error::new_spanned(
+                            nv.value,
+                            format!("HTTP method defined more than once: `{}`", lit.value()),
+                        ));
+                    }
+                } else {
+                    return Err(syn::Error::new_spanned(
+                        nv.value,
+                        "Attribute method expects literal string",
+                    ));
+                }
             } else {
                 return Err(syn::Error::new_spanned(
                     nv.path,
-                    "Unknown attribute key is specified; allowed: name, scope, domain, filter and wrap",
+                    "Unknown attribute key is specified; allowed: name, scope, domain, filter, method and wrap",
                 ));
             }
         }
@@ -402,7 +420,7 @@ mod tests {
     #[test]
     fn args_accept_route_options() {
         let args = syn::parse_str::<MaudHttpArgs>(
-            r#""/index.html", name = "index", scope = "site", domain = "example.test", filter = ::portfu::prelude::filters::method::GET.clone(), wrap = my_wrapper()"#,
+            r#""/index.html", name = "index", scope = "site", domain = "example.test", filter = ::portfu::prelude::filters::method::GET.clone(), method = "POST", wrap = my_wrapper()"#,
         )
         .expect("args should parse");
         let parsed = Args::new(args).expect("maud args should parse");
@@ -411,6 +429,20 @@ mod tests {
         assert_eq!(parsed.domains.len(), 1);
         assert_eq!(parsed.filters.len(), 1);
         assert_eq!(parsed.wrappers.len(), 1);
+        assert!(parsed.methods.contains(&crate::method::Method::Post));
+    }
+
+    #[test]
+    fn args_reject_duplicate_method_entries() {
+        let args = syn::parse_str::<MaudHttpArgs>(r#""/index.html", method = "GET""#)
+            .expect("args should parse");
+        let parsed = Args::new(args);
+        assert!(parsed.is_err());
+        assert!(parsed
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("HTTP method defined more than once"));
     }
 
     #[test]

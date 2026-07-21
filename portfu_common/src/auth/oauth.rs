@@ -6,6 +6,8 @@ use crate::service::response::Response;
 use crate::service::traits::Service;
 use crate::wrappers::sessions::Session;
 use crate::wrappers::sessions::SessionManager;
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use http::header::LOCATION;
 use http::{HeaderValue, StatusCode};
 use oauth2::basic::BasicClient;
@@ -63,7 +65,8 @@ pub struct OAuthIdentity {
     pub subject: String,
     pub username: Option<String>,
     pub email: Option<String>,
-    pub role: Option<String>,
+    pub roles: Vec<String>,
+    pub groups: Vec<String>,
     pub scopes: Vec<String>,
     pub raw: Value,
 }
@@ -131,7 +134,7 @@ pub struct OAuthProviderPolicy {
     pub allowed_roles: Vec<String>,
     pub admin_roles: Vec<String>,
     pub allowed_organizations: Vec<String>,
-    pub default_role: Option<String>,
+    pub default_roles: Vec<String>,
     pub handler: Option<Arc<dyn OAuthPolicyHandler>>,
 }
 
@@ -303,7 +306,16 @@ impl OAuthServerBuilder {
     }
 
     pub fn default_role<S: Into<String>>(mut self, role: S) -> Self {
-        self.config.policy.default_role = Some(role.into());
+        self.config.policy.default_roles.push(role.into());
+        self
+    }
+
+    pub fn default_roles<I, S>(mut self, roles: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.config.policy.default_roles = roles.into_iter().map(Into::into).collect();
         self
     }
 
@@ -530,15 +542,17 @@ impl OAuthRouteConfig {
         token: OAuthToken,
         userinfo: Value,
     ) -> Result<OAuthPolicyDecision, PortfuError> {
+        let token_claims = jwt_claims(&token.access_token);
         let mut identity = identity_from_userinfo(
             self.provider,
-            token.scopes.clone(),
+            scope_values(token.scopes.clone(), token_claims.as_ref()),
             userinfo.clone(),
-            self.policy.default_role.clone(),
+            token_claims.clone(),
+            self.policy.default_roles.clone(),
         );
-        let role_values = role_values(self.provider, &userinfo);
+        let role_values = identity.roles.clone();
         let user_values = user_values(&identity);
-        let org_values = organization_values(self.provider, &userinfo);
+        let org_values = organization_values(self.provider, &userinfo, token_claims.as_ref());
 
         if !self.policy.allowed_users.is_empty()
             && !has_match(&self.policy.allowed_users, &user_values)
@@ -565,10 +579,12 @@ impl OAuthRouteConfig {
             ));
         }
 
-        if has_match(&self.policy.admin_users, &user_values)
-            || has_match(&self.policy.admin_roles, &role_values)
+        if (!self.policy.admin_users.is_empty()
+            && has_match(&self.policy.admin_users, &user_values))
+            || (!self.policy.admin_roles.is_empty()
+                && has_match(&self.policy.admin_roles, &role_values))
         {
-            identity.role = Some("admin".to_string());
+            push_unique(&mut identity.roles, "admin".to_string());
         }
 
         let decision = OAuthPolicyDecision::allow(identity);
@@ -644,34 +660,77 @@ fn identity_from_userinfo(
     provider: OAUTH,
     scopes: Vec<String>,
     userinfo: Value,
-    default_role: Option<String>,
+    token_claims: Option<Value>,
+    default_roles: Vec<String>,
 ) -> OAuthIdentity {
     match provider {
         OAUTH::GITHUB => {
             let user = userinfo.get("user").unwrap_or(&userinfo);
+            let mut roles = Vec::new();
+            for role in default_roles {
+                push_unique(&mut roles, role);
+            }
             OAuthIdentity {
                 provider,
                 subject: string_value(user, "id").unwrap_or_else(|| "github".to_string()),
                 username: string_value(user, "login"),
                 email: string_value(user, "email").or_else(|| primary_github_email(&userinfo)),
-                role: default_role,
+                roles,
+                groups: Vec::new(),
                 scopes,
                 raw: userinfo,
             }
         }
-        OAUTH::KEYCLOAK | OAUTH::CUSTOM => OAuthIdentity {
-            provider,
-            subject: string_value(&userinfo, "sub")
-                .or_else(|| string_value(&userinfo, "id"))
-                .unwrap_or_else(|| "oauth".to_string()),
-            username: string_value(&userinfo, "preferred_username")
-                .or_else(|| string_value(&userinfo, "username"))
-                .or_else(|| string_value(&userinfo, "name")),
-            email: string_value(&userinfo, "email"),
-            role: default_role,
-            scopes,
-            raw: userinfo,
-        },
+        OAUTH::KEYCLOAK | OAUTH::CUSTOM => {
+            let mut roles = role_values(provider, &userinfo, token_claims.as_ref());
+            for role in default_roles {
+                push_unique(&mut roles, role);
+            }
+            let groups = group_values(provider, &userinfo, token_claims.as_ref());
+            OAuthIdentity {
+                provider,
+                subject: string_value(&userinfo, "sub")
+                    .or_else(|| {
+                        token_claims
+                            .as_ref()
+                            .and_then(|claims| string_value(claims, "sub"))
+                    })
+                    .or_else(|| string_value(&userinfo, "id"))
+                    .or_else(|| {
+                        token_claims
+                            .as_ref()
+                            .and_then(|claims| string_value(claims, "id"))
+                    })
+                    .unwrap_or_else(|| "oauth".to_string()),
+                username: string_value(&userinfo, "preferred_username")
+                    .or_else(|| {
+                        token_claims
+                            .as_ref()
+                            .and_then(|claims| string_value(claims, "preferred_username"))
+                    })
+                    .or_else(|| string_value(&userinfo, "username"))
+                    .or_else(|| {
+                        token_claims
+                            .as_ref()
+                            .and_then(|claims| string_value(claims, "username"))
+                    })
+                    .or_else(|| string_value(&userinfo, "name"))
+                    .or_else(|| {
+                        token_claims
+                            .as_ref()
+                            .and_then(|claims| string_value(claims, "name"))
+                    }),
+                email: string_value(&userinfo, "email").or_else(|| {
+                    token_claims
+                        .as_ref()
+                        .and_then(|claims| string_value(claims, "email"))
+                }),
+                roles,
+                groups,
+                scopes,
+                raw: userinfo,
+            }
+        }
     }
 }
 
@@ -686,41 +745,65 @@ fn user_values(identity: &OAuthIdentity) -> Vec<String> {
     values
 }
 
-fn role_values(provider: OAUTH, userinfo: &Value) -> Vec<String> {
+fn role_values(provider: OAUTH, userinfo: &Value, token_claims: Option<&Value>) -> Vec<String> {
+    let mut roles = Vec::new();
     match provider {
         OAUTH::KEYCLOAK => {
-            let mut roles = Vec::new();
-            if let Some(realm_roles) = userinfo
-                .get("realm_access")
-                .and_then(|v| v.get("roles"))
-                .and_then(Value::as_array)
-            {
-                roles.extend(
-                    realm_roles
-                        .iter()
-                        .filter_map(|v| v.as_str().map(str::to_string)),
-                );
+            collect_keycloak_roles(&mut roles, userinfo);
+            if let Some(token_claims) = token_claims {
+                collect_keycloak_roles(&mut roles, token_claims);
             }
-            if let Some(resource_access) =
-                userinfo.get("resource_access").and_then(Value::as_object)
-            {
-                for resource in resource_access.values() {
-                    if let Some(resource_roles) = resource.get("roles").and_then(Value::as_array) {
-                        roles.extend(
-                            resource_roles
-                                .iter()
-                                .filter_map(|v| v.as_str().map(str::to_string)),
-                        );
-                    }
-                }
+            collect_string_values(&mut roles, userinfo, "roles");
+            collect_string_values(&mut roles, userinfo, "role");
+            roles
+        }
+        OAUTH::CUSTOM => {
+            collect_string_values(&mut roles, userinfo, "roles");
+            collect_string_values(&mut roles, userinfo, "role");
+            if let Some(token_claims) = token_claims {
+                collect_string_values(&mut roles, token_claims, "roles");
+                collect_string_values(&mut roles, token_claims, "role");
             }
             roles
         }
-        _ => Vec::new(),
+        OAUTH::GITHUB => roles,
     }
 }
 
-fn organization_values(provider: OAUTH, userinfo: &Value) -> Vec<String> {
+fn group_values(provider: OAUTH, userinfo: &Value, token_claims: Option<&Value>) -> Vec<String> {
+    let mut groups = Vec::new();
+    match provider {
+        OAUTH::KEYCLOAK | OAUTH::CUSTOM => {
+            collect_string_values(&mut groups, userinfo, "groups");
+            collect_string_values(&mut groups, userinfo, "group");
+            if let Some(token_claims) = token_claims {
+                collect_string_values(&mut groups, token_claims, "groups");
+                collect_string_values(&mut groups, token_claims, "group");
+            }
+        }
+        OAUTH::GITHUB => {}
+    }
+    groups
+}
+
+fn scope_values(scopes: Vec<String>, token_claims: Option<&Value>) -> Vec<String> {
+    let mut values = Vec::new();
+    for scope in scopes {
+        push_unique(&mut values, scope);
+    }
+    if let Some(token_claims) = token_claims {
+        collect_scope_values(&mut values, token_claims, "scope");
+        collect_string_values(&mut values, token_claims, "scp");
+        collect_string_values(&mut values, token_claims, "scopes");
+    }
+    values
+}
+
+fn organization_values(
+    provider: OAUTH,
+    userinfo: &Value,
+    token_claims: Option<&Value>,
+) -> Vec<String> {
     match provider {
         OAUTH::GITHUB => userinfo
             .get("orgs")
@@ -732,8 +815,82 @@ fn organization_values(provider: OAUTH, userinfo: &Value) -> Vec<String> {
                     .collect()
             })
             .unwrap_or_default(),
-        _ => Vec::new(),
+        OAUTH::KEYCLOAK | OAUTH::CUSTOM => group_values(provider, userinfo, token_claims),
     }
+}
+
+fn collect_keycloak_roles(values: &mut Vec<String>, source: &Value) {
+    if let Some(realm_roles) = source.get("realm_access").and_then(|v| v.get("roles")) {
+        collect_values(values, realm_roles);
+    }
+    if let Some(resource_access) = source.get("resource_access").and_then(Value::as_object) {
+        for (client, resource) in resource_access {
+            if let Some(resource_roles) = resource.get("roles").and_then(Value::as_array) {
+                for role in resource_roles.iter().filter_map(Value::as_str) {
+                    push_unique(values, role.to_string());
+                    push_unique(values, format!("{client}:{role}"));
+                }
+            }
+        }
+    }
+}
+
+fn collect_string_values(values: &mut Vec<String>, source: &Value, key: &str) {
+    if let Some(value) = source.get(key) {
+        collect_values(values, value);
+    }
+}
+
+fn collect_scope_values(values: &mut Vec<String>, source: &Value, key: &str) {
+    match source.get(key) {
+        Some(Value::String(scopes)) => {
+            for scope in scopes.split_whitespace() {
+                push_unique(values, scope.to_string());
+            }
+        }
+        Some(value) => collect_values(values, value),
+        None => {}
+    }
+}
+
+fn collect_values(values: &mut Vec<String>, value: &Value) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                if let Some(value) = scalar_string(item) {
+                    push_unique(values, value);
+                }
+            }
+        }
+        _ => {
+            if let Some(value) = scalar_string(value) {
+                push_unique(values, value);
+            }
+        }
+    }
+}
+
+fn scalar_string(value: &Value) -> Option<String> {
+    value
+        .as_str()
+        .map(str::to_string)
+        .or_else(|| value.as_u64().map(|v| v.to_string()))
+        .or_else(|| value.as_i64().map(|v| v.to_string()))
+}
+
+fn push_unique(values: &mut Vec<String>, value: String) {
+    if !values
+        .iter()
+        .any(|existing| existing.eq_ignore_ascii_case(&value))
+    {
+        values.push(value);
+    }
+}
+
+fn jwt_claims(token: &str) -> Option<Value> {
+    let payload = token.split('.').nth(1)?;
+    let decoded = URL_SAFE_NO_PAD.decode(payload).ok()?;
+    serde_json::from_slice(&decoded).ok()
 }
 
 fn primary_github_email(userinfo: &Value) -> Option<String> {
@@ -861,15 +1018,19 @@ impl OAuthClient {
             .await
             .map_err(|e| PortfuError::Internal(format!("Failed oauth token exchange: {e}")))?;
 
+        let access_token = token.access_token().secret().to_string();
         let mapped = OAuthToken {
-            access_token: token.access_token().secret().to_string(),
+            scopes: scope_values(
+                token
+                    .scopes()
+                    .map(|s| s.iter().map(|v| v.as_ref().to_string()).collect())
+                    .unwrap_or_default(),
+                jwt_claims(&access_token).as_ref(),
+            ),
+            access_token,
             refresh_token: token.refresh_token().map(|v| v.secret().to_string()),
             token_type: token.token_type().as_ref().to_string(),
             expires_in_seconds: token.expires_in().map(|v| v.as_secs()),
-            scopes: token
-                .scopes()
-                .map(|s| s.iter().map(|v| v.as_ref().to_string()).collect())
-                .unwrap_or_default(),
         };
 
         let mut session = session.write().await;
@@ -900,7 +1061,9 @@ pub fn redirect(location: impl AsRef<str>) -> Response {
 #[cfg(test)]
 mod tests {
     use super::{OAUTH, OAuthConfig, OAuthPolicyDecision, OAuthRouteConfig, OAuthToken, redirect};
-    use serde_json::json;
+    use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use serde_json::{Value, json};
     use std::sync::{Mutex, OnceLock};
 
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -969,7 +1132,13 @@ mod tests {
                     "email": "ada@example.com",
                     "realm_access": {
                         "roles": ["user", "admin"]
-                    }
+                    },
+                    "resource_access": {
+                        "portfu": {
+                            "roles": ["editor"]
+                        }
+                    },
+                    "groups": ["/engineering", "/platform"]
                 }),
             )
             .await
@@ -978,7 +1147,148 @@ mod tests {
         assert!(decision.allow);
         assert_eq!(decision.identity.subject, "abc");
         assert_eq!(decision.identity.username.as_deref(), Some("ada"));
-        assert_eq!(decision.identity.role.as_deref(), Some("admin"));
+        assert_eq!(
+            decision.identity.roles,
+            vec![
+                "user".to_string(),
+                "admin".to_string(),
+                "editor".to_string(),
+                "portfu:editor".to_string()
+            ]
+        );
+        assert_eq!(
+            decision.identity.groups,
+            vec!["/engineering".to_string(), "/platform".to_string()]
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn keycloak_policy_maps_access_token_claims_when_userinfo_is_empty() {
+        let mut config = OAuthRouteConfig::new(OAUTH::KEYCLOAK);
+        config
+            .policy
+            .allowed_roles
+            .push("portfu:writer".to_string());
+        config
+            .policy
+            .allowed_organizations
+            .push("/engineering".to_string());
+        let decision = config
+            .evaluate_userinfo(
+                token_with_access_token(jwt_token(json!({
+                    "sub": "token-subject",
+                    "preferred_username": "token-user",
+                    "email": "token@example.com",
+                    "realm_access": {
+                        "roles": ["user"]
+                    },
+                    "resource_access": {
+                        "portfu": {
+                            "roles": ["writer"]
+                        }
+                    },
+                    "groups": ["/engineering"]
+                }))),
+                Value::Null,
+            )
+            .await
+            .expect("policy should evaluate");
+
+        assert!(decision.allow);
+        assert_eq!(decision.identity.subject, "token-subject");
+        assert_eq!(decision.identity.username.as_deref(), Some("token-user"));
+        assert_eq!(
+            decision.identity.email.as_deref(),
+            Some("token@example.com")
+        );
+        assert_eq!(
+            decision.identity.roles,
+            vec![
+                "user".to_string(),
+                "writer".to_string(),
+                "portfu:writer".to_string()
+            ]
+        );
+        assert_eq!(decision.identity.groups, vec!["/engineering".to_string()]);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn oauth_identity_merges_scopes_from_access_token_claims() {
+        let config = OAuthRouteConfig::new(OAUTH::KEYCLOAK);
+        let decision = config
+            .evaluate_userinfo(
+                token_with_access_token_and_scopes(
+                    jwt_token(json!({
+                        "sub": "token-subject",
+                        "scope": "openid profile",
+                        "scp": ["email"],
+                        "scopes": ["profile", "offline_access"]
+                    })),
+                    vec!["openid".to_string()],
+                ),
+                Value::Null,
+            )
+            .await
+            .expect("policy should evaluate");
+
+        assert_eq!(
+            decision.identity.scopes,
+            vec![
+                "openid".to_string(),
+                "profile".to_string(),
+                "email".to_string(),
+                "offline_access".to_string()
+            ]
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn custom_policy_maps_roles_and_groups_from_scalar_or_array_values() {
+        let config = OAuthRouteConfig::new(OAUTH::CUSTOM);
+        let decision = config
+            .evaluate_userinfo(
+                token(),
+                json!({
+                    "sub": "abc",
+                    "roles": ["editor", "reviewer"],
+                    "role": "editor",
+                    "group": "/ops",
+                    "groups": ["/engineering", "/ops"]
+                }),
+            )
+            .await
+            .expect("policy should evaluate");
+
+        assert!(decision.allow);
+        assert_eq!(
+            decision.identity.roles,
+            vec!["editor".to_string(), "reviewer".to_string()]
+        );
+        assert_eq!(
+            decision.identity.groups,
+            vec!["/engineering".to_string(), "/ops".to_string()]
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn default_roles_are_included_in_normalized_roles() {
+        let mut config = OAuthRouteConfig::new(OAUTH::CUSTOM);
+        config.policy.default_roles.push("member".to_string());
+        let decision = config
+            .evaluate_userinfo(
+                token(),
+                json!({
+                    "sub": "abc",
+                    "roles": ["editor"]
+                }),
+            )
+            .await
+            .expect("policy should evaluate");
+
+        assert_eq!(
+            decision.identity.roles,
+            vec!["editor".to_string(), "member".to_string()]
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1011,6 +1321,7 @@ mod tests {
 
         assert!(decision.allow);
         assert_eq!(decision.identity.subject, "42");
+        assert_eq!(decision.identity.username.as_deref(), Some("ada"));
         assert_eq!(decision.identity.email.as_deref(), Some("ada@example.com"));
     }
 
@@ -1042,5 +1353,26 @@ mod tests {
             expires_in_seconds: None,
             scopes: vec!["openid".to_string()],
         }
+    }
+
+    fn token_with_access_token(access_token: String) -> OAuthToken {
+        OAuthToken {
+            access_token,
+            ..token()
+        }
+    }
+
+    fn token_with_access_token_and_scopes(access_token: String, scopes: Vec<String>) -> OAuthToken {
+        OAuthToken {
+            access_token,
+            scopes,
+            ..token()
+        }
+    }
+
+    fn jwt_token(claims: Value) -> String {
+        let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"none"}"#);
+        let payload = URL_SAFE_NO_PAD.encode(claims.to_string());
+        format!("{header}.{payload}.")
     }
 }
