@@ -17,9 +17,9 @@ impl TryFrom<DynamicFiles> for ServiceGroup {
     type Error = Error;
     fn try_from(slf: DynamicFiles) -> Result<ServiceGroup, Error> {
         let mut files = HashMap::new();
-        log::info!("Canonicalizing Directory: {:?}", &slf.root_directory);
+        log::info!("Canonicalizing Directory: {:?}", slf.root_directory);
         let root_directory = slf.root_directory.canonicalize()?;
-        log::info!("Searching for files at: {:?}", &root_directory);
+        log::info!("Searching for files at: {:?}", root_directory);
         if !root_directory.exists() {
             if let Err(e) = std::fs::create_dir(&root_directory) {
                 log::error!("Error Creating Root Directory: {e:?}");

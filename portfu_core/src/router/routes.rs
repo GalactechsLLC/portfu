@@ -122,7 +122,7 @@ impl Route {
         let segment = PathSegment::Variable(PathVariable {
             name: name.to_string(),
         });
-        let regex = format!(r"(?P<{}>{})", &name, &pattern);
+        let regex = format!(r"(?P<{}>{})", name, pattern);
         (segment, regex, unprocessed, tail)
     }
 }

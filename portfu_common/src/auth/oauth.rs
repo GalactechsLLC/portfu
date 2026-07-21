@@ -68,25 +68,13 @@ pub struct OAuthIdentity {
     pub raw: Value,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct OAuthConfig {
     pub client_id: String,
     pub client_secret: String,
     pub auth_url: String,
     pub token_url: String,
     pub redirect_url: String,
-}
-
-impl Default for OAuthConfig {
-    fn default() -> Self {
-        Self {
-            client_id: String::new(),
-            client_secret: String::new(),
-            auth_url: String::new(),
-            token_url: String::new(),
-            redirect_url: String::new(),
-        }
-    }
 }
 
 impl OAuthConfig {

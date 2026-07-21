@@ -71,7 +71,7 @@ impl ToTokens for WebSocketRoute {
                 }
                 FnArg::Typed(typed) => {
                     if let Pat::Ident(pat_ident) = typed.pat.as_ref() {
-                        if path_vars.contains(&format!("{}", &pat_ident.ident)) {
+                        if path_vars.contains(&format!("{}", pat_ident.ident)) {
                             let ident = &pat_ident.ident;
                             additional_function_vars.push(quote! {
                                 #ident,

@@ -36,7 +36,7 @@ impl ServiceHandler for FileLoader {
     }
     async fn handle(&self, mut data: ServiceData) -> Result<ServiceData, (ServiceData, Error)> {
         if self.cache_status.load(Ordering::Relaxed) {
-            debug!("Sending Cached File: {:?}", &self.path);
+            debug!("Sending Cached File: {:?}", self.path);
             if let Ok(val) = HeaderValue::from_str(&self.mime) {
                 data.response.headers_mut().insert(CONTENT_TYPE, val);
             }
@@ -90,7 +90,7 @@ impl ServiceHandler for FileLoader {
                 }
             }
             if stream {
-                debug!("Streaming File: {:?}", &file_path);
+                debug!("Streaming File: {:?}", file_path);
                 match stream_from_disk(&file_path).await {
                     Ok(stream) => {
                         if let Ok(val) = HeaderValue::from_str(&self.mime) {
@@ -109,7 +109,7 @@ impl ServiceHandler for FileLoader {
                     }
                 }
             } else {
-                debug!("Cached File: {:?}", &file_path);
+                debug!("Cached File: {:?}", file_path);
                 if let Ok(val) = HeaderValue::from_str(&self.mime) {
                     data.response.headers_mut().insert(CONTENT_TYPE, val);
                 }
