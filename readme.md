@@ -90,9 +90,11 @@ When a request is sent to the server it will search for the first registered Ser
 - The Filters attached to the service all return ```FilterResult::Allow```
 
 `ServiceGroup` registers a collection of services in order. Filters and middleware apply only to services added after them; subgroups inherit their parent group's configuration.
+`ServiceGroup::shared_state` adds `Arc`-backed state to the server's default scope, and a later registration of the same type replaces an earlier value.
 
 ```rust
 let api_services = ServiceGroup::new()
+    .shared_state(api_state)
     .filter(auth_filter)
     .service(users_service)
     .sub_group(
@@ -102,7 +104,8 @@ let api_services = ServiceGroup::new()
     );
 
 let server = ServerBuilder::new()
-    .scoped_state("api", api_state)
     .service_group(api_services)
     .build();
 ```
+
+Websocket handlers run in spawned upgrade tasks. Use owned `RequestHeaders` parameters; Portfu clones the request headers before the task starts. Use `WebSocket` for server-side connections and `ClientWebSocket` for outbound `connect_async` connections.

@@ -1,6 +1,8 @@
 use crate::router::filter::traits::Filter;
 use crate::router::middleware::Middleware;
+use crate::server::state::SharedState;
 use crate::service::Service;
+use http::Extensions;
 use std::sync::Arc;
 
 /// A collection of services that share filters and middleware.
@@ -10,6 +12,7 @@ use std::sync::Arc;
 #[derive(Default)]
 pub struct ServiceGroup {
     services: Vec<Service>,
+    shared_state: Extensions,
     filters: Vec<Arc<dyn Filter + Send + Sync>>,
     middleware: Vec<Arc<dyn Middleware + Send + Sync>>,
 }
@@ -35,8 +38,22 @@ impl ServiceGroup {
         self
     }
 
+    /// Adds state for services in this group to the server's default scope.
+    ///
+    /// A later registration of the same type replaces an earlier value.
+    pub fn shared_state<T: Send + Sync + 'static>(
+        mut self,
+        value: impl Into<SharedState<T>>,
+    ) -> Self {
+        let state: SharedState<T> = value.into();
+        self.shared_state.insert::<Arc<T>>(state.into());
+        self
+    }
+
     pub fn sub_group(mut self, group: ServiceGroup) -> Self {
-        for service in group {
+        let (shared_state, services) = group.into_parts();
+        self.shared_state.extend(shared_state);
+        for service in services {
             self.add_service(service);
         }
         self
@@ -56,6 +73,10 @@ impl ServiceGroup {
         service.filters.extend(self.filters.iter().cloned());
         service.middleware.extend(self.middleware.iter().cloned());
         self.services.push(service);
+    }
+
+    pub(crate) fn into_parts(self) -> (Extensions, Vec<Service>) {
+        (self.shared_state, self.services)
     }
 }
 
@@ -143,19 +164,48 @@ mod tests {
     fn subgroup_inherits_parent_configuration_without_affecting_siblings() {
         let services = ServiceGroup::new()
             .filter(Arc::new(NamedFilter("parent")))
+            .wrap(Arc::new(NamedMiddleware("parent")))
             .sub_group(
                 ServiceGroup::new()
                     .filter(Arc::new(NamedFilter("child")))
-                    .service(service("/nested")),
+                    .wrap(Arc::new(NamedMiddleware("child")))
+                    .service(ServiceBuilder::new("/nested").scope("tenant").build()),
             )
-            .service(service("/sibling"))
+            .service(ServiceBuilder::new("/sibling").scope("other").build())
             .into_iter()
             .collect::<Vec<_>>();
 
         assert_eq!(services[0].filters.len(), 2);
         assert_eq!(services[0].filters[0].name(), "child");
         assert_eq!(services[0].filters[1].name(), "parent");
+        assert_eq!(services[0].middleware[0].name(), "child");
+        assert_eq!(services[0].middleware[1].name(), "parent");
+        assert_eq!(services[0].scope(), "tenant");
         assert_eq!(services[1].filters.len(), 1);
         assert_eq!(services[1].filters[0].name(), "parent");
+        assert_eq!(services[1].middleware[0].name(), "parent");
+        assert_eq!(services[1].scope(), "other");
+    }
+
+    #[test]
+    fn shared_state_replaces_an_earlier_value_of_the_same_type() {
+        let (state, _) = ServiceGroup::new()
+            .shared_state("first".to_string())
+            .shared_state("second".to_string())
+            .into_parts();
+
+        assert_eq!(
+            state.get::<Arc<String>>().map(|value| value.as_str()),
+            Some("second")
+        );
+    }
+
+    #[test]
+    fn subgroup_state_is_retained_by_the_enclosing_group() {
+        let (state, _) = ServiceGroup::new()
+            .sub_group(ServiceGroup::new().shared_state(42_u32))
+            .into_parts();
+
+        assert_eq!(state.get::<Arc<u32>>().map(|value| **value), Some(42));
     }
 }

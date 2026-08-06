@@ -106,53 +106,50 @@ impl ToTokens for WebSocketRoute {
 
             if let Type::Reference(reference) = &ident_type {
                 if let Type::Path(path) = &reference.elem.as_ref() {
-                    if let Some(segment) = path.path.segments.first() {
-                        let request: Ident = Ident::new("Request", segment.ident.span());
+                    if let Some(segment) = path.path.segments.last() {
                         let request_headers: Ident =
                             Ident::new("RequestHeaders", segment.ident.span());
                         let response_headers: Ident =
                             Ident::new("ResponseHeaders", segment.ident.span());
-                        if request == segment.ident {
-                            dyn_vars.push(quote! {
-                                let #ident_val = request;
-                            });
-                            additional_function_vars.push(quote! { #ident_val, });
-                            continue;
-                        } else if request_headers == segment.ident {
-                            if reference.mutability.is_some() {
-                                dyn_vars.push(quote! {
-                                    let #ident_val: &mut ::portfu::prelude::RequestHeaders = request.headers_mut();
-                                });
-                            } else {
-                                dyn_vars.push(quote! {
-                                    let #ident_val: &::portfu::prelude::RequestHeaders = request.headers();
-                                });
-                            }
-                            additional_function_vars.push(quote! {
-                                #ident_val,
-                            });
-                            continue;
+                        if request_headers == segment.ident {
+                            output.extend(
+                                syn::Error::new_spanned(
+                                    reference,
+                                    "websocket handlers receive owned RequestHeaders; remove the reference",
+                                )
+                                .into_compile_error(),
+                            );
+                            return;
                         } else if response_headers == segment.ident {
-                            if reference.mutability.is_some() {
-                                dyn_vars.push(quote! {
-                                    let #ident_val: &mut ::portfu::prelude::ResponseHeaders = response.headers_mut();
-                                });
-                            } else {
-                                dyn_vars.push(quote! {
-                                    let #ident_val: &::portfu::prelude::ResponseHeaders = response.headers();
-                                });
-                            }
-                            additional_function_vars.push(quote! {
-                                #ident_val,
-                            });
-                            continue;
+                            output.extend(
+                                syn::Error::new_spanned(
+                                    reference,
+                                    "websocket handlers cannot receive response headers",
+                                )
+                                .into_compile_error(),
+                            );
+                            return;
                         }
                     }
                 }
+                output.extend(
+                    syn::Error::new_spanned(
+                        reference,
+                        "websocket handler parameters must be owned because upgrade tasks are spawned",
+                    )
+                    .into_compile_error(),
+                );
+                return;
             }
             if let Type::Path(path) = &ident_type {
-                if let Some(segment) = path.path.segments.first() {
-                    if segment.ident == "WebSocket" {
+                if let Some(segment) = path.path.segments.last() {
+                    if segment.ident == "RequestHeaders" {
+                        dyn_vars.push(quote! {
+                            let #ident_val: #ident_type = request.headers().clone();
+                        });
+                        additional_function_vars.push(quote! { #ident_val, });
+                        continue;
+                    } else if segment.ident == "WebSocket" {
                         additional_function_vars.push(quote! { websocket_wrapper.clone(), });
                         continue;
                     } else if segment.ident == "Peers" {

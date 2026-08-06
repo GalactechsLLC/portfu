@@ -121,7 +121,12 @@ impl ServerBuilder {
         self
     }
     pub fn service_group(mut self, group: ServiceGroup) -> Self {
-        self.services.extend(group);
+        let (shared_state, services) = group.into_parts();
+        self.scoped_state
+            .entry("default".to_string())
+            .or_default()
+            .extend(shared_state);
+        self.services.extend(services);
         self
     }
     pub fn wrap(mut self, middleware: Arc<dyn Middleware + Send + Sync>) -> Self {
@@ -240,6 +245,24 @@ mod tests {
                 .map(|service| service.name())
                 .collect::<Vec<_>>(),
             vec!["first", "second", "third", "fourth"]
+        );
+    }
+
+    #[tokio::test]
+    async fn service_group_merges_state_into_the_default_scope() {
+        let server = ServerBuilder::new()
+            .global_state("builder".to_string())
+            .service_group(ServiceGroup::new().shared_state("first group".to_string()))
+            .service_group(ServiceGroup::new().shared_state("last group".to_string()))
+            .build();
+
+        let state = server.scoped_state.read().await;
+        assert_eq!(
+            state
+                .get("default")
+                .and_then(|extensions| extensions.get::<Arc<String>>())
+                .map(|value| value.as_str()),
+            Some("last group")
         );
     }
 

@@ -49,13 +49,15 @@ pub mod prelude {
     pub use portfu_common::service::response::Response;
     pub use portfu_common::service::traits::Service as ServiceTrait;
     #[cfg(feature = "websocket")]
+    pub use portfu_common::websocket::ClientWebSocket;
+    #[cfg(feature = "websocket")]
+    pub use portfu_common::websocket::ClientWebSocketInner;
+    #[cfg(feature = "websocket")]
     pub use portfu_common::websocket::Message;
     #[cfg(feature = "websocket")]
     pub use portfu_common::websocket::Peers;
     #[cfg(feature = "websocket")]
     pub use portfu_common::websocket::WebSocket;
-    #[cfg(feature = "websocket")]
-    pub use portfu_common::websocket::WebSocketClient;
     #[cfg(feature = "websocket")]
     pub use portfu_common::websocket::WebsocketConnection;
     pub use portfu_common::wrappers;

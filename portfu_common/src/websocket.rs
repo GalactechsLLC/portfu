@@ -250,20 +250,37 @@ impl WebSocket {
     }
 }
 
-#[derive(Clone)]
-pub struct WebSocketClient {
-    inner: Arc<Mutex<ClientWebSocketInner>>,
+pub struct ClientWebsocketConnection {
+    pub write: Mutex<SplitSink<ClientWebSocketInner, Message>>,
+    pub read: Mutex<SplitStream<ClientWebSocketInner>>,
 }
 
-impl WebSocketClient {
+impl ClientWebsocketConnection {
+    pub fn new(websocket: ClientWebSocketInner) -> Self {
+        let (write, read) = websocket.split();
+        Self {
+            write: Mutex::new(write),
+            read: Mutex::new(read),
+        }
+    }
+}
+
+/// An outbound websocket connection independent from server peer management.
+#[derive(Clone)]
+pub struct ClientWebSocket {
+    pub connection: Arc<ClientWebsocketConnection>,
+}
+
+impl ClientWebSocket {
     pub fn new(websocket: ClientWebSocketInner) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(websocket)),
+            connection: Arc::new(ClientWebsocketConnection::new(websocket)),
         }
     }
 
     pub async fn next_message(&self) -> Result<Option<Message>, Error> {
-        self.inner
+        self.connection
+            .read
             .lock()
             .await
             .next()
@@ -277,7 +294,8 @@ impl WebSocketClient {
     }
 
     pub async fn send(&self, message: Message) -> Result<(), Error> {
-        self.inner
+        self.connection
+            .write
             .lock()
             .await
             .send(message)
@@ -327,7 +345,7 @@ impl WebSocketClient {
 
 #[cfg(test)]
 mod tests {
-    use super::{Message, WebSocketClient};
+    use super::{ClientWebSocket, Message};
     use futures_util::{SinkExt, StreamExt};
     use serde::Serialize;
     use std::collections::BTreeMap;
@@ -342,7 +360,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn websocket_client_sends_receives_json_binary_and_close_frames() {
+    async fn client_websocket_wraps_connect_async_and_proxies_messages() {
         let Some(listener) = bind_listener_or_skip().await else {
             return;
         };
@@ -365,7 +383,7 @@ mod tests {
         let (stream, _) = connect_async(format!("ws://{addr}"))
             .await
             .expect("client connect failed");
-        let client = WebSocketClient::new(stream);
+        let client = ClientWebSocket::new(stream);
 
         client.send_text("hello").await.expect("send text failed");
         match client.next().await.expect("text read failed") {
@@ -414,7 +432,7 @@ mod tests {
         let (stream, _) = connect_async(format!("ws://{addr}"))
             .await
             .expect("client connect failed");
-        let client = WebSocketClient::new(stream);
+        let client = ClientWebSocket::new(stream);
         let mut invalid_json_key = BTreeMap::new();
         invalid_json_key.insert(vec![1_u8, 2, 3], "value");
 

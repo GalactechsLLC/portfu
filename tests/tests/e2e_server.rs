@@ -8,10 +8,10 @@ use std::net::TcpListener;
 use std::thread::JoinHandle;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::net::{TcpListener as TokioTcpListener, TcpStream};
 use tokio::sync::oneshot;
-use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
+use tokio_tungstenite::{accept_async, connect_async};
 
 fn method_response(
     method: &str,
@@ -100,6 +100,36 @@ async fn ws_echo(websocket: WebSocket) -> Result<(), PortfuError> {
             .map_err(|e| PortfuError::Internal(format!("websocket send failed: {e}")))?;
     }
     Ok(())
+}
+
+#[websocket("/ws/owned-headers")]
+async fn ws_owned_headers(
+    headers: RequestHeaders,
+    websocket: WebSocket,
+) -> Result<(), PortfuError> {
+    let _requested_protocol = headers.get("sec-websocket-protocol");
+    websocket
+        .close()
+        .await
+        .map_err(|e| PortfuError::Internal(format!("websocket close failed: {e}")))
+}
+
+#[client_websocket("ws://127.0.0.1:38481")]
+async fn macro_client_echo(websocket: ClientWebSocket) -> Result<(), PortfuError> {
+    websocket
+        .send(Message::text("macro echo"))
+        .await
+        .map_err(|e| PortfuError::Internal(format!("websocket send failed: {e}")))?;
+    match websocket
+        .next_message()
+        .await
+        .map_err(|e| PortfuError::Internal(format!("websocket read failed: {e}")))?
+    {
+        Some(Message::Text(message)) if message == "macro echo" => Ok(()),
+        other => Err(PortfuError::Internal(format!(
+            "unexpected websocket response: {other:?}"
+        ))),
+    }
 }
 
 #[derive(Debug)]
@@ -219,6 +249,48 @@ async fn http_methods_and_websocket_work_end_to_end() {
     let _ = socket.close(None).await;
 
     server.stop().await;
+}
+
+#[tokio::test]
+async fn client_websocket_macro_connects_and_receives_echoed_data() {
+    let listener = match TcpListener::bind(("127.0.0.1", 38481)) {
+        Ok(listener) => listener,
+        Err(err)
+            if matches!(
+                err.kind(),
+                ErrorKind::PermissionDenied | ErrorKind::AddrInUse
+            ) =>
+        {
+            eprintln!("skipping client websocket macro test: {err}");
+            return;
+        }
+        Err(err) => panic!("failed to bind client websocket macro listener: {err}"),
+    };
+    listener
+        .set_nonblocking(true)
+        .expect("failed to make client websocket listener nonblocking");
+    let listener = TokioTcpListener::from_std(listener)
+        .expect("failed to convert client websocket listener to tokio");
+    let echo_server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("client connection failed");
+        let mut websocket = accept_async(stream)
+            .await
+            .expect("websocket handshake failed");
+        let message = websocket
+            .next()
+            .await
+            .expect("expected client message")
+            .expect("client message read failed");
+        websocket
+            .send(message)
+            .await
+            .expect("websocket echo failed");
+    });
+
+    macro_client_echo()
+        .await
+        .expect("client websocket macro should receive the echoed frame");
+    echo_server.await.expect("echo server task failed");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

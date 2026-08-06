@@ -91,7 +91,7 @@ impl ToTokens for WebSocketClient {
             };
             if let Type::Path(path) = &ident_type {
                 if let Some(segment) = path.path.segments.first() {
-                    if segment.ident == "WebSocketClient" {
+                    if segment.ident == "ClientWebSocket" {
                         additional_function_vars.push(quote! { websocket, });
                         continue;
                     }
@@ -116,7 +116,7 @@ impl ToTokens for WebSocketClient {
                 let (websocket, _response) = ::portfu::prelude::tokio_tungstenite::connect_async(#url)
                     .await
                     .map_err(|e| ::portfu::prelude::PortfuError::Internal(format!("WebSocket client connection failed: {e:?}")))?;
-                let websocket = ::portfu::prelude::WebSocketClient::new(websocket);
+                let websocket = ::portfu::prelude::ClientWebSocket::new(websocket);
                 #inner_name(#(#additional_function_vars)*).await
             }
         };

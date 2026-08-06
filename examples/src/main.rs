@@ -244,7 +244,7 @@ pub async fn echo_websocket(websocket: WebSocket) -> Result<(), PortfuError> {
 }
 
 #[client_websocket("ws://127.0.0.1:8080/ws/echo")]
-pub async fn example_ws_client(ws: WebSocketClient) -> Result<(), PortfuError> {
+pub async fn example_ws_client(ws: ClientWebSocket) -> Result<(), PortfuError> {
     ws.send(Message::text("hello from macro client"))
         .await
         .map_err(|e| {

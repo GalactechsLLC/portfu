@@ -13,6 +13,7 @@ use portfu_common::router::route::Route;
 use portfu_common::server::builder::ServerBuilder;
 use portfu_common::service::State;
 use portfu_common::service::builder::ServiceBuilder;
+use portfu_common::service::group::ServiceGroup;
 use portfu_common::service::request::{Body, FromRequest, Json, Query, Request, RequestType};
 use portfu_common::service::response::{JsonResponse, Response, Serialized};
 use portfu_common::service::traits::Service as ServiceTrait;
@@ -25,6 +26,7 @@ use portfu_common::wrappers::sessions::{
 };
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::error::Error;
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -46,6 +48,38 @@ impl ServiceTrait for OkService {
         _data: &'a mut Request,
     ) -> Pin<Box<dyn Future<Output = Result<Response, PortfuError>> + 'a + Send>> {
         Box::pin(async move { Ok(Response::ok("ok")) })
+    }
+}
+
+#[derive(Clone)]
+struct Config {
+    name: String,
+}
+
+#[derive(Clone)]
+struct Client;
+
+struct GroupStateService;
+
+impl ServiceTrait for GroupStateService {
+    fn name(&self) -> &str {
+        "group-state-service"
+    }
+
+    fn serve<'a>(
+        &'a self,
+        request: &'a mut Request,
+    ) -> Pin<Box<dyn Future<Output = Result<Response, PortfuError>> + 'a + Send>> {
+        Box::pin(async move {
+            let config = <State<Config> as FromRequest<Request>>::try_from(request).await?;
+            let _client = <State<Client> as FromRequest<Request>>::try_from(request).await?;
+            let connections =
+                <State<RwLock<HashMap<String, usize>>> as FromRequest<Request>>::try_from(request)
+                    .await?;
+            assert_eq!(config.name, "julia-web-sdk");
+            assert_eq!(connections.read().await.len(), 1);
+            Ok(Response::ok("group state available"))
+        })
     }
 }
 
@@ -308,6 +342,55 @@ async fn path_and_state_extractors_cover_success_and_failure() {
         Err(err) => err,
     };
     assert!(missing_state.to_string().contains("Failed to find State"));
+}
+
+#[tokio::test]
+async fn service_group_state_is_available_to_registered_handlers() {
+    let mut connections = HashMap::new();
+    connections.insert("peer-1".to_string(), 1_usize);
+    let server = ServerBuilder::new()
+        .service_group(
+            ServiceGroup::default()
+                .shared_state(Config {
+                    name: "julia-web-sdk".to_string(),
+                })
+                .shared_state(Client)
+                .shared_state(RwLock::new(connections))
+                .service(
+                    ServiceBuilder::new("/sdk/state")
+                        .handler(Arc::new(GroupStateService))
+                        .build(),
+                ),
+        )
+        .build();
+
+    let default_scope = server.scoped_state.read().await;
+    let config = default_scope
+        .get("default")
+        .and_then(|state| state.get::<Arc<Config>>())
+        .expect("group config state should be registered")
+        .clone();
+    let client = default_scope
+        .get("default")
+        .and_then(|state| state.get::<Arc<Client>>())
+        .expect("group client state should be registered")
+        .clone();
+    let connections = default_scope
+        .get("default")
+        .and_then(|state| state.get::<Arc<RwLock<HashMap<String, usize>>>>())
+        .expect("group connection state should be registered")
+        .clone();
+    drop(default_scope);
+
+    let mut request = basic_request();
+    request.insert(config);
+    request.insert(client);
+    request.insert(connections);
+    let response = server.services[0]
+        .serve(&mut request)
+        .await
+        .expect("group state handler should succeed");
+    assert_eq!(response.status(), http::StatusCode::OK);
 }
 
 #[test]

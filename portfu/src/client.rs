@@ -5,7 +5,7 @@ use http_body_util::{BodyStream, Empty, Full, StreamBody};
 use hyper::body::{Bytes, Frame, Incoming, SizeHint};
 use hyper_util::rt::tokio::TokioIo;
 use portfu_common::service::PinnedBody;
-use portfu_common::websocket::WebSocketClient;
+use portfu_common::websocket::ClientWebSocket;
 use rustls::RootCertStore;
 use rustls::pki_types::ServerName;
 use std::io::Error;
@@ -233,7 +233,7 @@ pub async fn send_request_with_headers<T: Into<SupportedBody>>(
 pub async fn new_websocket(
     url: &str,
     headers: Option<HeaderMap>,
-) -> Result<WebSocketClient, Error> {
+) -> Result<ClientWebSocket, Error> {
     let mut request = url
         .into_client_request()
         .map_err(|e| Error::other(format!("failed to build websocket request: {e}")))?;
@@ -243,7 +243,7 @@ pub async fn new_websocket(
     let (ws_stream, _response) = connect_async(request)
         .map(|result| result.map_err(|e| Error::other(format!("websocket connect failed: {e}"))))
         .await?;
-    Ok(WebSocketClient::new(ws_stream))
+    Ok(ClientWebSocket::new(ws_stream))
 }
 
 fn build_request(
