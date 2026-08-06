@@ -39,6 +39,7 @@ pub mod prelude {
     pub use portfu_common::service::Service;
     pub use portfu_common::service::State;
     pub use portfu_common::service::builder::ServiceBuilder;
+    pub use portfu_common::service::group::ServiceGroup;
     pub use portfu_common::service::request::Body;
     pub use portfu_common::service::request::FromRequest;
     pub use portfu_common::service::request::Json;
@@ -71,4 +72,5 @@ pub mod prelude {
     pub use portfu_macros::*;
     #[cfg(feature = "websocket")]
     pub use tokio_tungstenite;
+    pub use uuid;
 }

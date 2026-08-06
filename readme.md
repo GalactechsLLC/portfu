@@ -84,45 +84,25 @@ pub async fn example_task(state: State<AtomicUsize>) -> Result<(), Error> {
 }
 ```
 
-Custom services can be created with a struct that implements ```ServiceRegister + Into<Service>```
+Custom services can be created with a struct that implements `Into<Service>`.
 When a request is sent to the server it will search for the first registered Service where the below are true:
 - The Path string of the service matches the requests URI path
 - The Filters attached to the service all return ```FilterResult::Allow```
 
-ServiceGroups can even have sub_groups to have even finer control over services
+`ServiceGroup` registers a collection of services in order. Filters and middleware apply only to services added after them; subgroups inherit their parent group's configuration.
 
-Here is the main function that would be used for all the services above, including some example filters and wrappers.
 ```rust
-#[tokio::main]
-async fn main() -> Result<(), Error> {
-    SimpleLogger::default(); //Init your logger of choice
-    let server = ServerBuilder::default() //Start building the Server
-        .shared_state(RwLock::new(AtomicUsize::new(0))) //Shared State Data is auto wrapped in an Arc
-        .shared_state("This value gets Overridden") //Only one version of a type can exist in the Shared data, to get around this use a wrapper struct/enum
-        .shared_state("By this value")
-        //Filters applied at the server level apply to all services regardless of when they were registered
-        .filter(any("Method Filters".to_string(), &[GET.clone(), POST.clone(), PUT.clone(), DELETE.clone()]))
-        .register(StaticFiles) //Register Each Service directly with the server
-        .register( //Sub Groups are also services
-            ServiceGroup::default() //Start the Subgroup
-               //Filters at the ServiceGroup level apply to service defined below them only, this is the same with any wrappers
-               .service(example_get) //This service is defined above the filter and will not have the filter applied
-               .filter(has_header(HeaderName::from_static("content-length")))
-               .service(example_post)//This service is defined below the filter and will have the filter applied
-               .wrap(Arc::new(SessionWrapper::default())) //The session wrapper will create a session using cookies for each connection
-               //All Requests below this will only work for connections that have a session and send the cookie with requests
-               .sub_group( //Add another group to this group
-                   ServiceGroup::default()
-                       .service(example_websocket { //Peers Need to be defined for a websocket, to share peers pass the same map to multiple websockets
-                           peers: Default::default(),
-                       })
-               ),
-        )
-        .task(example_task) //Add a background task to start when the server is started
-        .task(example_interval) //Intervals are also tasks
-        .build();
-    info!("{server:#?}"); //Servers impl debug so you can see the structure
-    server.run().await //Run the server and wait for a termination signal
-}
-```
+let api_services = ServiceGroup::new()
+    .filter(auth_filter)
+    .service(users_service)
+    .sub_group(
+        ServiceGroup::new()
+            .filter(admin_filter)
+            .service(admin_service),
+    );
 
+let server = ServerBuilder::new()
+    .scoped_state("api", api_state)
+    .service_group(api_services)
+    .build();
+```

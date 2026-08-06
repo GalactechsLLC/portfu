@@ -3,6 +3,7 @@ use crate::server::Server;
 use crate::server::config::{ServerConfig, SslConfig};
 use crate::server::state::SharedState;
 use crate::service::Service;
+use crate::service::group::ServiceGroup;
 use http::Extensions;
 use std::collections::HashMap;
 use std::env;
@@ -119,6 +120,10 @@ impl ServerBuilder {
         self.services.push(service.into());
         self
     }
+    pub fn service_group(mut self, group: ServiceGroup) -> Self {
+        self.services.extend(group);
+        self
+    }
     pub fn wrap(mut self, middleware: Arc<dyn Middleware + Send + Sync>) -> Self {
         self.middleware.push(middleware);
         self
@@ -140,6 +145,8 @@ impl ServerBuilder {
 mod tests {
     use super::ServerBuilder;
     use crate::server::config::SslConfig;
+    use crate::service::builder::ServiceBuilder;
+    use crate::service::group::ServiceGroup;
     use std::sync::{Arc, atomic::Ordering};
     use std::sync::{Mutex, OnceLock};
 
@@ -212,6 +219,28 @@ mod tests {
         assert!(!builder.config.reuse_port);
         assert!(builder.config.enable_ssl);
         clear_env();
+    }
+
+    #[test]
+    fn service_group_preserves_registration_order() {
+        let server = ServerBuilder::new()
+            .service(ServiceBuilder::new("/first").name("first").build())
+            .service_group(
+                ServiceGroup::new()
+                    .service(ServiceBuilder::new("/second").name("second").build())
+                    .service(ServiceBuilder::new("/third").name("third").build()),
+            )
+            .service(ServiceBuilder::new("/fourth").name("fourth").build())
+            .build();
+
+        assert_eq!(
+            server
+                .services
+                .iter()
+                .map(|service| service.name())
+                .collect::<Vec<_>>(),
+            vec!["first", "second", "third", "fourth"]
+        );
     }
 
     #[tokio::test]

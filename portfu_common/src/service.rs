@@ -13,6 +13,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 pub mod builder;
+pub mod group;
 pub mod request;
 pub mod response;
 pub mod state;
