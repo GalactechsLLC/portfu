@@ -1,17 +1,22 @@
 use crate::router::middleware::Middleware;
 use crate::server::Server;
-use crate::server::config::{ServerConfig, SslConfig};
+use crate::server::config::{
+    ClientAuthConfig, ServerConfig, TlsConfig, TlsIdentity, TlsVersionPolicy,
+};
 use crate::server::state::SharedState;
 use crate::service::Service;
 use crate::service::group::ServiceGroup;
+#[cfg(feature = "websocket")]
+use crate::websocket::{WebSocketAdmissionMiddleware, WebSocketRuntime};
 use http::Extensions;
 use std::collections::HashMap;
 use std::env;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use tokio::sync::RwLock;
+#[cfg(feature = "websocket")]
+use std::time::Duration;
+use tokio::sync::{RwLock, watch};
 
-#[derive(Default)]
 pub struct ServerBuilder {
     pub run: Arc<AtomicBool>,
     pub config: ServerConfig,
@@ -20,9 +25,13 @@ pub struct ServerBuilder {
     pub middleware: Vec<Arc<dyn Middleware + Send + Sync>>,
     pub default_service: Option<Service>,
     pub health_service: Option<Service>,
+    shutdown: watch::Sender<bool>,
+    #[cfg(feature = "websocket")]
+    pub websocket_admission: Vec<Arc<dyn WebSocketAdmissionMiddleware + Send + Sync>>,
 }
 impl ServerBuilder {
     pub fn new() -> Self {
+        let (shutdown, _) = watch::channel(false);
         Self {
             run: Arc::new(AtomicBool::new(true)),
             config: ServerConfig::default(),
@@ -31,6 +40,9 @@ impl ServerBuilder {
             middleware: vec![],
             default_service: None,
             health_service: None,
+            shutdown,
+            #[cfg(feature = "websocket")]
+            websocket_admission: vec![],
         }
     }
 
@@ -58,9 +70,10 @@ impl ServerBuilder {
             builder.config.reuse_port =
                 reuse_port == "1" || reuse_port.eq_ignore_ascii_case("true");
         }
-        if let Ok(ssl_enabled) = env::var("PORTFU_SSL_ENABLED") {
-            builder.config.enable_ssl =
-                ssl_enabled == "1" || ssl_enabled.eq_ignore_ascii_case("true");
+        if let Ok(ssl_enabled) = env::var("PORTFU_SSL_ENABLED")
+            && (ssl_enabled == "1" || ssl_enabled.eq_ignore_ascii_case("true"))
+        {
+            builder.config.tls = Some(TlsConfig::default());
         }
         builder
     }
@@ -74,20 +87,36 @@ impl ServerBuilder {
         s.config.port = port;
         s
     }
-    pub fn enable_ssl(self, enable_ssl: bool) -> Self {
-        let mut s = self;
-        s.config.enable_ssl = enable_ssl;
-        s
+    pub fn tls(mut self, tls: TlsConfig) -> Self {
+        self.config.tls = Some(tls);
+        self
     }
-    pub fn ssl_config(self, ssl_config: Option<SslConfig>) -> Self {
-        let mut s = self;
-        s.config.ssl_config = ssl_config;
-        s
+    pub fn tls_identity(mut self, identity: TlsIdentity) -> Self {
+        self.config
+            .tls
+            .get_or_insert_with(TlsConfig::default)
+            .identities
+            .push(identity);
+        self
     }
-    pub fn sni_ssl_config(self, ssl_config: SslConfig) -> Self {
-        let mut s = self;
-        s.config.sni_ssl_configs.push(ssl_config);
-        s
+    pub fn client_auth(mut self, client_auth: ClientAuthConfig) -> Self {
+        self.config
+            .tls
+            .get_or_insert_with(TlsConfig::default)
+            .client_auth = client_auth;
+        self
+    }
+    pub fn tls_version_policy(mut self, policy: TlsVersionPolicy) -> Self {
+        self.config
+            .tls
+            .get_or_insert_with(TlsConfig::default)
+            .versions = policy;
+        self
+    }
+    #[cfg(feature = "websocket")]
+    pub fn websocket_shutdown_grace_period(mut self, grace_period: Duration) -> Self {
+        self.config.websocket_shutdown_grace_period = grace_period;
+        self
     }
     pub fn global_state<S: Send + Sync + 'static>(
         mut self,
@@ -133,6 +162,14 @@ impl ServerBuilder {
         self.middleware.push(middleware);
         self
     }
+    #[cfg(feature = "websocket")]
+    pub fn websocket_admission(
+        mut self,
+        middleware: Arc<dyn WebSocketAdmissionMiddleware + Send + Sync>,
+    ) -> Self {
+        self.websocket_admission.push(middleware);
+        self
+    }
     pub fn build(self) -> Server {
         Server {
             run: self.run,
@@ -141,19 +178,30 @@ impl ServerBuilder {
             services: self.services,
             middleware: self.middleware,
             default_service: self.default_service,
-            health_service: self.health_service,
+            shutdown: self.shutdown,
+            #[cfg(feature = "websocket")]
+            websocket_runtime: Arc::new(WebSocketRuntime::default()),
+            #[cfg(feature = "websocket")]
+            websocket_admission: self.websocket_admission,
         }
+    }
+}
+
+impl Default for ServerBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::ServerBuilder;
-    use crate::server::config::SslConfig;
+    use crate::server::config::{TlsConfig, TlsIdentity};
     use crate::service::builder::ServiceBuilder;
     use crate::service::group::ServiceGroup;
     use std::sync::{Arc, atomic::Ordering};
     use std::sync::{Mutex, OnceLock};
+    use std::time::Duration;
 
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -183,7 +231,7 @@ mod tests {
         assert_eq!(builder.config.backlog, 1024);
         assert!(builder.config.acceptors >= 1);
         assert!(builder.config.reuse_port);
-        assert!(!builder.config.enable_ssl);
+        assert!(builder.config.tls.is_none());
     }
 
     #[test]
@@ -201,7 +249,7 @@ mod tests {
         assert_eq!(builder.config.backlog, 1024);
         assert!(builder.config.acceptors >= 1);
         assert!(builder.config.reuse_port);
-        assert!(!builder.config.enable_ssl);
+        assert!(builder.config.tls.is_none());
         clear_env();
     }
 
@@ -222,7 +270,7 @@ mod tests {
         assert_eq!(builder.config.backlog, 2048);
         assert_eq!(builder.config.acceptors, 3);
         assert!(!builder.config.reuse_port);
-        assert!(builder.config.enable_ssl);
+        assert!(builder.config.tls.is_some());
         clear_env();
     }
 
@@ -268,27 +316,28 @@ mod tests {
 
     #[tokio::test]
     async fn fluent_builder_methods_store_config_and_scoped_state() {
-        let ssl = SslConfig {
-            domain: "example.test".to_string(),
-            key: "key.pem".to_string(),
-            certs: "cert.pem".to_string(),
-            root_certs: "root.pem".to_string(),
-        };
+        let default_identity = TlsIdentity::new("example.test", "cert.pem", "key.pem");
+        let sni_identity = TlsIdentity::new("api.example.test", "cert2.pem", "key2.pem");
         let server = ServerBuilder::new()
             .host("0.0.0.0")
             .port(9090)
-            .enable_ssl(true)
-            .ssl_config(Some(ssl.clone()))
-            .sni_ssl_config(ssl.clone())
+            .tls(TlsConfig::new(default_identity.clone()))
+            .tls_identity(sni_identity.clone())
+            .websocket_shutdown_grace_period(Duration::from_secs(30))
             .global_state("global".to_string())
             .scoped_state("tenant", 99_u32)
             .build();
 
         assert_eq!(server.config.host, "0.0.0.0");
         assert_eq!(server.config.port, 9090);
-        assert!(server.config.enable_ssl);
-        assert_eq!(server.config.ssl_config, Some(ssl.clone()));
-        assert_eq!(server.config.sni_ssl_configs, vec![ssl]);
+        assert_eq!(
+            server.config.tls.as_ref().map(|tls| &tls.identities),
+            Some(&vec![default_identity, sni_identity])
+        );
+        assert_eq!(
+            server.config.websocket_shutdown_grace_period,
+            Duration::from_secs(30)
+        );
         assert!(server.run.load(Ordering::Relaxed));
 
         let state = server.scoped_state.read().await;

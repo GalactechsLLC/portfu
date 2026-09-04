@@ -15,6 +15,30 @@ const APPLICATION_OCTET_STREAM: &str = "application/octet-stream";
 
 pub trait Serialized: Serialize {}
 
+pub trait IntoResponse {
+    fn into_response(self) -> Response;
+}
+
+pub trait ResponseError: std::error::Error {
+    fn status_code(&self) -> StatusCode;
+
+    fn error_response(&self) -> Response {
+        Response::from_status_and_message(self.status_code(), self.to_string())
+    }
+}
+
+impl<T: ResponseError> IntoResponse for T {
+    fn into_response(self) -> Response {
+        self.error_response()
+    }
+}
+
+impl IntoResponse for Response {
+    fn into_response(self) -> Response {
+        self
+    }
+}
+
 pub enum ResponseType {
     Stream(http::Response<StreamingBody>),
     Sized(http::Response<Full<Bytes>>),

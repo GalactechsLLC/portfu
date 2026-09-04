@@ -59,7 +59,9 @@ impl FromRequest<Request> for SessionState {
                 .cloned()
                 .map(SessionState)
                 .ok_or_else(|| {
-                    PortfuError::Parsing("Failed to find active session on request".to_string())
+                    PortfuError::Unauthorized(
+                        "Failed to find active session on request".to_string(),
+                    )
                 })
         })
     }

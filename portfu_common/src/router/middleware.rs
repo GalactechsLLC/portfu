@@ -3,6 +3,8 @@ use crate::service::request::Request;
 use crate::service::response::Response;
 use std::pin::Pin;
 
+pub mod client_trust;
+
 pub enum MiddlewareResult {
     Continue,
     Return(Response),

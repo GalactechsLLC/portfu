@@ -1,5 +1,6 @@
 use crate::error::PortfuError;
 use crate::router::route::Route;
+use crate::service::response::IntoResponse;
 use crate::service::{DEFAULT_URI, StreamingBody};
 use http::request::Parts;
 use http::{Extensions, HeaderMap, HeaderValue, Method, Uri};
@@ -21,7 +22,7 @@ pub enum RequestType {
     Empty(HeaderMap<HeaderValue>),
 }
 pub trait FromRequest<T>: Sized {
-    type Error;
+    type Error: IntoResponse;
     fn try_from<'a>(
         value: &'a mut T,
     ) -> Pin<Box<dyn Future<Output = Result<Self, Self::Error>> + 'a + Send + Sync>>;
@@ -134,7 +135,7 @@ impl Request {
             RequestType::Stream(r) => {
                 let (parts, body) = r.into_parts();
                 let collected = body.collect().await.map_err(|e| {
-                    PortfuError::Internal(format!("Failed to read request body: {e}"))
+                    PortfuError::BadRequest(format!("Failed to read request body: {e}"))
                 })?;
                 self.request_type = RequestType::Consumed(parts);
                 Ok(collected.to_bytes())
@@ -142,7 +143,7 @@ impl Request {
             RequestType::Sized(r) => {
                 let (parts, body) = r.into_parts();
                 let collected = body.collect().await.map_err(|e| {
-                    PortfuError::Internal(format!("Failed to read request body: {e}"))
+                    PortfuError::BadRequest(format!("Failed to read request body: {e}"))
                 })?;
                 self.request_type = RequestType::Consumed(parts);
                 Ok(collected.to_bytes())
@@ -168,7 +169,7 @@ impl Request {
                 let mut bytes = Vec::new();
                 loop {
                     let frame = timeout(read_timeout, body.frame()).await.map_err(|_| {
-                        PortfuError::Internal(format!(
+                        PortfuError::RequestTimeout(format!(
                             "Timed out while reading request body after {:?}",
                             read_timeout
                         ))
@@ -177,7 +178,7 @@ impl Request {
                         break;
                     };
                     let frame = frame.map_err(|e| {
-                        PortfuError::Internal(format!("Failed to read request body: {e}"))
+                        PortfuError::BadRequest(format!("Failed to read request body: {e}"))
                     })?;
                     if let Some(chunk) = frame.data_ref() {
                         if bytes.len().saturating_add(chunk.len()) > max_bytes {
@@ -185,7 +186,7 @@ impl Request {
                                 parts,
                                 Full::new(Bytes::new()),
                             ));
-                            return Err(PortfuError::Internal(format!(
+                            return Err(PortfuError::PayloadTooLarge(format!(
                                 "Request body exceeded {max_bytes} bytes"
                             )));
                         }
@@ -200,7 +201,7 @@ impl Request {
             RequestType::Sized(r) => {
                 let (parts, body) = r.into_parts();
                 let collected = body.collect().await.map_err(|e| {
-                    PortfuError::Internal(format!("Failed to read request body: {e}"))
+                    PortfuError::BadRequest(format!("Failed to read request body: {e}"))
                 })?;
                 let bytes = collected.to_bytes();
                 if bytes.len() > max_bytes {
@@ -208,7 +209,7 @@ impl Request {
                         parts,
                         Full::new(Bytes::new()),
                     ));
-                    return Err(PortfuError::Internal(format!(
+                    return Err(PortfuError::PayloadTooLarge(format!(
                         "Request body exceeded {max_bytes} bytes"
                     )));
                 }

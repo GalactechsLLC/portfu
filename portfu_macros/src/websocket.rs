@@ -58,6 +58,10 @@ impl ToTokens for WebSocketRoute {
             domains,
             filters,
             wrappers,
+            client_trust,
+            max_message_size,
+            max_frame_size,
+            upgrade_timeout_ms,
         } = args;
 
         let resource_name = resource_name
@@ -66,6 +70,22 @@ impl ToTokens for WebSocketRoute {
         let scope = scope
             .as_ref()
             .map_or_else(|| "default".to_string(), syn::LitStr::value);
+        let max_message_size_config = max_message_size.as_ref().map(|value| {
+            quote! { websocket_config.max_message_size = Some(#value); }
+        });
+        let max_frame_size_config = max_frame_size.as_ref().map(|value| {
+            quote! { websocket_config.max_frame_size = Some(#value); }
+        });
+        let upgrade_timeout_config = upgrade_timeout_ms.as_ref().map(|value| {
+            quote! {
+                websocket_config.upgrade_timeout = Some(::std::time::Duration::from_millis(#value));
+            }
+        });
+        let client_trust_wrapper = client_trust.as_ref().map(|trust_store| {
+            quote! {
+                .wrap(::std::sync::Arc::new(::portfu::prelude::ClientTrust::new(#trust_store)))
+            }
+        });
         let mut additional_function_vars = vec![];
         let (mut dyn_vars, path_vars) = match parse_path_variables(path) {
             Ok(v) => v,
@@ -163,11 +183,7 @@ impl ToTokens for WebSocketRoute {
                 let #ident_val: #ident_type = match ::portfu::prelude::FromRequest::try_from(request).await {
                     Ok(v) => v,
                     Err(e) => {
-                        return Ok(::portfu::prelude::Response::internal_error(
-                            format!("Failed to extract {} as {}, {e:?}",
-                                stringify!(#ident_val), stringify!(#ident_type).replace(' ',"")
-                            )
-                        ));
+                        return Ok(::portfu::prelude::IntoResponse::into_response(e));
                     }
                 };
             });
@@ -204,6 +220,7 @@ impl ToTokens for WebSocketRoute {
                         ]
                     )))
                     #(.filter(#filters))*
+                    #client_trust_wrapper
                     #(.wrap(#wrappers))*
                     .handler(::std::sync::Arc::new(#name::default()))
                     .build()
@@ -228,133 +245,24 @@ impl ToTokens for WebSocketRoute {
                     request: &'a mut ::portfu::prelude::Request
                 ) -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = Result<::portfu::prelude::Response, ::portfu::prelude::PortfuError>> + 'a + Send>> {
                     Box::pin(async move {
-                        use ::portfu::prelude::http::StatusCode;
-                        use ::portfu::prelude::tokio_tungstenite::tungstenite::handshake::derive_accept_key;
-                        use ::portfu::prelude::tokio_tungstenite::tungstenite::protocol::Role;
-
                         if request.method() == ::portfu::prelude::http::method::Method::OPTIONS {
                             return Ok(::portfu::prelude::Response::ok(""));
                         }
 
                         #(#dyn_vars)*
-
-                        let is_upgrade = match request.request_type() {
-                            ::portfu::prelude::RequestType::Stream(req) => {
-                                req.headers()
-                                    .get(::portfu::prelude::http::header::UPGRADE)
-                                    .and_then(|v| v.to_str().ok())
-                                    .map(|v| v.eq_ignore_ascii_case("websocket"))
-                                    .unwrap_or(false)
-                            }
-                            ::portfu::prelude::RequestType::Sized(req) => {
-                                req.headers()
-                                    .get(::portfu::prelude::http::header::UPGRADE)
-                                    .and_then(|v| v.to_str().ok())
-                                    .map(|v| v.eq_ignore_ascii_case("websocket"))
-                                    .unwrap_or(false)
-                            }
-                            _ => false,
-                        };
-                        if !is_upgrade {
-                            return Ok(::portfu::prelude::Response::from_status_and_message(
-                                StatusCode::BAD_REQUEST,
-                                "Expected websocket upgrade request",
-                            ));
-                        }
-
-                        let (key, version_ok, ) = match request.request_type() {
-                            ::portfu::prelude::RequestType::Stream(req) => {
-                                let key = req.headers().get("Sec-WebSocket-Key").cloned();
-                                (
-                                    req.headers().get("Sec-WebSocket-Key").cloned(),
-                                    req.headers().get("Sec-WebSocket-Version")
-                                        .and_then(|v| v.to_str().ok())
-                                        .map(|v| v == "13")
-                                        .unwrap_or(false),
-                                )
-                            }
-                            ::portfu::prelude::RequestType::Sized(req) => {
-                                let key = req.headers().get("Sec-WebSocket-Key").cloned();
-                                (
-                                    req.headers().get("Sec-WebSocket-Key").cloned(),
-                                    req.headers().get("Sec-WebSocket-Version")
-                                        .and_then(|v| v.to_str().ok())
-                                        .map(|v| v == "13")
-                                        .unwrap_or(false),
-                                )
-                            }
-                            _ => {
-                                return Ok(::portfu::prelude::Response::from_status_and_message(
-                                    StatusCode::BAD_REQUEST,
-                                    "WebSocket upgrade requires a live HTTP request",
-                                ));
-                            }
-                        };
-                        let Some(key) = key else {
-                            return Ok(::portfu::prelude::Response::from_status_and_message(
-                                StatusCode::BAD_REQUEST,
-                                "Missing Sec-WebSocket-Key header",
-                            ));
-                        };
-                        if !version_ok {
-                            return Ok(::portfu::prelude::Response::from_status_and_message(
-                                StatusCode::BAD_REQUEST,
-                                "Unsupported websocket version",
-                            ));
-                        }
-                        let accept = derive_accept_key(key.as_bytes());
-                        let response = match ::portfu::prelude::http::Response::builder()
-                            .status(StatusCode::SWITCHING_PROTOCOLS)
-                            .header(::portfu::prelude::http::header::CONNECTION, "upgrade")
-                            .header(::portfu::prelude::http::header::UPGRADE, "websocket")
-                            .header("Sec-WebSocket-Accept", accept)
-                            .body(())
-                        {
-                            Ok(response) => response,
-                            Err(e) => {
-                                return Ok(::portfu::prelude::Response::internal_error(
-                                    format!("Failed to build websocket response: {e:?}")
-                                ));
-                            }
-                        };
-
+                        let mut websocket_config = ::portfu::prelude::WebSocketRouteConfig::default();
+                        #max_message_size_config
+                        #max_frame_size_config
+                        #upgrade_timeout_config
                         let peers = self.peers.clone();
-                        let upgrade = match request.request_type() {
-                            ::portfu::prelude::RequestType::Stream(req) => {
-                                ::portfu::prelude::hyper::upgrade::on(req)
-                            }
-                            ::portfu::prelude::RequestType::Sized(req) => {
-                                ::portfu::prelude::hyper::upgrade::on(req)
-                            }
-                            _ => {
-                                ::portfu::prelude::log::error!("WebSocket upgrade requires a live HTTP request");
-                                return Ok(::portfu::prelude::Response::from_status_and_message(
-                                    StatusCode::BAD_REQUEST,
-                                    "WebSocket upgrade requires a live HTTP request",
-                                ));
-                            }
-                        };
-                        ::tokio::spawn(async move {
-                            match upgrade.await {
-                                Ok(upgraded) => {
-                                    let websocket = ::portfu::prelude::tokio_tungstenite::WebSocketStream::from_raw_socket(
-                                        ::portfu::prelude::hyper_util::rt::TokioIo::new(upgraded),
-                                        Role::Server,
-                                        None
-                                    ).await;
-                                    let websocket_wrapper = ::portfu::prelude::WebSocket::with_peers(websocket, peers.clone()).await;
-                                    if let Err(e) = Self::#name(#(#additional_function_vars)*).await {
-                                        eprintln!("websocket handler exited with error: {e}");
-                                    }
-                                    let _ = websocket_wrapper.leave().await;
-                                }
-                                Err(e) => {
-                                    eprintln!("websocket upgrade failed: {e:?}");
-                                }
-                            }
-                        });
-
-                        Ok(response.into())
+                        ::portfu::prelude::websocket_upgrade(
+                            request,
+                            websocket_config,
+                            peers.clone(),
+                            move |websocket_wrapper| async move {
+                                Self::#name(#(#additional_function_vars)*).await
+                            },
+                        ).await
                     })
                 }
             }
@@ -370,6 +278,10 @@ struct WsArgs {
     domains: Vec<syn::LitStr>,
     filters: Vec<Expr>,
     wrappers: Vec<syn::Expr>,
+    client_trust: Option<syn::LitStr>,
+    max_message_size: Option<Expr>,
+    max_frame_size: Option<Expr>,
+    upgrade_timeout_ms: Option<Expr>,
 }
 
 impl WsArgs {
@@ -379,6 +291,10 @@ impl WsArgs {
         let mut domains = Vec::new();
         let mut filters = Vec::new();
         let mut wrappers = Vec::new();
+        let mut client_trust = None;
+        let mut max_message_size = None;
+        let mut max_frame_size = None;
+        let mut upgrade_timeout_ms = None;
         for nv in args.options {
             if nv.path.is_ident("name") {
                 if let syn::Expr::Lit(syn::ExprLit {
@@ -441,10 +357,35 @@ impl WsArgs {
                 } else {
                     wrappers.push(value);
                 }
+            } else if nv.path.is_ident("client_trust") {
+                if client_trust.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        nv.path,
+                        "Attribute client_trust may only be specified once",
+                    ));
+                }
+                if let syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(lit),
+                    ..
+                }) = nv.value
+                {
+                    client_trust = Some(lit);
+                } else {
+                    return Err(syn::Error::new_spanned(
+                        nv.value,
+                        "Attribute client_trust expects a literal string",
+                    ));
+                }
+            } else if nv.path.is_ident("max_message_size") {
+                set_once(&mut max_message_size, nv.value, "max_message_size")?;
+            } else if nv.path.is_ident("max_frame_size") {
+                set_once(&mut max_frame_size, nv.value, "max_frame_size")?;
+            } else if nv.path.is_ident("upgrade_timeout_ms") {
+                set_once(&mut upgrade_timeout_ms, nv.value, "upgrade_timeout_ms")?;
             } else {
                 return Err(syn::Error::new_spanned(
                     nv.path,
-                    "Unknown attribute key is specified; allowed: name, scope, domain, filter and wrap",
+                    "Unknown attribute key is specified; allowed: name, scope, domain, filter, wrap, client_trust, max_message_size, max_frame_size and upgrade_timeout_ms",
                 ));
             }
         }
@@ -455,14 +396,30 @@ impl WsArgs {
             domains,
             filters,
             wrappers,
+            client_trust,
+            max_message_size,
+            max_frame_size,
+            upgrade_timeout_ms,
         })
     }
 }
 
+fn set_once(target: &mut Option<Expr>, value: Expr, name: &str) -> syn::Result<()> {
+    if target.is_some() {
+        return Err(syn::Error::new_spanned(
+            value,
+            format!("Attribute {name} may only be specified once"),
+        ));
+    }
+    *target = Some(value);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::WsArgs;
+    use super::{WebSocketRoute, WsArgs};
     use crate::endpoint::EndpointArgs;
+    use quote::ToTokens;
 
     #[test]
     fn websocket_args_accept_filter_and_wrap_expressions() {
@@ -484,5 +441,28 @@ mod tests {
         let parsed = WsArgs::new(args).expect("websocket args should parse");
         assert_eq!(parsed.filters.len(), 1);
         assert_eq!(parsed.wrappers.len(), 1);
+    }
+
+    #[test]
+    fn websocket_expansion_includes_route_limits_timeout_and_trust() {
+        let args = syn::parse_str::<EndpointArgs>(
+            r#""/ws", client_trust = "public-clients", max_message_size = 67108864, max_frame_size = 8388608, upgrade_timeout_ms = 5000"#,
+        )
+        .expect("args should parse");
+        let ast: syn::ItemFn = syn::parse_quote! {
+            async fn peer_socket(websocket: WebSocket) -> Result<(), PortfuError> {
+                let _ = websocket;
+                Ok(())
+            }
+        };
+        let route = WebSocketRoute::new(args, ast).expect("route should build");
+        let rendered = route.to_token_stream().to_string();
+        assert!(rendered.contains("ClientTrust :: new"));
+        assert!(rendered.contains("public-clients"));
+        assert!(rendered.contains("max_message_size = Some (67108864)"));
+        assert!(rendered.contains("max_frame_size = Some (8388608)"));
+        assert!(rendered.contains("Duration :: from_millis (5000)"));
+        assert!(rendered.contains("websocket_upgrade"));
+        assert!(!rendered.contains("tokio :: spawn"));
     }
 }

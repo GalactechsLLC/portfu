@@ -24,16 +24,24 @@ pub mod prelude {
     };
     pub use portfu_common::error::PortfuError;
     pub use portfu_common::router::filter as filters;
+    pub use portfu_common::router::middleware::client_trust::ClientTrust;
     pub use portfu_common::router::path::Path;
     pub use portfu_common::router::path::PathImpl;
     pub use portfu_common::router::path::PathName;
     pub use portfu_common::server::Server;
+    pub use portfu_common::server::ServerHandle;
     pub use portfu_common::server::ServiceRegister;
     pub use portfu_common::server::ServiceRegistration;
     pub use portfu_common::server::ServiceRegistry;
     pub use portfu_common::server::TaskRegistration;
     pub use portfu_common::server::builder::ServerBuilder;
-    pub use portfu_common::server::config::SslConfig;
+    pub use portfu_common::server::config::{
+        ClientAuthConfig, ClientCertificateMode, TlsConfig, TlsIdentity, TlsVersionPolicy,
+        TrustStore,
+    };
+    pub use portfu_common::server::connection::{
+        ClientIdentity, ConnectionInfo, NegotiatedTlsVersion,
+    };
     pub use portfu_common::service::RequestHeaders;
     pub use portfu_common::service::ResponseHeaders;
     pub use portfu_common::service::Service;
@@ -47,6 +55,7 @@ pub mod prelude {
     pub use portfu_common::service::request::Request;
     pub use portfu_common::service::request::RequestType;
     pub use portfu_common::service::response::Response;
+    pub use portfu_common::service::response::{IntoResponse, ResponseError};
     pub use portfu_common::service::traits::Service as ServiceTrait;
     #[cfg(feature = "websocket")]
     pub use portfu_common::websocket::ClientWebSocket;
@@ -60,6 +69,11 @@ pub mod prelude {
     pub use portfu_common::websocket::WebSocket;
     #[cfg(feature = "websocket")]
     pub use portfu_common::websocket::WebsocketConnection;
+    #[cfg(feature = "websocket")]
+    pub use portfu_common::websocket::{
+        WebSocketAdmission, WebSocketAdmissionMiddleware, WebSocketAdmissionPermit,
+        WebSocketRouteConfig, upgrade as websocket_upgrade,
+    };
     pub use portfu_common::wrappers;
     #[cfg(feature = "sessions")]
     pub use portfu_common::wrappers::sessions::{Session, SessionState};

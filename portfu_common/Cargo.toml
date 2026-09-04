@@ -26,7 +26,7 @@ rate-limit = []
 sessions = ["dep:cookie", "dep:dashmap", "dep:hex", "dep:sha2"]
 tasks = []
 tls = ["dep:rcgen", "dep:rsa", "dep:rustls", "dep:rustls-pemfile", "dep:sha2", "dep:tokio-rustls", "dep:x509-cert"]
-websocket = ["dep:tokio-tungstenite"]
+websocket = ["dep:tokio-tungstenite", "dep:tokio-util"]
 
 [dependencies]
 cookie = { version = "0.18.1", optional = true }
@@ -52,6 +52,7 @@ reqwest = { version = "0.11.27", default-features = false, features = ["json", "
 base64 = { version = "0.22.1", optional = true }
 tokio = {version = "1.47.1", features=["rt-multi-thread", "sync", "signal", "macros", "process", "time", "fs", "net"]}
 tokio-tungstenite = { version = "0.28.0", optional = true }
+tokio-util = { version = "0.7.18", features = ["rt"], optional = true }
 uuid = { version = "1.21.0", features = ["v4"] }
 log = "0.4.28"
 rcgen = { version = "0.13.2", optional = true }

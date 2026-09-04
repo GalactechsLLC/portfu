@@ -108,4 +108,60 @@ let server = ServerBuilder::new()
     .build();
 ```
 
-Websocket handlers run in spawned upgrade tasks. Use owned `RequestHeaders` parameters; Portfu clones the request headers before the task starts. Use `WebSocket` for server-side connections and `ClientWebSocket` for outbound `connect_async` connections.
+TLS is configured as one listener policy with one or more server identities. The first identity is the default certificate when the client sends no matching SNI name; every identity is also registered for its `domain`.
+
+```rust
+let tls = TlsConfig::new(TlsIdentity::new(
+    "node.example.com",
+    node_cert_pem,
+    node_key_pem,
+))
+.with_identity(TlsIdentity::new(
+    "rpc.example.com",
+    rpc_cert_pem,
+    rpc_key_pem,
+))
+.client_auth(ClientAuthConfig {
+    presentation: ClientCertificateMode::Optional,
+    trust_stores: vec![
+        TrustStore::new("public-clients", public_ca_pem),
+        TrustStore::new("internal-clients", internal_ca_pem),
+    ],
+})
+.versions(TlsVersionPolicy::Tls13Only);
+
+let server = ServerBuilder::new().tls(tls).build();
+```
+
+With `ClientCertificateMode::Optional`, clients without a certificate complete TLS normally and can use unprotected routes. A protected route returns `401` when no certificate was presented and `403` when it was not verified by the named trust store.
+
+```rust
+#[post("/admin/report", client_trust = "internal-clients")]
+async fn admin_report(identity: ClientIdentity) -> Result<String, PortfuError> {
+    Ok(format!("{:02x?}", identity.sha256_fingerprint))
+}
+```
+
+WebSocket options are route-local. Portfu performs admission before returning `101`, then owns and tracks the upgraded task so `ServerHandle::shutdown()` can cancel it and wait up to the configured drain grace period. `ConnectionInfo` is extractable before upgrade and remains available through `WebSocket::connection_info()` afterward.
+
+```rust
+#[websocket(
+    "/ws",
+    client_trust = "public-clients",
+    max_message_size = 67_108_864,
+    max_frame_size = 16_777_216,
+    upgrade_timeout_ms = 5_000
+)]
+async fn peer_socket(
+    identity: ClientIdentity,
+    connection: ConnectionInfo,
+    socket: WebSocket,
+) -> Result<(), PortfuError> {
+    // Process messages until the handler returns or shutdown cancels it.
+    Ok(())
+}
+```
+
+Register server-wide WebSocket admission with `ServerBuilder::websocket_admission`. An admission middleware can reject a banned peer or an exhausted connection limit before the protocol switches, or return a `WebSocketAdmissionPermit` whose lifetime lasts until disconnect. Configure shutdown draining with `ServerBuilder::websocket_shutdown_grace_period`.
+
+Use owned `RequestHeaders` parameters in WebSocket handlers; Portfu clones the request headers before the task starts. Use `WebSocket` for server-side connections and `ClientWebSocket` for outbound `connect_async` connections.

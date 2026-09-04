@@ -228,6 +228,7 @@ impl OAuthServerBuilder {
         self
     }
 
+    #[allow(clippy::wrong_self_convention)]
     pub fn from_env(mut self, prefix: &str) -> Result<Self, PortfuError> {
         self.config.config = OAuthConfig::from_env(prefix)?;
         Ok(self)
@@ -485,7 +486,9 @@ impl FromRequest<Request> for OAuthToken {
                 .get::<SessionOAuthToken>()
                 .map(|token| token.0.clone())
                 .ok_or_else(|| {
-                    PortfuError::Parsing("Failed to find OAuth token in active session".to_string())
+                    PortfuError::Unauthorized(
+                        "Failed to find OAuth token in active session".to_string(),
+                    )
                 })
         })
     }
@@ -506,7 +509,7 @@ impl FromRequest<Request> for OAuthIdentity {
                 .get::<SessionOAuthIdentity>()
                 .map(|identity| identity.0.clone())
                 .ok_or_else(|| {
-                    PortfuError::Parsing(
+                    PortfuError::Unauthorized(
                         "Failed to find OAuth identity in active session".to_string(),
                     )
                 })

@@ -1,5 +1,8 @@
 use crate::error::PortfuError;
-use crate::server::config::{ServerConfig, SslConfig};
+use crate::server::config::{
+    ClientCertificateMode, ServerConfig, TlsConfig, TlsIdentity, TlsVersionPolicy,
+};
+use crate::server::connection::{ClientIdentity, NegotiatedTlsVersion};
 use rcgen::generate_simple_self_signed;
 use rsa::pkcs1::DecodeRsaPrivateKey;
 use rsa::pkcs1v15::SigningKey;
@@ -10,12 +13,12 @@ use rustls::crypto::aws_lc_rs::default_provider;
 use rustls::crypto::aws_lc_rs::sign::any_supported_type;
 use rustls::pki_types::{CertificateDer, DnsName, PrivateKeyDer, UnixTime};
 use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
-use rustls::server::{ClientHello, ParsedCertificate, ResolvesServerCert};
+use rustls::server::{ClientHello, ParsedCertificate, ResolvesServerCert, WebPkiClientVerifier};
 use rustls::sign::CertifiedKey;
 use rustls::{DigitallySignedStruct, DistinguishedName, RootCertStore, SignatureScheme};
 use rustls_pemfile::{Item, certs, read_one};
-use sha2::Sha256;
-use std::collections::HashMap;
+use sha2::{Digest, Sha256};
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::io::{BufReader, Error, ErrorKind};
 use std::ops::Sub;
@@ -34,60 +37,54 @@ use x509_cert::serial_number::SerialNumber;
 use x509_cert::spki::SubjectPublicKeyInfo;
 use x509_cert::time::{Time, Validity};
 
-pub fn load_ssl_certs(config: &ServerConfig) -> Result<Arc<rustls::ServerConfig>, PortfuError> {
-    default_provider()
-        .install_default()
-        .map_err(|e| PortfuError::Internal(format!("failed to install rustls provider: {e:?}")))?;
-    let mut root_cert_store = RootCertStore::empty();
-    let mut resolver = ResolvesServerCertUsingSniWithDefault::new();
+pub struct LoadedTlsConfig {
+    pub server_config: Arc<rustls::ServerConfig>,
+    pub client_verifier: Option<Arc<NamedClientVerifier>>,
+}
 
-    let mut cert_configs = collect_server_certs(config)?;
+pub fn load_ssl_certs(config: &ServerConfig) -> Result<LoadedTlsConfig, PortfuError> {
+    let provider = Arc::new(default_provider());
+    let mut resolver = ResolvesServerCertUsingSniWithDefault::new();
+    let tls = config.tls.clone().unwrap_or_default();
+
+    let mut cert_configs = collect_server_certs(&tls)?;
     if cert_configs.is_empty() {
         cert_configs.push(default_localhost_cert()?);
     }
 
     for cert_config in cert_configs {
-        for cert in load_certs(cert_config.root_certs.as_bytes())? {
-            root_cert_store.add(cert).map_err(|e| {
-                PortfuError::Internal(format!("Invalid Root Cert for Server: {e:?}"))
-            })?;
-        }
-        let certs = load_certs(cert_config.certs.as_bytes())?;
-        let key = load_private_key(cert_config.key.as_bytes())?;
+        let certs = load_certs(&cert_config.cert_chain_pem)?;
+        let key = load_private_key(&cert_config.private_key_pem)?;
         let signing_key = any_supported_type(&key)
             .map_err(|e| PortfuError::Internal(format!("Private key is invalid: {e:?}")))?;
         let cert_key = CertifiedKey::new(certs, signing_key);
         resolver.add(cert_config.domain.as_str(), cert_key)?;
     }
 
-    if let Some(client_ssl) = &config.client_ssl_config {
-        for cert in load_certs(client_ssl.root_certs.as_bytes())? {
-            root_cert_store.add(cert).map_err(|e| {
-                PortfuError::Internal(format!("Invalid Root Cert for Client Verification: {e:?}"))
-            })?;
-        }
-        let resolver = Arc::new(resolver);
-        Ok(Arc::new(
-            rustls::ServerConfig::builder()
-                .with_client_cert_verifier(AllowAny::new())
-                .with_cert_resolver(resolver),
-        ))
-    } else {
-        let resolver = Arc::new(resolver);
-        Ok(Arc::new(
-            rustls::ServerConfig::builder()
-                .with_no_client_auth()
-                .with_cert_resolver(resolver),
-        ))
-    }
+    let versions: &[&'static rustls::SupportedProtocolVersion] = match tls.versions {
+        TlsVersionPolicy::Tls12And13 => &[&rustls::version::TLS13, &rustls::version::TLS12],
+        TlsVersionPolicy::Tls13Only => &[&rustls::version::TLS13],
+    };
+    let builder = rustls::ServerConfig::builder_with_provider(provider.clone())
+        .with_protocol_versions(versions)
+        .map_err(|e| PortfuError::Internal(format!("Invalid TLS version policy: {e}")))?;
+    let client_verifier = NamedClientVerifier::build(&tls, provider)?;
+    let server_config = match &client_verifier {
+        Some(verifier) => builder
+            .with_client_cert_verifier(verifier.clone())
+            .with_cert_resolver(Arc::new(resolver)),
+        None => builder
+            .with_no_client_auth()
+            .with_cert_resolver(Arc::new(resolver)),
+    };
+    Ok(LoadedTlsConfig {
+        server_config: Arc::new(server_config),
+        client_verifier,
+    })
 }
 
-fn collect_server_certs(config: &ServerConfig) -> Result<Vec<SslConfig>, PortfuError> {
-    let mut certs = vec![];
-    if let Some(default) = &config.ssl_config {
-        certs.push(default.clone());
-    }
-    certs.extend(config.sni_ssl_configs.iter().cloned());
+fn collect_server_certs(config: &TlsConfig) -> Result<Vec<TlsIdentity>, PortfuError> {
+    let mut certs = config.identities.clone();
     if certs.is_empty()
         && let (Some(ca_crt), Some(ca_key)) = (
             env::var("PRIVATE_CA_CRT").ok(),
@@ -105,47 +102,30 @@ fn collect_server_certs(config: &ServerConfig) -> Result<Vec<SslConfig>, PortfuE
                 PortfuError::Parsing(format!("Invalid SSL_CRT_NAME value `{cert_name}`: {e:?}"))
             })?,
         )?;
-        certs.push(SslConfig {
-            domain,
-            key: String::from_utf8(key_bytes)
-                .map_err(|e| PortfuError::Parsing(format!("Invalid generated key bytes: {e}")))?,
-            certs: String::from_utf8(cert_bytes).map_err(|e| {
-                PortfuError::Parsing(format!("Invalid generated certificate bytes: {e}"))
-            })?,
-            root_certs: ca_crt,
-        });
+        certs.push(TlsIdentity::new(domain, cert_bytes, key_bytes));
     }
     if certs.is_empty()
-        && let (Some(certs_pem), Some(key_pem), Some(root_certs_pem)) = (
-            env::var("SSL_CERTS").ok(),
-            env::var("SSL_PRIVATE_KEY").ok(),
-            env::var("SSL_ROOT_CERTS").ok(),
-        )
+        && let (Some(certs_pem), Some(key_pem)) =
+            (env::var("SSL_CERTS").ok(), env::var("SSL_PRIVATE_KEY").ok())
     {
         let domain = env::var("SSL_DOMAIN").unwrap_or_else(|_| "localhost".to_string());
-        certs.push(SslConfig {
-            domain,
-            key: key_pem,
-            certs: certs_pem,
-            root_certs: root_certs_pem,
-        });
+        certs.push(TlsIdentity::new(domain, certs_pem, key_pem));
     }
     Ok(certs)
 }
 
-fn default_localhost_cert() -> Result<SslConfig, PortfuError> {
+fn default_localhost_cert() -> Result<TlsIdentity, PortfuError> {
     let cert = generate_simple_self_signed(vec![
         "localhost".to_string(),
         "127.0.0.1".to_string(),
         "::1".to_string(),
     ])
     .map_err(|e| PortfuError::Internal(format!("failed to generate self-signed cert: {e}")))?;
-    Ok(SslConfig {
-        domain: "localhost".to_string(),
-        key: cert.key_pair.serialize_pem(),
-        certs: cert.cert.pem(),
-        root_certs: cert.cert.pem(),
-    })
+    Ok(TlsIdentity::new(
+        "localhost",
+        cert.cert.pem(),
+        cert.key_pair.serialize_pem(),
+    ))
 }
 
 fn load_certs(bytes: &[u8]) -> Result<Vec<CertificateDer<'static>>, PortfuError> {
@@ -252,62 +232,163 @@ fn handle_item(item: Result<Item, Error>) -> Result<Option<PrivateKeyDer<'static
 }
 
 #[derive(Debug)]
-pub struct AllowAny {}
-impl AllowAny {
-    #[must_use]
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self {})
+pub struct NamedClientVerifier {
+    mandatory: bool,
+    root_hints: Vec<DistinguishedName>,
+    verifiers: Vec<(String, Arc<dyn ClientCertVerifier>)>,
+}
+
+impl NamedClientVerifier {
+    fn build(
+        config: &TlsConfig,
+        provider: Arc<rustls::crypto::CryptoProvider>,
+    ) -> Result<Option<Arc<Self>>, PortfuError> {
+        if config.client_auth.presentation == ClientCertificateMode::Disabled {
+            return Ok(None);
+        }
+        if config.client_auth.trust_stores.is_empty() {
+            return Err(PortfuError::Internal(
+                "Client certificate authentication requires at least one trust store".to_string(),
+            ));
+        }
+
+        let mut names = HashSet::new();
+        let mut root_hints = Vec::new();
+        let mut verifiers = Vec::with_capacity(config.client_auth.trust_stores.len());
+        for trust_store in &config.client_auth.trust_stores {
+            if trust_store.name.trim().is_empty() {
+                return Err(PortfuError::Internal(
+                    "Client certificate trust store names cannot be empty".to_string(),
+                ));
+            }
+            if !names.insert(trust_store.name.clone()) {
+                return Err(PortfuError::Internal(format!(
+                    "Duplicate client certificate trust store `{}`",
+                    trust_store.name
+                )));
+            }
+            let mut roots = RootCertStore::empty();
+            let certs = load_certs(&trust_store.certificates_pem)?;
+            if certs.is_empty() {
+                return Err(PortfuError::Internal(format!(
+                    "Client certificate trust store `{}` contains no certificates",
+                    trust_store.name
+                )));
+            }
+            for cert in certs {
+                roots.add(cert).map_err(|e| {
+                    PortfuError::Internal(format!(
+                        "Invalid certificate in trust store `{}`: {e}",
+                        trust_store.name
+                    ))
+                })?;
+            }
+            root_hints.extend(roots.subjects());
+            let verifier =
+                WebPkiClientVerifier::builder_with_provider(Arc::new(roots), provider.clone())
+                    .build()
+                    .map_err(|e| {
+                        PortfuError::Internal(format!(
+                            "Failed to build trust store `{}`: {e}",
+                            trust_store.name
+                        ))
+                    })?;
+            verifiers.push((trust_store.name.clone(), verifier));
+        }
+        Ok(Some(Arc::new(Self {
+            mandatory: config.client_auth.presentation == ClientCertificateMode::Required,
+            root_hints,
+            verifiers,
+        })))
+    }
+
+    pub fn identity(
+        &self,
+        peer_certificates: &[CertificateDer<'static>],
+    ) -> Option<ClientIdentity> {
+        let (leaf, intermediates) = peer_certificates.split_first()?;
+        let now = UnixTime::now();
+        let verified_by = self
+            .verifiers
+            .iter()
+            .filter_map(|(name, verifier)| {
+                verifier
+                    .verify_client_cert(leaf, intermediates, now)
+                    .ok()
+                    .map(|_| name.clone())
+            })
+            .collect();
+        let sha256_fingerprint: [u8; 32] = Sha256::digest(leaf.as_ref()).into();
+        Some(ClientIdentity {
+            leaf_der: Arc::from(leaf.as_ref()),
+            chain_der: intermediates
+                .iter()
+                .map(|cert| Arc::from(cert.as_ref()))
+                .collect::<Vec<_>>()
+                .into(),
+            sha256_fingerprint,
+            verified_by,
+        })
     }
 }
-impl ClientCertVerifier for AllowAny {
+
+impl ClientCertVerifier for NamedClientVerifier {
     fn client_auth_mandatory(&self) -> bool {
-        false
+        self.mandatory
     }
 
     fn root_hint_subjects(&self) -> &[DistinguishedName] {
-        &[]
+        &self.root_hints
     }
 
     fn verify_client_cert(
         &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _now: UnixTime,
+        end_entity: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        now: UnixTime,
     ) -> Result<ClientCertVerified, rustls::Error> {
-        Ok(ClientCertVerified::assertion())
+        let mut last_error = None;
+        for (_, verifier) in &self.verifiers {
+            match verifier.verify_client_cert(end_entity, intermediates, now) {
+                Ok(verified) => return Ok(verified),
+                Err(error) => last_error = Some(error),
+            }
+        }
+        Err(last_error.expect("NamedClientVerifier always contains a verifier"))
     }
 
     fn verify_tls12_signature(
         &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &DigitallySignedStruct,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
+        self.verifiers[0]
+            .1
+            .verify_tls12_signature(message, cert, dss)
     }
 
     fn verify_tls13_signature(
         &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &DigitallySignedStruct,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
+        self.verifiers[0]
+            .1
+            .verify_tls13_signature(message, cert, dss)
     }
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        vec![
-            SignatureScheme::ECDSA_NISTP521_SHA512,
-            SignatureScheme::ECDSA_NISTP384_SHA384,
-            SignatureScheme::ECDSA_NISTP256_SHA256,
-            SignatureScheme::RSA_PKCS1_SHA256,
-            SignatureScheme::RSA_PKCS1_SHA384,
-            SignatureScheme::RSA_PKCS1_SHA512,
-            SignatureScheme::RSA_PSS_SHA512,
-            SignatureScheme::RSA_PSS_SHA384,
-            SignatureScheme::RSA_PSS_SHA256,
-            SignatureScheme::ED25519,
-        ]
+        self.verifiers[0].1.supported_verify_schemes()
+    }
+}
+
+pub fn negotiated_tls_version(version: rustls::ProtocolVersion) -> Option<NegotiatedTlsVersion> {
+    match version {
+        rustls::ProtocolVersion::TLSv1_2 => Some(NegotiatedTlsVersion::Tls12),
+        rustls::ProtocolVersion::TLSv1_3 => Some(NegotiatedTlsVersion::Tls13),
+        _ => None,
     }
 }
 
@@ -328,7 +409,7 @@ impl ResolvesServerCertUsingSniWithDefault {
             .and_then(ParsedCertificate::try_from)
             .map_err(|_| PortfuError::Io(Error::new(ErrorKind::InvalidInput, "Bad Entity Cert")))?;
         let key = Arc::new(ck);
-        if self.default.is_none() || normalized.as_ref() == "localhost" {
+        if self.default.is_none() {
             self.default = Some(key.clone());
         }
         self.by_name.insert(normalized.as_ref().to_string(), key);
@@ -346,5 +427,96 @@ impl ResolvesServerCert for ResolvesServerCertUsingSniWithDefault {
         } else {
             self.default.clone()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::NamedClientVerifier;
+    use crate::server::config::{ClientAuthConfig, ClientCertificateMode, TlsConfig, TrustStore};
+    use rcgen::{
+        BasicConstraints, Certificate, CertificateParams, ExtendedKeyUsagePurpose, IsCa, KeyPair,
+        KeyUsagePurpose,
+    };
+    use rustls::crypto::aws_lc_rs::default_provider;
+    use rustls::pki_types::{CertificateDer, UnixTime};
+    use rustls::server::danger::ClientCertVerifier;
+    use sha2::{Digest, Sha256};
+    use std::sync::Arc;
+
+    fn certificate_chain() -> (Certificate, KeyPair, CertificateDer<'static>) {
+        let mut ca_params = CertificateParams::new(Vec::<String>::new()).unwrap();
+        ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        ca_params.key_usages = vec![
+            KeyUsagePurpose::DigitalSignature,
+            KeyUsagePurpose::KeyCertSign,
+            KeyUsagePurpose::CrlSign,
+        ];
+        let ca_key = KeyPair::generate().unwrap();
+        let ca = ca_params.self_signed(&ca_key).unwrap();
+
+        let mut leaf_params = CertificateParams::new(vec!["client.test".to_string()]).unwrap();
+        leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        leaf_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
+        let leaf_key = KeyPair::generate().unwrap();
+        let leaf = leaf_params.signed_by(&leaf_key, &ca, &ca_key).unwrap();
+        let leaf_der = CertificateDer::from(leaf.der().to_vec());
+        (ca, ca_key, leaf_der)
+    }
+
+    #[test]
+    fn named_verifier_classifies_and_fingerprints_client_certificates() {
+        let (public_ca, _, public_leaf) = certificate_chain();
+        let (private_ca, _, _) = certificate_chain();
+        let config = TlsConfig {
+            client_auth: ClientAuthConfig {
+                presentation: ClientCertificateMode::Optional,
+                trust_stores: vec![
+                    TrustStore::new("public-clients", public_ca.pem()),
+                    TrustStore::new("internal-clients", private_ca.pem()),
+                ],
+            },
+            ..TlsConfig::default()
+        };
+        let verifier = NamedClientVerifier::build(&config, Arc::new(default_provider()))
+            .unwrap()
+            .unwrap();
+
+        assert!(!verifier.client_auth_mandatory());
+        verifier
+            .verify_client_cert(&public_leaf, &[], UnixTime::now())
+            .expect("public certificate should verify");
+        let identity = verifier
+            .identity(std::slice::from_ref(&public_leaf))
+            .unwrap();
+        assert_eq!(identity.verified_by, vec!["public-clients"]);
+        assert_eq!(
+            identity.sha256_fingerprint,
+            <[u8; 32]>::from(Sha256::digest(public_leaf.as_ref()))
+        );
+        assert!(identity.chain_der.is_empty());
+    }
+
+    #[test]
+    fn named_verifier_rejects_certificates_outside_all_stores() {
+        let (trusted_ca, _, _) = certificate_chain();
+        let (_, _, unrelated_leaf) = certificate_chain();
+        let config = TlsConfig {
+            client_auth: ClientAuthConfig {
+                presentation: ClientCertificateMode::Required,
+                trust_stores: vec![TrustStore::new("trusted", trusted_ca.pem())],
+            },
+            ..TlsConfig::default()
+        };
+        let verifier = NamedClientVerifier::build(&config, Arc::new(default_provider()))
+            .unwrap()
+            .unwrap();
+
+        assert!(verifier.client_auth_mandatory());
+        assert!(
+            verifier
+                .verify_client_cert(&unrelated_leaf, &[], UnixTime::now())
+                .is_err()
+        );
     }
 }

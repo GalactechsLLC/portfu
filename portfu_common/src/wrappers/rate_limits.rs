@@ -2,6 +2,7 @@ use crate::error::PortfuError;
 use crate::router::middleware::{Middleware, MiddlewareResult};
 use crate::server::builder::ServerBuilder;
 use crate::service::request::Request;
+use crate::service::response::IntoResponse;
 use crate::service::response::Response;
 use http::StatusCode;
 use log::{debug, warn};
@@ -273,15 +274,7 @@ async fn enforce_body_limit(
         .await
     {
         Ok(_) => None,
-        Err(e) => {
-            let message = e.to_string();
-            let status = if message.starts_with("Timed out") {
-                StatusCode::REQUEST_TIMEOUT
-            } else {
-                StatusCode::PAYLOAD_TOO_LARGE
-            };
-            Some(Response::from_status_and_message(status, message))
-        }
+        Err(e) => Some(e.into_response()),
     }
 }
 

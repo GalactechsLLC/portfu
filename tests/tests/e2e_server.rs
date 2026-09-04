@@ -84,8 +84,18 @@ async fn method_head() -> Result<http::Response<()>, PortfuError> {
         .map_err(|e| PortfuError::Internal(format!("failed to build head response: {e}")))
 }
 
-#[websocket("/ws/echo")]
-async fn ws_echo(websocket: WebSocket) -> Result<(), PortfuError> {
+#[websocket(
+    "/ws/echo",
+    max_message_size = 67_108_864,
+    max_frame_size = 16_777_216,
+    upgrade_timeout_ms = 5_000
+)]
+async fn ws_echo(info: ConnectionInfo, websocket: WebSocket) -> Result<(), PortfuError> {
+    if websocket.connection_info() != &info {
+        return Err(PortfuError::Internal(
+            "connection metadata changed during upgrade".to_string(),
+        ));
+    }
     while let Some(message) = websocket
         .next_message()
         .await
@@ -206,12 +216,6 @@ async fn http_methods_and_websocket_work_end_to_end() {
         return;
     };
     let port = server.port;
-
-    let health = raw_http_request(port, "GET", "/health", None)
-        .await
-        .expect("health request failed");
-    assert_eq!(health.status, 200);
-    assert_eq!(String::from_utf8_lossy(&health.body), "OK");
 
     assert_method(port, "GET", "/method/get", "GET", "get-ok").await;
     assert_method(port, "POST", "/method/post", "POST", "post-ok").await;
@@ -528,7 +532,7 @@ fn header<'a>(response: &'a RawResponse, key: &str) -> Option<&'a str> {
 async fn wait_for_server(port: u16) -> Result<(), std::io::Error> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
-        match raw_http_request(port, "GET", "/health", None).await {
+        match raw_http_request(port, "GET", "/method/get", None).await {
             Ok(response) if response.status == 200 => return Ok(()),
             Ok(_) => {}
             Err(e) if e.kind() == ErrorKind::ConnectionRefused => {}

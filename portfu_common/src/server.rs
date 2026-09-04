@@ -1,5 +1,6 @@
 pub mod builder;
 pub mod config;
+pub mod connection;
 #[cfg(feature = "tls")]
 mod ssl;
 pub mod state;
@@ -8,13 +9,16 @@ use crate::error::PortfuError;
 use crate::router::middleware::{Middleware, MiddlewareResult};
 use crate::router::route::Route;
 use crate::server::config::ServerConfig;
+use crate::server::connection::ConnectionInfo;
 #[cfg(feature = "tls")]
-use crate::server::ssl::load_ssl_certs;
+use crate::server::ssl::{load_ssl_certs, negotiated_tls_version};
 use crate::service::request::{Request, RequestType};
 use crate::service::response::Response;
 use crate::service::{Service, StreamingBody};
 use crate::signal::await_termination;
 use crate::stream::IntoStreamBody;
+#[cfg(feature = "websocket")]
+use crate::websocket::{WebSocketAdmissionMiddleware, WebSocketRuntime};
 use http::Extensions;
 use hyper::body::Incoming;
 use hyper::server::conn::http1::Builder;
@@ -53,6 +57,19 @@ pub struct TaskRegistration {
 
 inventory::collect!(TaskRegistration);
 
+#[derive(Clone)]
+pub struct ServerHandle {
+    run: Arc<AtomicBool>,
+    shutdown: watch::Sender<bool>,
+}
+
+impl ServerHandle {
+    pub fn shutdown(&self) {
+        self.run.store(false, Ordering::Relaxed);
+        self.shutdown.send_replace(true);
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct ServiceRegistry {
     pub services: Vec<Service>,
@@ -73,7 +90,6 @@ fn load_registry() -> ServiceRegistry {
     registry
 }
 
-#[derive(Default)]
 pub struct Server {
     pub run: Arc<AtomicBool>,
     pub config: ServerConfig,
@@ -81,9 +97,20 @@ pub struct Server {
     pub services: Vec<Service>,
     pub middleware: Vec<Arc<dyn Middleware + Send + Sync>>,
     pub default_service: Option<Service>,
-    pub health_service: Option<Service>,
+    shutdown: watch::Sender<bool>,
+    #[cfg(feature = "websocket")]
+    pub(crate) websocket_runtime: Arc<WebSocketRuntime>,
+    #[cfg(feature = "websocket")]
+    pub(crate) websocket_admission: Vec<Arc<dyn WebSocketAdmissionMiddleware + Send + Sync>>,
 }
 impl Server {
+    pub fn handle(&self) -> ServerHandle {
+        ServerHandle {
+            run: self.run.clone(),
+            shutdown: self.shutdown.clone(),
+        }
+    }
+
     pub async fn run(self) -> Result<(), PortfuError> {
         let server = Arc::new(self);
         {
@@ -130,41 +157,38 @@ impl Server {
         http.max_buf_size(server.config.max_buf_size);
         let http = Arc::new(http);
         #[cfg(feature = "tls")]
-        let tls_acceptor = if server.config.enable_ssl
-            || server.config.ssl_config.is_some()
-            || !server.config.sni_ssl_configs.is_empty()
+        let loaded_tls = if server.config.tls.is_some()
             || (env::var("PRIVATE_CA_CRT").ok().is_some()
                 && env::var("PRIVATE_CA_KEY").ok().is_some())
-            || (env::var("SSL_CERTS").ok().is_some()
-                && env::var("SSL_PRIVATE_KEY").ok().is_some()
-                && env::var("SSL_ROOT_CERTS").ok().is_some())
+            || (env::var("SSL_CERTS").ok().is_some() && env::var("SSL_PRIVATE_KEY").ok().is_some())
         {
-            let certs = load_ssl_certs(&server.config)?;
-            Some(TlsAcceptor::from(certs))
+            Some(load_ssl_certs(&server.config)?)
         } else {
             None
         };
+        #[cfg(feature = "tls")]
+        let tls_acceptor = loaded_tls
+            .as_ref()
+            .map(|tls| TlsAcceptor::from(tls.server_config.clone()));
+        #[cfg(feature = "tls")]
+        let client_verifier = loaded_tls
+            .as_ref()
+            .and_then(|tls| tls.client_verifier.clone());
         #[cfg(not(feature = "tls"))]
-        if server.config.enable_ssl
-            || server.config.ssl_config.is_some()
-            || !server.config.sni_ssl_configs.is_empty()
+        if server.config.tls.is_some()
             || (env::var("PRIVATE_CA_CRT").ok().is_some()
                 && env::var("PRIVATE_CA_KEY").ok().is_some())
-            || (env::var("SSL_CERTS").ok().is_some()
-                && env::var("SSL_PRIVATE_KEY").ok().is_some()
-                && env::var("SSL_ROOT_CERTS").ok().is_some())
+            || (env::var("SSL_CERTS").ok().is_some() && env::var("SSL_PRIVATE_KEY").ok().is_some())
         {
             return Err(PortfuError::Internal(
                 "TLS support requires the `tls` feature".to_string(),
             ));
         }
-        let server_run_handle = server.run.clone();
-        let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let shutdown_tx_handle = shutdown_tx.clone();
-        spawn(async move {
+        let shutdown_handle = server.handle();
+        let shutdown_rx = server.shutdown.subscribe();
+        let signal_task = spawn(async move {
             let _ = await_termination().await;
-            server_run_handle.store(false, Ordering::Relaxed);
-            let _ = shutdown_tx_handle.send(true);
+            shutdown_handle.shutdown();
         });
         let mut acceptor_handles = Vec::with_capacity(listeners.len());
         let mut task_handles = Vec::new();
@@ -181,9 +205,14 @@ impl Server {
             let http = http.clone();
             #[cfg(feature = "tls")]
             let tls_acceptor = tls_acceptor.clone();
+            #[cfg(feature = "tls")]
+            let client_verifier = client_verifier.clone();
             let mut shutdown_rx = shutdown_rx.clone();
             acceptor_handles.push(spawn(async move {
                 loop {
+                    if *shutdown_rx.borrow() {
+                        break;
+                    }
                     select!(
                         _ = shutdown_rx.changed() => {
                             break;
@@ -193,16 +222,28 @@ impl Server {
                                 Ok((stream, address)) => {
                                     let server = server.clone();
                                     let http = http.clone();
+                                    let local_address = stream.local_addr().unwrap_or(socket_addr);
                                     #[cfg(feature = "tls")]
                                     let tls_acceptor = tls_acceptor.clone();
+                                    #[cfg(feature = "tls")]
+                                    let client_verifier = client_verifier.clone();
                                     spawn(async move {
                                         #[cfg(feature = "tls")]
                                         if let Some(acceptor) = tls_acceptor.as_ref() {
                                             match acceptor.accept(stream).await {
                                                 Ok(stream) => {
+                                                    let (_, tls_connection) = stream.get_ref();
+                                                    let mut connection_info = ConnectionInfo::plaintext(address, local_address);
+                                                    connection_info.tls_version = tls_connection
+                                                        .protocol_version()
+                                                        .and_then(negotiated_tls_version);
+                                                    connection_info.client_identity = client_verifier
+                                                        .as_ref()
+                                                        .and_then(|verifier| tls_connection.peer_certificates().and_then(|certs| verifier.identity(certs)));
                                                     let service = service_fn(move |req| {
                                                         let server = server.clone();
-                                                        Self::connection_handler(server, req, address)
+                                                        let connection_info = connection_info.clone();
+                                                        Self::connection_handler(server, req, connection_info)
                                                     });
                                                     let connection = http.serve_connection(TokioIo::new(stream), service).with_upgrades();
                                                     if let Err(err) = connection.await {
@@ -217,7 +258,8 @@ impl Server {
                                         }
                                         let service = service_fn(move |req| {
                                             let server = server.clone();
-                                            Self::connection_handler(server, req, address)
+                                            let connection_info = ConnectionInfo::plaintext(address, local_address);
+                                            Self::connection_handler(server, req, connection_info)
                                         });
                                         let connection = http.serve_connection(TokioIo::new(stream), service).with_upgrades();
                                         if let Err(err) = connection.await {
@@ -239,15 +281,27 @@ impl Server {
             }));
         }
         let mut shutdown_rx = shutdown_rx.clone();
-        let _ = shutdown_rx.changed().await;
+        if !*shutdown_rx.borrow() {
+            let _ = shutdown_rx.changed().await;
+        }
         info!("Got Shutdown Signal");
         for handle in acceptor_handles {
             let _ = handle.await;
+        }
+        #[cfg(feature = "websocket")]
+        if !server
+            .websocket_runtime
+            .shutdown(server.config.websocket_shutdown_grace_period)
+            .await
+        {
+            warn!("Timed out while draining WebSocket connections");
         }
         for handle in task_handles {
             handle.abort();
             let _ = handle.await;
         }
+        signal_task.abort();
+        let _ = signal_task.await;
         info!("Server Exiting");
         Ok(())
     }
@@ -277,49 +331,21 @@ impl Server {
     async fn connection_handler(
         server: Arc<Self>,
         request: http::Request<Incoming>,
-        address: SocketAddr,
+        connection_info: ConnectionInfo,
     ) -> Result<http::Response<StreamingBody>, PortfuError> {
         let scoped_state = server.scoped_state.read().await.clone();
         let mut request = Request::new(
             RequestType::Stream(request.map(|b| b.stream_body())),
             DEFAULT_ROUTE.clone(),
         );
-        Self::set_request_scope_state(&mut request, &scoped_state, DEFAULT_SCOPE, address);
-        if request.uri().path() == "/health" {
-            return match &server.health_service {
-                Some(service) => {
-                    Self::set_request_scope_state(
-                        &mut request,
-                        &scoped_state,
-                        service.scope(),
-                        address,
-                    );
-                    *request.route_mut() = service.route().clone();
-                    if service.serves(&request).await {
-                        Self::serve_with_global_middleware(&server, service, &mut request)
-                            .await
-                            .map(Into::into)
-                    } else {
-                        Self::finalize_with_global_middleware(
-                            &server.middleware,
-                            &request,
-                            Response::ok("OK"),
-                        )
-                        .await
-                        .map(Into::into)
-                    }
-                }
-                None => Self::finalize_with_global_middleware(
-                    &server.middleware,
-                    &request,
-                    Response::ok("OK"),
-                )
-                .await
-                .map(Into::into),
-            };
-        }
+        Self::set_request_scope_state(&mut request, &scoped_state, DEFAULT_SCOPE, &connection_info);
         for service in &server.services {
-            Self::set_request_scope_state(&mut request, &scoped_state, service.scope(), address);
+            Self::set_request_scope_state(
+                &mut request,
+                &scoped_state,
+                service.scope(),
+                &connection_info,
+            );
             if service.serves(&request).await {
                 *request.route_mut() = service.route().clone();
                 return Self::serve_with_global_middleware(&server, service, &mut request)
@@ -328,7 +354,12 @@ impl Server {
             }
         }
         for service in &SERVICE_REGISTRY.services {
-            Self::set_request_scope_state(&mut request, &scoped_state, service.scope(), address);
+            Self::set_request_scope_state(
+                &mut request,
+                &scoped_state,
+                service.scope(),
+                &connection_info,
+            );
             if service.serves(&request).await {
                 *request.route_mut() = service.route().clone();
                 return Self::serve_with_global_middleware(&server, service, &mut request)
@@ -342,7 +373,7 @@ impl Server {
                     &mut request,
                     &scoped_state,
                     service.scope(),
-                    address,
+                    &connection_info,
                 );
                 Self::serve_with_global_middleware(&server, service, &mut request)
                     .await
@@ -402,12 +433,16 @@ impl Server {
         request: &mut Request,
         scoped_state: &HashMap<String, Extensions>,
         scope: &str,
-        address: SocketAddr,
+        connection_info: &ConnectionInfo,
     ) {
         if let Some(extensions) = request.shared_state_mut() {
             let upgrade = extensions.remove::<hyper::upgrade::OnUpgrade>();
             let mut scoped_extensions = Self::scope_state(scoped_state, scope);
-            scoped_extensions.insert(address);
+            scoped_extensions.insert(connection_info.peer_addr);
+            scoped_extensions.insert(connection_info.clone());
+            if let Some(identity) = &connection_info.client_identity {
+                scoped_extensions.insert(identity.clone());
+            }
             if let Some(upgrade) = upgrade {
                 scoped_extensions.insert(upgrade);
             }
@@ -426,9 +461,17 @@ impl Server {
     }
 }
 
+impl Default for Server {
+    fn default() -> Self {
+        crate::server::builder::ServerBuilder::new().build()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{DEFAULT_SCOPE, Route, Server};
+    use crate::server::builder::ServerBuilder;
+    use crate::server::connection::ConnectionInfo;
     use crate::service::request::{Request, RequestType};
     use http::Extensions;
     use http_body_util::Full;
@@ -436,10 +479,22 @@ mod tests {
     use std::collections::HashMap;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::sync::Arc;
+    use std::sync::atomic::Ordering;
 
     struct DefaultState;
     struct TenantState;
     struct PreviousState;
+
+    #[test]
+    fn server_handle_requests_shutdown() {
+        let server = ServerBuilder::new().build();
+        let handle = server.handle();
+
+        handle.shutdown();
+
+        assert!(!server.run.load(Ordering::Relaxed));
+        assert!(*server.shutdown.borrow());
+    }
 
     #[test]
     fn set_request_scope_state_replaces_previous_candidate_scope_state() {
@@ -463,12 +518,13 @@ mod tests {
         request.insert(Arc::new(PreviousState));
 
         let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080);
-        Server::set_request_scope_state(&mut request, &scoped_state, "tenant", address);
+        let connection = ConnectionInfo::plaintext(address, address);
+        Server::set_request_scope_state(&mut request, &scoped_state, "tenant", &connection);
         assert!(request.get::<Arc<PreviousState>>().is_none());
         assert!(request.get::<Arc<DefaultState>>().is_some());
         assert!(request.get::<Arc<TenantState>>().is_some());
 
-        Server::set_request_scope_state(&mut request, &scoped_state, "other", address);
+        Server::set_request_scope_state(&mut request, &scoped_state, "other", &connection);
         assert!(request.get::<Arc<DefaultState>>().is_some());
         assert!(request.get::<Arc<TenantState>>().is_none());
     }
@@ -492,7 +548,8 @@ mod tests {
         request.insert(upgrade);
 
         let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080);
-        Server::set_request_scope_state(&mut request, &scoped_state, DEFAULT_SCOPE, address);
+        let connection = ConnectionInfo::plaintext(address, address);
+        Server::set_request_scope_state(&mut request, &scoped_state, DEFAULT_SCOPE, &connection);
 
         assert!(request.get::<hyper::upgrade::OnUpgrade>().is_some());
         assert!(request.get::<Arc<DefaultState>>().is_some());

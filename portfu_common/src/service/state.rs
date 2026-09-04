@@ -35,7 +35,7 @@ impl<T: Send + Sync + 'static> FromRequest<Request> for State<T> {
                 .get::<Arc<T>>()
                 .cloned()
                 .map(State)
-                .ok_or(PortfuError::Parsing(format!(
+                .ok_or(PortfuError::Internal(format!(
                     "Failed to find State of type {}",
                     std::any::type_name::<T>()
                 )))

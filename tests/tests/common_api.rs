@@ -1,7 +1,7 @@
 use http::Method;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
-use portfu::prelude::{PreEscaped, Render, get, html, inventory, maud_http};
+use portfu::prelude::{PreEscaped, Render, get, html, inventory, maud_http, post};
 use portfu_common::auth::oauth::{
     OAUTH, OAuthIdentity, OAuthToken, SessionOAuthIdentity, SessionOAuthToken,
 };
@@ -11,6 +11,7 @@ use portfu_common::router::middleware::{Middleware, MiddlewareResult};
 use portfu_common::router::path::{Path, PathImpl, PathName};
 use portfu_common::router::route::Route;
 use portfu_common::server::builder::ServerBuilder;
+use portfu_common::server::connection::ClientIdentity;
 use portfu_common::service::State;
 use portfu_common::service::builder::ServiceBuilder;
 use portfu_common::service::group::ServiceGroup;
@@ -148,6 +149,20 @@ async fn typed_json_endpoint() -> Result<Vec<PlainJson>, PortfuError> {
 #[get("/broken-json", name = "broken-json")]
 async fn broken_json_endpoint() -> Result<BrokenJson, PortfuError> {
     Ok(BrokenJson)
+}
+
+#[post("/extract-json", name = "extract-json")]
+async fn extract_json_endpoint(payload: Json<JsonPayload>) -> Result<String, PortfuError> {
+    Ok(payload.into_inner().title)
+}
+
+#[post(
+    "/trusted-endpoint",
+    name = "trusted-endpoint",
+    client_trust = "internal-clients"
+)]
+async fn trusted_endpoint() -> Result<String, PortfuError> {
+    Ok("trusted".to_string())
 }
 
 #[maud_http("/maud/", "/maud/index.html", name = "maud-index")]
@@ -1174,6 +1189,68 @@ async fn endpoint_macro_reports_json_serialization_failures() {
         .expect("error body collection failed")
         .to_bytes();
     assert_eq!(&body[..], b"Failed to serialize JSON");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn endpoint_macro_maps_extractor_and_client_trust_errors() {
+    let services = load_registered_services();
+    let json_service = services
+        .iter()
+        .find(|service| service.name() == "extract-json")
+        .expect("extract-json service should be registered");
+    let mut malformed = Request::new(
+        RequestType::Sized(
+            http::Request::builder()
+                .method(Method::POST)
+                .uri("/extract-json")
+                .body(Full::new(Bytes::from_static(b"{bad-json")))
+                .unwrap(),
+        ),
+        json_service.route(),
+    );
+    let response = json_service.serve(&mut malformed).await.unwrap();
+    assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
+
+    let trusted_service = services
+        .iter()
+        .find(|service| service.name() == "trusted-endpoint")
+        .expect("trusted endpoint should be registered");
+    let make_request = || {
+        Request::new(
+            RequestType::Sized(
+                http::Request::builder()
+                    .method(Method::POST)
+                    .uri("/trusted-endpoint")
+                    .body(Full::new(Bytes::new()))
+                    .unwrap(),
+            ),
+            trusted_service.route(),
+        )
+    };
+    let mut missing = make_request();
+    assert_eq!(
+        trusted_service.serve(&mut missing).await.unwrap().status(),
+        http::StatusCode::UNAUTHORIZED
+    );
+
+    let identity = |verified_by: &str| ClientIdentity {
+        leaf_der: Arc::from([]),
+        chain_der: Arc::from([]),
+        sha256_fingerprint: [0; 32],
+        verified_by: vec![verified_by.to_string()],
+    };
+    let mut wrong = make_request();
+    wrong.insert(identity("public-clients"));
+    assert_eq!(
+        trusted_service.serve(&mut wrong).await.unwrap().status(),
+        http::StatusCode::FORBIDDEN
+    );
+    let mut allowed = make_request();
+    allowed.insert(identity("internal-clients"));
+    assert_eq!(
+        trusted_service.serve(&mut allowed).await.unwrap().status(),
+        http::StatusCode::OK
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

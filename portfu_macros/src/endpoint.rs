@@ -133,6 +133,7 @@ impl ToTokens for Endpoint {
             domains,
             filters,
             wrappers,
+            client_trust,
             methods,
         } = args;
         let resource_name = resource_name
@@ -142,6 +143,11 @@ impl ToTokens for Endpoint {
             .as_ref()
             .map_or_else(|| "default".to_string(), LitStr::value);
         let method_filters = extract_method_filters(methods);
+        let client_trust_wrapper = client_trust.as_ref().map(|trust_store| {
+            quote! {
+                .wrap(::std::sync::Arc::new(::portfu::prelude::ClientTrust::new(#trust_store)))
+            }
+        });
         let mut additional_function_vars = vec![];
         let (mut dyn_vars, path_vars) = match parse_path_variables(path) {
             Ok(v) => v,
@@ -233,6 +239,7 @@ impl ToTokens for Endpoint {
                         #(.domain(#domains))*
                         #method_filters
                         #(.filter(#filters))*
+                        #client_trust_wrapper
                         #(.wrap(#wrappers))*
                         .handler(::std::sync::Arc::new(#name::default()))
                         .build()
@@ -326,11 +333,7 @@ impl ToTokens for Endpoint {
                 let #ident_val: #ident_type = match ::portfu::prelude::FromRequest::try_from(request).await {
                     Ok(v) => v,
                     Err(e) => {
-                        return Ok(::portfu::prelude::Response::internal_error(
-                            format!("Failed to extract {} as {}, {e:?}",
-                                stringify!(#ident_val), stringify!(#ident_type).replace(' ',"")
-                            )
-                        ));
+                        return Ok(::portfu::prelude::IntoResponse::into_response(e));
                     }
                 };
             });
@@ -474,6 +477,7 @@ struct Args {
     domains: Vec<syn::LitStr>,
     filters: Vec<syn::Expr>,
     wrappers: Vec<syn::Expr>,
+    client_trust: Option<syn::LitStr>,
     methods: HashSet<Method>,
 }
 
@@ -484,6 +488,7 @@ impl Args {
         let mut domains = Vec::new();
         let mut filters = Vec::new();
         let mut wrappers = Vec::new();
+        let mut client_trust = None;
         let mut methods = HashSet::from_iter(method);
         for nv in args.options {
             if nv.path.is_ident("name") {
@@ -565,10 +570,29 @@ impl Args {
                         "Attribute method expects literal string",
                     ));
                 }
+            } else if nv.path.is_ident("client_trust") {
+                if client_trust.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        nv.path,
+                        "Attribute client_trust may only be specified once",
+                    ));
+                }
+                if let syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(lit),
+                    ..
+                }) = nv.value
+                {
+                    client_trust = Some(lit);
+                } else {
+                    return Err(syn::Error::new_spanned(
+                        nv.value,
+                        "Attribute client_trust expects a literal string",
+                    ));
+                }
             } else {
                 return Err(syn::Error::new_spanned(
                     nv.path,
-                    "Unknown attribute key is specified; allowed: name, scope, domain, filter, method and wrap",
+                    "Unknown attribute key is specified; allowed: name, scope, domain, filter, method, wrap and client_trust",
                 ));
             }
         }
@@ -580,6 +604,7 @@ impl Args {
             domains,
             filters,
             wrappers,
+            client_trust,
             methods,
         })
     }
@@ -628,6 +653,18 @@ mod tests {
         let parsed = Args::new(args, vec![Method::Get]).expect("options should parse");
         assert_eq!(parsed.filters.len(), 1);
         assert_eq!(parsed.wrappers.len(), 1);
+    }
+
+    #[test]
+    fn args_accept_client_trust_middleware() {
+        let args =
+            syn::parse_str::<EndpointArgs>(r#""/reports", client_trust = "internal-clients""#)
+                .expect("args should parse");
+        let parsed = Args::new(args, vec![Method::Post]).expect("options should parse");
+        assert_eq!(
+            parsed.client_trust.as_ref().map(syn::LitStr::value),
+            Some("internal-clients".to_string())
+        );
     }
 
     #[test]
