@@ -1,4 +1,4 @@
-use super::PortfuError;
+use crate::error::PortfuError;
 use crate::service::response::IntoResponse;
 use http::StatusCode;
 

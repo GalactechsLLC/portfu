@@ -566,7 +566,3 @@ impl ClientWebSocket {
         .await
     }
 }
-
-#[cfg(test)]
-#[path = "../tests/unit/websocket.rs"]
-mod tests;

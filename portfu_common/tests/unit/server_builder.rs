@@ -1,4 +1,4 @@
-use super::ServerBuilder;
+use crate::server::builder::ServerBuilder;
 use crate::server::config::{TlsConfig, TlsIdentity};
 use crate::service::builder::ServiceBuilder;
 use crate::service::group::ServiceGroup;

@@ -1,4 +1,4 @@
-use super::{SupportedBody, build_request, default_port, new_websocket, send_request};
+use crate::client::{SupportedBody, build_request, default_port, new_websocket, send_request};
 use http::{HeaderMap, HeaderValue, Method, Uri};
 use http_body::Body;
 use http_body_util::{BodyExt, BodyStream, Empty, Full, StreamBody};

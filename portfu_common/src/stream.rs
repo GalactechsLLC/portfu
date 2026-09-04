@@ -68,7 +68,3 @@ impl IntoStreamBody for Incoming {
         )))
     }
 }
-
-#[cfg(test)]
-#[path = "../tests/unit/stream.rs"]
-mod tests;

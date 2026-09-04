@@ -1,4 +1,4 @@
-use super::{Args, Endpoint, EndpointArgs};
+use crate::endpoint::{Args, Endpoint, EndpointArgs};
 use crate::method::Method;
 use quote::ToTokens;
 
@@ -135,4 +135,19 @@ fn known_response_return_types_keep_into_conversion() {
         assert!(rendered.contains("Ok (resp . into ())"));
         assert!(!rendered.contains("Response :: json"));
     }
+}
+
+#[test]
+fn handler_errors_use_into_response() {
+    let args = syn::parse_str::<EndpointArgs>(r#""/failure""#).expect("args should parse");
+    let ast: syn::ItemFn = syn::parse_quote! {
+        async fn failure() -> Result<String, ApiError> {
+            Err(ApiError)
+        }
+    };
+    let endpoint = Endpoint::new(args, ast, vec![Method::Get]).expect("endpoint should build");
+    let rendered = endpoint.to_token_stream().to_string();
+
+    assert!(rendered.contains("IntoResponse :: into_response (e)"));
+    assert!(!rendered.contains("Response :: internal_error"));
 }

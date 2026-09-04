@@ -24,7 +24,6 @@ pub struct ServerBuilder {
     pub services: Vec<Service>,
     pub middleware: Vec<Arc<dyn Middleware + Send + Sync>>,
     pub default_service: Option<Service>,
-    pub health_service: Option<Service>,
     shutdown: watch::Sender<bool>,
     #[cfg(feature = "websocket")]
     pub websocket_admission: Vec<Arc<dyn WebSocketAdmissionMiddleware + Send + Sync>>,
@@ -39,7 +38,6 @@ impl ServerBuilder {
             services: vec![],
             middleware: vec![],
             default_service: None,
-            health_service: None,
             shutdown,
             #[cfg(feature = "websocket")]
             websocket_admission: vec![],
@@ -155,10 +153,6 @@ impl ServerBuilder {
         self.default_service = Some(service.into());
         self
     }
-    pub fn health_service<T: Into<Service>>(mut self, service: T) -> Self {
-        self.health_service = Some(service.into());
-        self
-    }
     pub fn service<T: Into<Service>>(mut self, service: T) -> Self {
         self.services.push(service.into());
         self
@@ -205,7 +199,3 @@ impl Default for ServerBuilder {
         Self::new()
     }
 }
-
-#[cfg(test)]
-#[path = "../../tests/unit/server_builder.rs"]
-mod tests;

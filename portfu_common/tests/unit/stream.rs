@@ -1,4 +1,4 @@
-use super::IntoStreamBody;
+use crate::stream::IntoStreamBody;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
 

@@ -1,4 +1,4 @@
-use super::ClientTrust;
+use crate::router::middleware::client_trust::ClientTrust;
 use crate::router::middleware::{Middleware, MiddlewareResult};
 use crate::router::route::Route;
 use crate::server::connection::ClientIdentity;

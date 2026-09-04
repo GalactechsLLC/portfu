@@ -246,7 +246,7 @@ pub async fn new_websocket(
     Ok(ClientWebSocket::new(ws_stream))
 }
 
-fn build_request(
+pub(crate) fn build_request(
     method: Method,
     path: &str,
     host: &str,
@@ -262,14 +262,10 @@ fn build_request(
     Ok(req)
 }
 
-fn default_port(scheme: &str) -> u16 {
+pub(crate) fn default_port(scheme: &str) -> u16 {
     if scheme.eq_ignore_ascii_case("http") {
         80
     } else {
         443
     }
 }
-
-#[cfg(test)]
-#[path = "../tests/unit/client.rs"]
-mod tests;

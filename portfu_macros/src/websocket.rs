@@ -271,13 +271,13 @@ impl ToTokens for WebSocketRoute {
     }
 }
 
-struct WsArgs {
+pub(crate) struct WsArgs {
     path: syn::LitStr,
     resource_name: Option<syn::LitStr>,
     scope: Option<syn::LitStr>,
     domains: Vec<syn::LitStr>,
-    filters: Vec<Expr>,
-    wrappers: Vec<syn::Expr>,
+    pub(crate) filters: Vec<Expr>,
+    pub(crate) wrappers: Vec<syn::Expr>,
     client_trust: Option<syn::LitStr>,
     max_message_size: Option<Expr>,
     max_frame_size: Option<Expr>,
@@ -285,7 +285,7 @@ struct WsArgs {
 }
 
 impl WsArgs {
-    fn new(args: EndpointArgs) -> syn::Result<Self> {
+    pub(crate) fn new(args: EndpointArgs) -> syn::Result<Self> {
         let mut resource_name = None;
         let mut scope = None;
         let mut domains = Vec::new();
@@ -414,7 +414,3 @@ fn set_once(target: &mut Option<Expr>, value: Expr, name: &str) -> syn::Result<(
     *target = Some(value);
     Ok(())
 }
-
-#[cfg(test)]
-#[path = "../tests/unit/websocket.rs"]
-mod tests;

@@ -1,5 +1,5 @@
-use super::{WebSocketRoute, WsArgs};
 use crate::endpoint::EndpointArgs;
+use crate::websocket::{WebSocketRoute, WsArgs};
 use quote::ToTokens;
 
 #[test]

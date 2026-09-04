@@ -3,7 +3,7 @@ pub mod config;
 pub mod connection;
 pub(crate) mod runtime;
 #[cfg(feature = "tls")]
-mod ssl;
+pub(crate) mod ssl;
 pub mod state;
 
 use crate::error::PortfuError;
@@ -90,7 +90,7 @@ pub struct ServiceRegistry {
 
 pub static SERVICE_REGISTRY: Lazy<Arc<ServiceRegistry>> = Lazy::new(|| Arc::new(load_registry()));
 static DEFAULT_ROUTE: Lazy<Arc<Route>> = Lazy::new(|| Arc::new(Route::new("/".to_string())));
-const DEFAULT_SCOPE: &str = "default";
+pub(crate) const DEFAULT_SCOPE: &str = "default";
 
 fn load_registry() -> ServiceRegistry {
     let mut registry = ServiceRegistry::default();
@@ -109,7 +109,7 @@ pub struct Server {
     pub services: Vec<Service>,
     pub middleware: Vec<Arc<dyn Middleware + Send + Sync>>,
     pub default_service: Option<Service>,
-    shutdown: watch::Sender<bool>,
+    pub(crate) shutdown: watch::Sender<bool>,
     pub(crate) runtime: Arc<ServerRuntime>,
     #[cfg(feature = "websocket")]
     pub(crate) websocket_admission: Vec<Arc<dyn WebSocketAdmissionMiddleware + Send + Sync>>,
@@ -488,7 +488,7 @@ impl Server {
         Ok(response)
     }
 
-    fn set_request_scope_state(
+    pub(crate) fn set_request_scope_state(
         request: &mut Request,
         scoped_state: &HashMap<String, Extensions>,
         scope: &str,
@@ -525,7 +525,3 @@ impl Default for Server {
         crate::server::builder::ServerBuilder::new().build()
     }
 }
-
-#[cfg(test)]
-#[path = "../tests/unit/server.rs"]
-mod tests;

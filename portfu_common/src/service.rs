@@ -48,8 +48,8 @@ pub struct Service {
     scope: String,
     domains: Vec<String>,
     uuid: Uuid,
-    filters: Vec<Arc<dyn Filter + Sync + Send>>,
-    middleware: Vec<Arc<dyn Middleware + Sync + Send>>,
+    pub(crate) filters: Vec<Arc<dyn Filter + Sync + Send>>,
+    pub(crate) middleware: Vec<Arc<dyn Middleware + Sync + Send>>,
     service: Option<Arc<dyn traits::Service + Send + Sync>>,
 }
 impl Service {

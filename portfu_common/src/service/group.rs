@@ -88,7 +88,3 @@ impl IntoIterator for ServiceGroup {
         self.services.into_iter()
     }
 }
-
-#[cfg(test)]
-#[path = "../../tests/unit/service_group.rs"]
-mod tests;

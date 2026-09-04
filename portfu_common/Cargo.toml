@@ -55,6 +55,6 @@ tokio-tungstenite = { workspace = true, optional = true }
 tokio-util = { workspace = true, features = ["rt"] }
 uuid = { workspace = true }
 log = { workspace = true }
-rcgen = { version = "0.13.2", optional = true }
+rcgen = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
 tokio-rustls = { workspace = true, optional = true }

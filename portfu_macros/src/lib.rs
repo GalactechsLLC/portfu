@@ -19,6 +19,10 @@ mod utils;
 #[cfg(feature = "websocket")]
 mod websocket;
 
+#[cfg(test)]
+#[path = "../tests/unit/mod.rs"]
+mod unit_tests;
+
 #[cfg(feature = "client")]
 use crate::client_websocket::WebSocketClient;
 #[cfg(feature = "files")]

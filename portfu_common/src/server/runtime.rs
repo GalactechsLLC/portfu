@@ -120,7 +120,3 @@ impl ServerRuntime {
         });
     }
 }
-
-#[cfg(test)]
-#[path = "../../tests/unit/server_runtime.rs"]
-mod tests;

@@ -1119,7 +1119,3 @@ pub fn redirect(location: impl AsRef<str>) -> Response {
     }
     response
 }
-
-#[cfg(test)]
-#[path = "../../tests/unit/auth_oauth.rs"]
-mod tests;

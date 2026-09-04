@@ -214,7 +214,7 @@ impl ServerBuilder {
     }
 }
 
-fn request_best_guess_ip(request: &Request) -> String {
+pub(crate) fn request_best_guess_ip(request: &Request) -> String {
     let trust_proxy_headers = request
         .get::<Arc<Server>>()
         .is_some_and(|server| server.config.trust_proxy_headers);
@@ -235,10 +235,6 @@ fn request_best_guess_ip(request: &Request) -> String {
         .map(|s| s.ip().to_string())
         .unwrap_or_else(|| "127.0.0.1".to_string())
 }
-
-#[cfg(test)]
-#[path = "../../tests/unit/wrappers_sessions.rs"]
-mod tests;
 
 pub fn get_session_cookie_from_request(request: &Request) -> Option<Cookie<'_>> {
     let mut session_cookie = None;

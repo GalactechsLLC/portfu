@@ -1,13 +1,13 @@
-use super::{
-    ClientWebSocket, Message, WebSocketAdmission, WebSocketAdmissionMiddleware,
-    WebSocketRouteConfig, upgrade,
-};
 use crate::error::PortfuError;
 use crate::router::route::Route;
 use crate::server::builder::ServerBuilder;
 use crate::server::connection::ConnectionInfo;
 use crate::service::request::{Request, RequestType};
 use crate::service::response::Response;
+use crate::websocket::{
+    ClientWebSocket, Message, WebSocketAdmission, WebSocketAdmissionMiddleware,
+    WebSocketRouteConfig, upgrade,
+};
 use futures_util::{SinkExt, StreamExt};
 use http::StatusCode;
 use http_body_util::Full;

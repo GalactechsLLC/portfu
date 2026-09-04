@@ -1,7 +1,7 @@
-use super::best_guess_public_ip;
 use crate::router::route::Route;
 use crate::server::builder::ServerBuilder;
 use crate::service::request::{Request, RequestType};
+use crate::wrappers::rate_limits::best_guess_public_ip;
 use http_body_util::Full;
 use hyper::body::Bytes;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};

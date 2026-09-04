@@ -65,7 +65,3 @@ impl ResponseError for PortfuError {
         Response::from_status_and_message(self.status_code(), message)
     }
 }
-
-#[cfg(test)]
-#[path = "../tests/unit/error.rs"]
-mod tests;

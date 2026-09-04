@@ -1,7 +1,9 @@
-use super::{SESSION_CLIENT_IDS, SESSIONS, request_best_guess_ip};
 use crate::router::route::Route;
 use crate::server::builder::ServerBuilder;
 use crate::service::request::{Request, RequestType};
+use crate::wrappers::sessions::{
+    SESSION_CLIENT_IDS, SESSIONS, SessionManager, request_best_guess_ip,
+};
 use http_body_util::Full;
 use hyper::body::Bytes;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -27,7 +29,7 @@ fn forwarded_ip_headers_require_explicit_proxy_trust() {
 fn stale_client_session_index_is_removed() {
     let client_id = "stale-session-id";
     SESSION_CLIENT_IDS.insert(client_id.to_string(), "missing-server-id".to_string());
-    assert!(super::SessionManager::get_session_from_id(client_id).is_none());
+    assert!(SessionManager::get_session_from_id(client_id).is_none());
     assert!(!SESSION_CLIENT_IDS.contains_key(client_id));
     SESSIONS.clear();
 }

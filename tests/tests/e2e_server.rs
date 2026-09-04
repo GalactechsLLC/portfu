@@ -2,9 +2,17 @@ use futures_util::{SinkExt, StreamExt};
 use http::Method;
 use http_body_util::BodyExt;
 use portfu::prelude::*;
+use rcgen::{
+    BasicConstraints, Certificate, CertificateParams, ExtendedKeyUsagePurpose, IsCa, KeyPair,
+    KeyUsagePurpose, date_time_ymd,
+};
+use rustls::crypto::aws_lc_rs::default_provider;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
+use rustls::{ClientConfig, RootCertStore};
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::net::TcpListener;
+use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -93,6 +101,43 @@ async fn method_slow() -> Result<String, PortfuError> {
     Ok("slow-ok".to_string())
 }
 
+#[get("/tls/open", name = "tls-open")]
+async fn tls_open() -> Result<String, PortfuError> {
+    Ok("open".to_string())
+}
+
+#[get("/tls/public", name = "tls-public", client_trust = "public-clients")]
+async fn tls_public(identity: ClientIdentity) -> Result<String, PortfuError> {
+    if !identity
+        .verified_by
+        .iter()
+        .any(|name| name == "public-clients")
+    {
+        return Err(PortfuError::Internal(
+            "public client identity was not propagated".to_string(),
+        ));
+    }
+    Ok("public".to_string())
+}
+
+#[get(
+    "/tls/internal",
+    name = "tls-internal",
+    client_trust = "internal-clients"
+)]
+async fn tls_internal(identity: ClientIdentity) -> Result<String, PortfuError> {
+    if !identity
+        .verified_by
+        .iter()
+        .any(|name| name == "internal-clients")
+    {
+        return Err(PortfuError::Internal(
+            "internal client identity was not propagated".to_string(),
+        ));
+    }
+    Ok("internal".to_string())
+}
+
 #[websocket(
     "/ws/echo",
     max_message_size = 67_108_864,
@@ -172,6 +217,49 @@ struct RawResponse {
     body: Vec<u8>,
 }
 
+struct TestCa {
+    certificate: Certificate,
+    key: KeyPair,
+}
+
+impl TestCa {
+    fn new() -> Self {
+        let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
+        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        params.key_usages = vec![
+            KeyUsagePurpose::DigitalSignature,
+            KeyUsagePurpose::KeyCertSign,
+            KeyUsagePurpose::CrlSign,
+        ];
+        let key = KeyPair::generate().unwrap();
+        let certificate = params.self_signed(&key).unwrap();
+        Self { certificate, key }
+    }
+
+    fn issue_client(&self, expired: bool) -> TestClientCertificate {
+        let mut params = CertificateParams::new(vec!["client.test".to_string()]).unwrap();
+        params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
+        if expired {
+            params.not_before = date_time_ymd(2020, 1, 1);
+            params.not_after = date_time_ymd(2021, 1, 1);
+        }
+        let key = KeyPair::generate().unwrap();
+        let certificate = params
+            .signed_by(&key, &self.certificate, &self.key)
+            .unwrap();
+        TestClientCertificate {
+            certificate: certificate.der().clone(),
+            private_key: key.serialize_der(),
+        }
+    }
+}
+
+struct TestClientCertificate {
+    certificate: CertificateDer<'static>,
+    private_key: Vec<u8>,
+}
+
 struct TestServer {
     port: u16,
     handle: ServerHandle,
@@ -228,6 +316,39 @@ impl TestServer {
             .await
             .expect("failed joining server thread");
         }
+    }
+
+    async fn start_tls(tls: TlsConfig) -> Option<Self> {
+        let port = match reserve_port() {
+            Ok(port) => port,
+            Err(err) if err.kind() == ErrorKind::PermissionDenied => {
+                eprintln!("skipping TLS e2e test: local socket bind is not permitted: {err}");
+                return None;
+            }
+            Err(err) => panic!("failed to reserve TLS test port: {err}"),
+        };
+        let (handle_tx, handle_rx) = oneshot::channel();
+        let thread = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("failed to build TLS test runtime");
+            runtime.block_on(async move {
+                let mut builder = ServerBuilder::new().host("127.0.0.1").port(port).tls(tls);
+                builder.config.acceptors = 1;
+                builder.config.reuse_port = false;
+                let server = builder.build();
+                let _ = handle_tx.send(server.handle());
+                server.run().await.expect("TLS test server failed");
+            });
+        });
+        let handle = handle_rx.await.expect("TLS server did not publish handle");
+
+        Some(Self {
+            port,
+            handle,
+            thread: Some(thread),
+        })
     }
 }
 
@@ -336,6 +457,116 @@ async fn tls_handshake_timeout_closes_idle_clients() {
     tokio::task::spawn_blocking(move || thread.join().expect("TLS server thread panicked"))
         .await
         .expect("failed joining TLS server thread");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn client_certificate_handshakes_and_route_trust_are_enforced() {
+    let server_identity =
+        rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+    let public_ca = TestCa::new();
+    let internal_ca = TestCa::new();
+    let unrelated_ca = TestCa::new();
+    let public_client = public_ca.issue_client(false);
+    let internal_client = internal_ca.issue_client(false);
+    let unrelated_client = unrelated_ca.issue_client(false);
+    let expired_client = public_ca.issue_client(true);
+
+    let client_auth = ClientAuthConfig {
+        presentation: ClientCertificateMode::Optional,
+        trust_stores: vec![
+            TrustStore::new("public-clients", public_ca.certificate.pem()),
+            TrustStore::new("internal-clients", internal_ca.certificate.pem()),
+        ],
+    };
+    let tls = TlsConfig::new(TlsIdentity::new(
+        "localhost",
+        server_identity.cert.pem(),
+        server_identity.key_pair.serialize_pem(),
+    ))
+    .versions(TlsVersionPolicy::Tls13Only)
+    .client_auth(client_auth.clone());
+    let Some(server) = TestServer::start_tls(tls).await else {
+        return;
+    };
+
+    let anonymous = Arc::new(tls_client_config(server_identity.cert.der(), None));
+    let public = Arc::new(tls_client_config(
+        server_identity.cert.der(),
+        Some(&public_client),
+    ));
+    let internal = Arc::new(tls_client_config(
+        server_identity.cert.der(),
+        Some(&internal_client),
+    ));
+    let unrelated = Arc::new(tls_client_config(
+        server_identity.cert.der(),
+        Some(&unrelated_client),
+    ));
+    let expired = Arc::new(tls_client_config(
+        server_identity.cert.der(),
+        Some(&expired_client),
+    ));
+
+    assert_tls_response(server.port, anonymous.clone(), "/tls/open", 200, b"open").await;
+    assert_tls_response(
+        server.port,
+        anonymous.clone(),
+        "/tls/public",
+        401,
+        b"Client certificate required",
+    )
+    .await;
+    assert_tls_response(server.port, public.clone(), "/tls/public", 200, b"public").await;
+    assert_tls_response(server.port, public, "/tls/internal", 403, b"").await;
+    assert_tls_response(
+        server.port,
+        internal.clone(),
+        "/tls/internal",
+        200,
+        b"internal",
+    )
+    .await;
+    assert_tls_response(server.port, internal, "/tls/public", 403, b"").await;
+
+    assert!(
+        tls_http_request(server.port, unrelated, "/tls/open")
+            .await
+            .is_err(),
+        "a certificate from an unconfigured CA reached HTTP routing"
+    );
+    assert!(
+        tls_http_request(server.port, expired, "/tls/open")
+            .await
+            .is_err(),
+        "an expired client certificate reached HTTP routing"
+    );
+    server.stop().await;
+
+    let required_tls = TlsConfig::new(TlsIdentity::new(
+        "localhost",
+        server_identity.cert.pem(),
+        server_identity.key_pair.serialize_pem(),
+    ))
+    .versions(TlsVersionPolicy::Tls13Only)
+    .client_auth(ClientAuthConfig {
+        presentation: ClientCertificateMode::Required,
+        ..client_auth
+    });
+    let Some(required_server) = TestServer::start_tls(required_tls).await else {
+        return;
+    };
+    let valid = Arc::new(tls_client_config(
+        server_identity.cert.der(),
+        Some(&public_client),
+    ));
+    assert_tls_response(required_server.port, valid, "/tls/open", 200, b"open").await;
+    assert!(
+        tls_http_request(required_server.port, anonymous, "/tls/open")
+            .await
+            .is_err(),
+        "required client authentication allowed a request without a certificate"
+    );
+    required_server.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -714,6 +945,79 @@ async fn raw_http_request(
     let mut raw = Vec::new();
     stream.read_to_end(&mut raw).await?;
     parse_http_response(&raw)
+}
+
+fn tls_client_config(
+    server_certificate: &CertificateDer<'static>,
+    identity: Option<&TestClientCertificate>,
+) -> ClientConfig {
+    let mut roots = RootCertStore::empty();
+    roots
+        .add(server_certificate.clone())
+        .expect("server certificate should be a valid trust anchor");
+    let builder = ClientConfig::builder_with_provider(Arc::new(default_provider()))
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .expect("TLS 1.3 should be supported")
+        .with_root_certificates(roots);
+    match identity {
+        Some(identity) => builder
+            .with_client_auth_cert(
+                vec![identity.certificate.clone()],
+                PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(identity.private_key.clone())),
+            )
+            .expect("client certificate and key should match"),
+        None => builder.with_no_client_auth(),
+    }
+}
+
+async fn tls_connect(
+    port: u16,
+    config: Arc<ClientConfig>,
+) -> Result<tokio_rustls::client::TlsStream<TcpStream>, std::io::Error> {
+    let stream = connect_with_retry(port).await?;
+    tokio_rustls::TlsConnector::from(config)
+        .connect(
+            ServerName::try_from("localhost")
+                .expect("localhost should be a valid server name")
+                .to_owned(),
+            stream,
+        )
+        .await
+        .map_err(std::io::Error::other)
+}
+
+async fn tls_http_request(
+    port: u16,
+    config: Arc<ClientConfig>,
+    path: &str,
+) -> Result<RawResponse, std::io::Error> {
+    let mut stream = tls_connect(port, config).await?;
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+    );
+    stream.write_all(request.as_bytes()).await?;
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw).await?;
+    parse_http_response(&raw)
+}
+
+async fn assert_tls_response(
+    port: u16,
+    config: Arc<ClientConfig>,
+    path: &str,
+    expected_status: u16,
+    expected_body: &[u8],
+) {
+    let response = tls_http_request(port, config, path)
+        .await
+        .unwrap_or_else(|error| panic!("TLS request to {path} failed: {error}"));
+    assert_eq!(
+        response.status, expected_status,
+        "unexpected status for {path}"
+    );
+    if !expected_body.is_empty() {
+        assert_eq!(response.body, expected_body, "unexpected body for {path}");
+    }
 }
 
 fn parse_http_response(raw: &[u8]) -> Result<RawResponse, std::io::Error> {

@@ -16,7 +16,7 @@ use portfu_common::service::State;
 use portfu_common::service::builder::ServiceBuilder;
 use portfu_common::service::group::ServiceGroup;
 use portfu_common::service::request::{Body, FromRequest, Json, Query, Request, RequestType};
-use portfu_common::service::response::{JsonResponse, Response, Serialized};
+use portfu_common::service::response::{JsonResponse, Response, ResponseError, Serialized};
 use portfu_common::service::traits::Service as ServiceTrait;
 use portfu_common::wrappers::cors::Cors;
 use portfu_common::wrappers::metrics::MetricsWrapper;
@@ -29,6 +29,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::error::Error;
+use std::fmt::{Display, Formatter};
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::pin::Pin;
@@ -138,6 +139,23 @@ impl Serialize for BrokenJson {
     }
 }
 
+#[derive(Debug)]
+struct TeapotError;
+
+impl Display for TeapotError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("short and stout")
+    }
+}
+
+impl Error for TeapotError {}
+
+impl ResponseError for TeapotError {
+    fn status_code(&self) -> http::StatusCode {
+        http::StatusCode::IM_A_TEAPOT
+    }
+}
+
 #[get("/typed-json", name = "typed-json")]
 async fn typed_json_endpoint() -> Result<Vec<PlainJson>, PortfuError> {
     Ok(vec![PlainJson {
@@ -149,6 +167,11 @@ async fn typed_json_endpoint() -> Result<Vec<PlainJson>, PortfuError> {
 #[get("/broken-json", name = "broken-json")]
 async fn broken_json_endpoint() -> Result<BrokenJson, PortfuError> {
     Ok(BrokenJson)
+}
+
+#[get("/handler-error", name = "handler-error")]
+async fn handler_error_endpoint() -> Result<String, TeapotError> {
+    Err(TeapotError)
 }
 
 #[post("/extract-json", name = "extract-json")]
@@ -1251,6 +1274,36 @@ async fn endpoint_macro_maps_extractor_and_client_trust_errors() {
         trusted_service.serve(&mut allowed).await.unwrap().status(),
         http::StatusCode::OK
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn endpoint_macro_maps_handler_errors_with_into_response() {
+    let services = load_registered_services();
+    let service = services
+        .iter()
+        .find(|service| service.name() == "handler-error")
+        .expect("handler-error service should be registered");
+    let mut request = Request::new(
+        RequestType::Sized(
+            http::Request::builder()
+                .method(Method::GET)
+                .uri("/handler-error")
+                .body(Full::new(Bytes::new()))
+                .expect("request build failed"),
+        ),
+        service.route(),
+    );
+    let response = service
+        .serve(&mut request)
+        .await
+        .expect("handler error should become a response");
+    assert_eq!(response.status(), http::StatusCode::IM_A_TEAPOT);
+    let response: http::Response<_> = response.into();
+    let body = BodyExt::collect(response.into_body())
+        .await
+        .expect("error body collection failed")
+        .to_bytes();
+    assert_eq!(&body[..], b"short and stout");
 }
 
 #[tokio::test(flavor = "current_thread")]

@@ -109,7 +109,3 @@ impl Route {
         (segment, regex, unprocessed, tail)
     }
 }
-
-#[cfg(test)]
-#[path = "../../tests/unit/router_route.rs"]
-mod tests;

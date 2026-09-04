@@ -1,4 +1,4 @@
-use super::SharedState;
+use crate::server::state::SharedState;
 use std::sync::Arc;
 
 #[test]

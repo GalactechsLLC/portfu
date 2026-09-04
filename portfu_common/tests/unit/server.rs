@@ -1,6 +1,7 @@
-use super::{DEFAULT_SCOPE, Route, Server};
+use crate::router::route::Route;
 use crate::server::builder::ServerBuilder;
 use crate::server::connection::ConnectionInfo;
+use crate::server::{DEFAULT_SCOPE, Server};
 use crate::service::request::{Request, RequestType};
 use http::Extensions;
 use http_body_util::Full;

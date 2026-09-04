@@ -70,7 +70,3 @@ impl Middleware for ClientTrust {
         Box::pin(async { Ok(MiddlewareResult::Continue) })
     }
 }
-
-#[cfg(test)]
-#[path = "../../../tests/unit/router_middleware_client_trust.rs"]
-mod tests;

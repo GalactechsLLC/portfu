@@ -279,7 +279,7 @@ async fn enforce_body_limit(
     }
 }
 
-fn best_guess_public_ip(request: &Request) -> String {
+pub(crate) fn best_guess_public_ip(request: &Request) -> String {
     let trust_proxy_headers = request
         .get::<Arc<Server>>()
         .is_some_and(|server| server.config.trust_proxy_headers);
@@ -300,10 +300,6 @@ fn best_guess_public_ip(request: &Request) -> String {
         .map(|s| s.ip().to_string())
         .unwrap_or_else(|| "127.0.0.1".to_string())
 }
-
-#[cfg(test)]
-#[path = "../../tests/unit/wrappers_rate_limits.rs"]
-mod tests;
 
 pub struct RateLimitServerBuilder {
     builder: ServerBuilder,

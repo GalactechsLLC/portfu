@@ -46,6 +46,17 @@ pub async fn example_fn(
     Ok(val.to_string())
 }
 ```
+Endpoint `Result` error types must implement `IntoResponse`. Implement `ResponseError` to map an application error to an HTTP status and optionally override its response body; Portfu then uses that mapping for handler failures instead of converting every error to `500 Internal Server Error`.
+
+Health checks use an ordinary registered route, so they follow the same middleware and shutdown behavior as every other endpoint.
+
+```rust
+#[get("/health")]
+pub async fn health() -> Result<&'static str, Error> {
+    Ok("ok")
+}
+```
+
 Websockets are bound to a path but can share peers if both Websockets
 are created with the same peers object, see main function below
 ```rust

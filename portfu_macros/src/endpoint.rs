@@ -363,9 +363,7 @@ impl ToTokens for Endpoint {
                         #(#dyn_vars)*
                         match Self::#name (#(#additional_function_vars)*).await {
                             Ok(resp) => #ok_response,
-                            Err(e) => {
-                                Ok(::portfu::prelude::Response::internal_error(&format!("{e:?}")))
-                            }
+                            Err(e) => Ok(::portfu::prelude::IntoResponse::into_response(e))
                         }
                     })
                 }
@@ -470,19 +468,19 @@ fn is_u8_type(ty: &Type) -> bool {
         .is_some_and(|segment| segment.ident == "u8")
 }
 
-struct Args {
+pub(crate) struct Args {
     path: syn::LitStr,
     resource_name: Option<syn::LitStr>,
-    scope: Option<syn::LitStr>,
+    pub(crate) scope: Option<syn::LitStr>,
     domains: Vec<syn::LitStr>,
-    filters: Vec<syn::Expr>,
-    wrappers: Vec<syn::Expr>,
-    client_trust: Option<syn::LitStr>,
+    pub(crate) filters: Vec<syn::Expr>,
+    pub(crate) wrappers: Vec<syn::Expr>,
+    pub(crate) client_trust: Option<syn::LitStr>,
     methods: HashSet<Method>,
 }
 
 impl Args {
-    fn new(args: EndpointArgs, method: Vec<Method>) -> syn::Result<Self> {
+    pub(crate) fn new(args: EndpointArgs, method: Vec<Method>) -> syn::Result<Self> {
         let mut resource_name = None;
         let mut scope = None;
         let mut domains = Vec::new();
@@ -609,7 +607,3 @@ impl Args {
         })
     }
 }
-
-#[cfg(test)]
-#[path = "../tests/unit/endpoint.rs"]
-mod tests;

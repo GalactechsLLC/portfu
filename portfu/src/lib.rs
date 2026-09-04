@@ -1,6 +1,10 @@
 #[cfg(feature = "client")]
 pub mod client;
 
+#[cfg(test)]
+#[path = "../tests/unit/mod.rs"]
+mod unit_tests;
+
 pub mod prelude {
     #[cfg(feature = "client")]
     pub use crate::client;

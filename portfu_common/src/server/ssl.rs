@@ -110,7 +110,7 @@ pub struct NamedClientVerifier {
 }
 
 impl NamedClientVerifier {
-    fn build(
+    pub(crate) fn build(
         config: &TlsConfig,
         provider: Arc<rustls::crypto::CryptoProvider>,
     ) -> Result<Option<Arc<Self>>, PortfuError> {
@@ -300,7 +300,3 @@ impl ResolvesServerCert for ResolvesServerCertUsingSniWithDefault {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "../../tests/unit/server_ssl.rs"]
-mod tests;

@@ -167,19 +167,19 @@ impl syn::parse::Parse for MaudHttpArgs {
     }
 }
 
-struct Args {
-    paths: Vec<syn::LitStr>,
+pub(crate) struct Args {
+    pub(crate) paths: Vec<syn::LitStr>,
     path_variables: Vec<Ident>,
-    resource_name: Option<syn::LitStr>,
-    scope: Option<syn::LitStr>,
-    domains: Vec<syn::LitStr>,
-    filters: Vec<Expr>,
-    wrappers: Vec<syn::Expr>,
-    methods: HashSet<Method>,
+    pub(crate) resource_name: Option<syn::LitStr>,
+    pub(crate) scope: Option<syn::LitStr>,
+    pub(crate) domains: Vec<syn::LitStr>,
+    pub(crate) filters: Vec<Expr>,
+    pub(crate) wrappers: Vec<syn::Expr>,
+    pub(crate) methods: HashSet<Method>,
 }
 
 impl Args {
-    fn new(args: MaudHttpArgs) -> syn::Result<Self> {
+    pub(crate) fn new(args: MaudHttpArgs) -> syn::Result<Self> {
         let path_variables = shared_path_variables(&args.paths)?;
         let mut resource_name = None;
         let mut scope = None;
@@ -411,7 +411,3 @@ fn page_factory(name: &Ident, path_variables: &[Ident], ast: &ItemStruct) -> Tok
         }
     }
 }
-
-#[cfg(test)]
-#[path = "../tests/unit/maud.rs"]
-mod tests;

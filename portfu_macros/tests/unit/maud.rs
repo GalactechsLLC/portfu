@@ -1,4 +1,4 @@
-use super::{Args, MaudHttp, MaudHttpArgs};
+use crate::maud::{Args, MaudHttp, MaudHttpArgs};
 use quote::ToTokens;
 
 #[test]

@@ -1,4 +1,7 @@
-use super::{OAUTH, OAuthConfig, OAuthPolicyDecision, OAuthRouteConfig, OAuthToken, redirect};
+use crate::auth::oauth::{
+    OAUTH, OAuthConfig, OAuthPolicyContext, OAuthPolicyDecision, OAuthRouteConfig, OAuthToken,
+    redirect,
+};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde_json::{Value, json};
@@ -267,7 +270,7 @@ async fn github_policy_checks_users_and_organizations() {
 async fn custom_policy_callback_can_reject_provider_data() {
     let mut config = OAuthRouteConfig::new(OAUTH::CUSTOM);
     config.policy.handler = Some(std::sync::Arc::new(
-        |context: super::OAuthPolicyContext| async move {
+        |context: OAuthPolicyContext| async move {
             Ok(OAuthPolicyDecision::deny(
                 context.identity,
                 "custom rejection",

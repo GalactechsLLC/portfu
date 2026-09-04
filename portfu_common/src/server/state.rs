@@ -20,7 +20,3 @@ impl<T> From<Arc<T>> for SharedState<T> {
         SharedState { inner }
     }
 }
-
-#[cfg(test)]
-#[path = "../../tests/unit/server_state.rs"]
-mod tests;

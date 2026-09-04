@@ -1,8 +1,8 @@
-use super::ServiceGroup;
 use crate::error::PortfuError;
 use crate::router::filter::{FilterResult, traits::Filter};
 use crate::router::middleware::{Middleware, MiddlewareResult};
 use crate::service::builder::ServiceBuilder;
+use crate::service::group::ServiceGroup;
 use crate::service::request::Request;
 use crate::service::response::Response;
 use std::pin::Pin;

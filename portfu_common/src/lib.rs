@@ -9,3 +9,7 @@ mod stream;
 #[cfg(feature = "websocket")]
 pub mod websocket;
 pub mod wrappers;
+
+#[cfg(test)]
+#[path = "../tests/unit/mod.rs"]
+mod unit_tests;

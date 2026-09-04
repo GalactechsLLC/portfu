@@ -1,4 +1,4 @@
-use super::{PathSegment, Route};
+use crate::router::route::{PathSegment, Route};
 
 fn segment_pattern(route: &Route) -> Vec<String> {
     match route {
