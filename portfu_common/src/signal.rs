@@ -1,40 +1,73 @@
 use std::io::Error;
 use tokio::select;
 #[cfg(not(target_os = "windows"))]
-use tokio::signal::unix::{SignalKind, signal};
+use tokio::signal::unix::{Signal, SignalKind, signal};
 #[cfg(target_os = "windows")]
-use tokio::signal::windows::{ctrl_break, ctrl_c, ctrl_close, ctrl_logoff, ctrl_shutdown};
+use tokio::signal::windows::{
+    CtrlBreak, CtrlC, CtrlClose, CtrlLogoff, CtrlShutdown, ctrl_break, ctrl_c, ctrl_close,
+    ctrl_logoff, ctrl_shutdown,
+};
 
 #[cfg(not(target_os = "windows"))]
-pub async fn await_termination() -> Result<(), Error> {
-    let mut term_signal = signal(SignalKind::terminate())?;
-    let mut int_signal = signal(SignalKind::interrupt())?;
-    let mut quit_signal = signal(SignalKind::quit())?;
-    let mut alarm_signal = signal(SignalKind::alarm())?;
-    let mut hup_signal = signal(SignalKind::hangup())?;
-    select! {
-        _ = term_signal.recv() => (),
-        _ = int_signal.recv() => (),
-        _ = quit_signal.recv() => (),
-        _ = alarm_signal.recv() => (),
-        _ = hup_signal.recv() => ()
+pub struct TerminationSignals {
+    terminate: Signal,
+    interrupt: Signal,
+    quit: Signal,
+    alarm: Signal,
+    hangup: Signal,
+}
+
+#[cfg(not(target_os = "windows"))]
+impl TerminationSignals {
+    pub fn new() -> Result<Self, Error> {
+        Ok(Self {
+            terminate: signal(SignalKind::terminate())?,
+            interrupt: signal(SignalKind::interrupt())?,
+            quit: signal(SignalKind::quit())?,
+            alarm: signal(SignalKind::alarm())?,
+            hangup: signal(SignalKind::hangup())?,
+        })
     }
-    Ok(())
+
+    pub async fn recv(&mut self) {
+        select! {
+            _ = self.terminate.recv() => (),
+            _ = self.interrupt.recv() => (),
+            _ = self.quit.recv() => (),
+            _ = self.alarm.recv() => (),
+            _ = self.hangup.recv() => (),
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
-pub async fn await_termination() -> Result<(), Error> {
-    let mut ctrl_break_signal = ctrl_break()?;
-    let mut ctrl_c_signal = ctrl_c()?;
-    let mut ctrl_close_signal = ctrl_close()?;
-    let mut ctrl_logoff_signal = ctrl_logoff()?;
-    let mut ctrl_shutdown_signal = ctrl_shutdown()?;
-    select! {
-        _ = ctrl_break_signal.recv() => (),
-        _ = ctrl_c_signal.recv() => (),
-        _ = ctrl_close_signal.recv() => (),
-        _ = ctrl_logoff_signal.recv() => (),
-        _ = ctrl_shutdown_signal.recv() => ()
+pub struct TerminationSignals {
+    ctrl_break: CtrlBreak,
+    ctrl_c: CtrlC,
+    ctrl_close: CtrlClose,
+    ctrl_logoff: CtrlLogoff,
+    ctrl_shutdown: CtrlShutdown,
+}
+
+#[cfg(target_os = "windows")]
+impl TerminationSignals {
+    pub fn new() -> Result<Self, Error> {
+        Ok(Self {
+            ctrl_break: ctrl_break()?,
+            ctrl_c: ctrl_c()?,
+            ctrl_close: ctrl_close()?,
+            ctrl_logoff: ctrl_logoff()?,
+            ctrl_shutdown: ctrl_shutdown()?,
+        })
     }
-    Ok(())
+
+    pub async fn recv(&mut self) {
+        select! {
+            _ = self.ctrl_break.recv() => (),
+            _ = self.ctrl_c.recv() => (),
+            _ = self.ctrl_close.recv() => (),
+            _ = self.ctrl_logoff.recv() => (),
+            _ = self.ctrl_shutdown.recv() => (),
+        }
+    }
 }

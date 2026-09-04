@@ -58,12 +58,24 @@ pub enum TlsVersionPolicy {
     Tls13Only,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TlsConfig {
     /// The first identity is the default certificate. All identities also participate in SNI.
     pub identities: Vec<TlsIdentity>,
     pub client_auth: ClientAuthConfig,
     pub versions: TlsVersionPolicy,
+    pub handshake_timeout: Duration,
+}
+
+impl Default for TlsConfig {
+    fn default() -> Self {
+        Self {
+            identities: Vec::new(),
+            client_auth: ClientAuthConfig::default(),
+            versions: TlsVersionPolicy::default(),
+            handshake_timeout: Duration::from_secs(10),
+        }
+    }
 }
 
 impl TlsConfig {
@@ -88,6 +100,11 @@ impl TlsConfig {
         self.versions = versions;
         self
     }
+
+    pub fn handshake_timeout(mut self, timeout: Duration) -> Self {
+        self.handshake_timeout = timeout;
+        self
+    }
 }
 
 #[derive(Debug)]
@@ -99,10 +116,13 @@ pub struct ServerConfig {
     pub half_close: bool,
     pub preserve_header_case: bool,
     pub max_buf_size: usize,
+    pub http_header_read_timeout: Duration,
     pub backlog: u32,
     pub acceptors: usize,
     pub reuse_port: bool,
-    pub websocket_shutdown_grace_period: Duration,
+    /// Whether direct peers may supply forwarding headers used for client identity.
+    pub trust_proxy_headers: bool,
+    pub shutdown_grace_period: Duration,
 }
 
 impl Default for ServerConfig {
@@ -115,12 +135,14 @@ impl Default for ServerConfig {
             half_close: true,
             preserve_header_case: true,
             max_buf_size: 1024 * 1024 * 2, // 2 MiB
+            http_header_read_timeout: Duration::from_secs(30),
             backlog: 1024,
             acceptors: std::thread::available_parallelism()
                 .map(Into::into)
                 .unwrap_or(1),
             reuse_port: true,
-            websocket_shutdown_grace_period: Duration::from_secs(10),
+            trust_proxy_headers: false,
+            shutdown_grace_period: Duration::from_secs(10),
         }
     }
 }

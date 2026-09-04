@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Display, Formatter};
 
-use crate::service::response::ResponseError;
+use crate::service::response::{Response, ResponseError};
 use http::StatusCode;
 
 #[derive(Debug)]
@@ -56,37 +56,16 @@ impl ResponseError for PortfuError {
             Self::Internal(_) | Self::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
+
+    fn error_response(&self) -> Response {
+        let message = match self {
+            Self::Internal(_) | Self::Io(_) => "Internal Server Error",
+            _ => return Response::from_status_and_message(self.status_code(), self.to_string()),
+        };
+        Response::from_status_and_message(self.status_code(), message)
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::PortfuError;
-    use crate::service::response::IntoResponse;
-    use http::StatusCode;
-
-    #[test]
-    fn response_errors_map_to_specific_http_statuses() {
-        let cases = [
-            (PortfuError::Parsing("json".into()), StatusCode::BAD_REQUEST),
-            (
-                PortfuError::Unauthorized("missing".into()),
-                StatusCode::UNAUTHORIZED,
-            ),
-            (
-                PortfuError::Forbidden("wrong trust".into()),
-                StatusCode::FORBIDDEN,
-            ),
-            (
-                PortfuError::PayloadTooLarge("large".into()),
-                StatusCode::PAYLOAD_TOO_LARGE,
-            ),
-            (
-                PortfuError::RequestTimeout("slow".into()),
-                StatusCode::REQUEST_TIMEOUT,
-            ),
-        ];
-        for (error, expected) in cases {
-            assert_eq!(error.into_response().status(), expected);
-        }
-    }
-}
+#[path = "../tests/unit/error.rs"]
+mod tests;

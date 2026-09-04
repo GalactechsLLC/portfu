@@ -80,6 +80,7 @@ pub async fn main() -> Result<(), PortfuError> {
         .global_state(RwLock::new(HashMap::<u64, String>::new()))
         .scoped_state("site-a", "Site A".to_string())
         .scoped_state("site-b", "Site B".to_string())
+        .shutdown_grace_period(Duration::from_secs(10))
         .build()
         .run()
         .await
@@ -225,7 +226,12 @@ pub async fn db_metrics(db: State<MockDb>) -> Result<(), PortfuError> {
     Ok(())
 }
 
-#[websocket("/ws/echo")]
+#[websocket(
+    "/ws/echo",
+    max_message_size = 1_048_576,
+    max_frame_size = 262_144,
+    upgrade_timeout_ms = 5_000
+)]
 pub async fn echo_websocket(websocket: WebSocket) -> Result<(), PortfuError> {
     while let Some(message) = websocket
         .next_message()

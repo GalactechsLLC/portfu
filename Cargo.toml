@@ -11,49 +11,47 @@ members = [
 
 [workspace.dependencies]
 async-trait = "0.1.89"
-cookie = "0.18.1"
-dashmap = "6.1.0"
-futures-core = "0.3.32"
-futures-util = "0.3.32"
+cookie = "0.18.2"
+dashmap = "6.2.1"
+futures-core = "0.3.34"
+futures-util = "0.3.34"
 hex = "0.4.3"
-http = "1.4.0"
-http-body = "1.0.1"
-http-body-util = { version = "0.1.3"}
-hyper = {version="1.8.1", features=["full"]}
+http = "1.5.0"
+http-body = "1.1.0"
+http-body-util = { version = "0.1.5"}
+hyper = {version="1.11.1", features=["full"]}
 hyper-util = {version="0.1.20", features=["full"]}
+inventory = "0.3.24"
 jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"]}
-log = "0.4.29"
+log = "0.4.34"
 maud = "0.27.0"
 mime_guess = "2.0.5"
 notify = "8.2.0"
-once_cell = "1.21.3"
+once_cell = "1.21.4"
 portfu = {path = "./portfu", version = "2.0.0", default-features = false}
 portfu_examples = {path = "./examples", version = "2.0.0", default-features = false}
 portfu_tests = {path = "./tests", version = "2.0.0", default-features = false}
 portfu_common = {path = "./portfu_common", version = "2.0.0"}
 portfu_macros = {path = "./portfu_macros", version = "2.0.0"}
 prometheus = "0.14.0"
-proc-macro2 = "1.0.106"
-quote = "1.0.45"
-rand = "0.10.0"
-regex = "1.12.3"
-reqwest = {version="0.13.2", default-features = false, features = ["json", "stream"] }
-rustls = {version = "0.23.37" }
-rustls-pemfile = "2.2.0"
-rsa = { version = "0.9.10", features = ["std", "pem", "sha2"] }
-serde = { version = "1.0.228", features = ["derive"] }
+proc-macro2 = "1.0.107"
+quote = "1.0.47"
+rand = "0.10.2"
+regex = "1.13.1"
+reqwest = {version="0.13.4", default-features = false, features = ["json", "stream", "rustls"] }
+rustls = {version = "0.23.43" }
+serde = { version = "1.0.229", features = ["derive"] }
 serde_html_form = "0.4.0"
-serde_json = "1.0.149"
-sha2 = "0.10.8"
+serde_json = "1.0.151"
+sha2 = "0.10.9"
 simple_logger = "5.2.0"
 struct-field-names-as-array = "0.3.0"
-syn = { version="2.0.117", features = ["extra-traits"]}
-time = { version = "0.3.47", features = ["serde-well-known"] }
-tokio = {version = "1.50.0", features=["rt-multi-thread", "sync", "signal", "macros", "process", "time", "fs", "net"]}
+syn = { version="2.0.119", features = ["extra-traits", "full"]}
+time = { version = "0.3.55", features = ["serde-well-known"] }
+tokio = {version = "1.53.1", features=["rt-multi-thread", "sync", "signal", "macros", "process", "time", "fs", "net"]}
 tokio-rustls = { version = "0.26.4" }
 tokio-tungstenite = {version = "0.28.0", features = ["rustls", "rustls-tls-webpki-roots"] }
-tokio-util = "0.7.18"
+tokio-util = "0.7.19"
 url = "2.5.8"
-uuid = {version = "1.21.0", features = ["v4", "serde"]}
-x509-cert = { version = "0.2.5", features = ["std", "pem", "builder"] }
-webpki-roots = "1.0.6"
+uuid = {version = "1.26.0", features = ["v4", "serde"]}
+webpki-roots = "1.0.9"

@@ -84,6 +84,15 @@ async fn method_head() -> Result<http::Response<()>, PortfuError> {
         .map_err(|e| PortfuError::Internal(format!("failed to build head response: {e}")))
 }
 
+static SLOW_REQUEST_STARTED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+#[get("/method/slow")]
+async fn method_slow() -> Result<String, PortfuError> {
+    SLOW_REQUEST_STARTED.notify_one();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    Ok("slow-ok".to_string())
+}
+
 #[websocket(
     "/ws/echo",
     max_message_size = 67_108_864,
@@ -109,6 +118,20 @@ async fn ws_echo(info: ConnectionInfo, websocket: WebSocket) -> Result<(), Portf
             .await
             .map_err(|e| PortfuError::Internal(format!("websocket send failed: {e}")))?;
     }
+    Ok(())
+}
+
+#[websocket(
+    "/ws/limited",
+    max_message_size = 8,
+    max_frame_size = 8,
+    upgrade_timeout_ms = 1_000
+)]
+async fn ws_limited(websocket: WebSocket) -> Result<(), PortfuError> {
+    let _ = websocket
+        .next_message()
+        .await
+        .map_err(|e| PortfuError::BadRequest(format!("websocket limit enforced: {e}")))?;
     Ok(())
 }
 
@@ -151,7 +174,7 @@ struct RawResponse {
 
 struct TestServer {
     port: u16,
-    stop_tx: Option<oneshot::Sender<()>>,
+    handle: ServerHandle,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -167,7 +190,7 @@ impl TestServer {
             }
             Err(err) => panic!("failed to reserve server test port: {err}"),
         };
-        let (stop_tx, stop_rx) = oneshot::channel::<()>();
+        let (handle_tx, handle_rx) = oneshot::channel();
         let thread = std::thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -178,12 +201,12 @@ impl TestServer {
                     .host("127.0.0.1")
                     .port(port)
                     .build();
-                let server_task = tokio::spawn(async move { server.run().await });
-                let _ = stop_rx.await;
-                server_task.abort();
-                let _ = server_task.await;
+                let _ = handle_tx.send(server.handle());
+                server.run().await.expect("test server failed");
             });
         });
+
+        let handle = handle_rx.await.expect("test server did not publish handle");
 
         wait_for_server(port)
             .await
@@ -191,15 +214,13 @@ impl TestServer {
 
         Some(Self {
             port,
-            stop_tx: Some(stop_tx),
+            handle,
             thread: Some(thread),
         })
     }
 
     async fn stop(mut self) {
-        if let Some(stop_tx) = self.stop_tx.take() {
-            let _ = stop_tx.send(());
-        }
+        self.handle.shutdown();
         if let Some(thread) = self.thread.take() {
             tokio::task::spawn_blocking(move || {
                 let _ = thread.join();
@@ -208,6 +229,113 @@ impl TestServer {
             .expect("failed joining server thread");
         }
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn graceful_shutdown_drains_in_flight_http_requests() {
+    let Some(server) = TestServer::start().await else {
+        return;
+    };
+    let port = server.port;
+    let request = tokio::spawn(async move {
+        raw_http_request(port, "GET", "/method/slow", None)
+            .await
+            .expect("slow request failed")
+    });
+    SLOW_REQUEST_STARTED.notified().await;
+
+    server.stop().await;
+
+    let response = request.await.expect("slow request task failed");
+    assert_eq!(response.status, 200);
+    assert_eq!(response.body, b"slow-ok");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn graceful_shutdown_closes_and_drains_websockets() {
+    let Some(server) = TestServer::start().await else {
+        return;
+    };
+    let (mut socket, response) = connect_async(format!("ws://127.0.0.1:{}/ws/echo", server.port))
+        .await
+        .expect("websocket connect failed");
+    assert_eq!(response.status(), http::StatusCode::SWITCHING_PROTOCOLS);
+
+    let shutdown = tokio::spawn(server.stop());
+    let message = tokio::time::timeout(Duration::from_secs(2), socket.next())
+        .await
+        .expect("websocket did not close during shutdown");
+    assert!(
+        matches!(message, None | Some(Ok(WsMessage::Close(_)))),
+        "unexpected websocket shutdown message: {message:?}"
+    );
+    shutdown.await.expect("server shutdown task failed");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn websocket_route_enforces_message_and_frame_limits() {
+    let Some(server) = TestServer::start().await else {
+        return;
+    };
+    let (mut socket, response) =
+        connect_async(format!("ws://127.0.0.1:{}/ws/limited", server.port))
+            .await
+            .expect("websocket connect failed");
+    assert_eq!(response.status(), http::StatusCode::SWITCHING_PROTOCOLS);
+
+    socket
+        .send(WsMessage::Text("message larger than eight bytes".into()))
+        .await
+        .expect("websocket send failed");
+    let result = tokio::time::timeout(Duration::from_secs(2), socket.next())
+        .await
+        .expect("server did not terminate an oversized websocket");
+    assert!(
+        !matches!(result, Some(Ok(WsMessage::Text(_)))),
+        "oversized websocket message was unexpectedly accepted"
+    );
+
+    server.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tls_handshake_timeout_closes_idle_clients() {
+    let port = match reserve_port() {
+        Ok(port) => port,
+        Err(err) if err.kind() == ErrorKind::PermissionDenied => return,
+        Err(err) => panic!("failed to reserve TLS test port: {err}"),
+    };
+    let (handle_tx, handle_rx) = oneshot::channel();
+    let thread = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("failed to build TLS test runtime");
+        runtime.block_on(async move {
+            let server = ServerBuilder::new()
+                .host("127.0.0.1")
+                .port(port)
+                .tls(TlsConfig::default().handshake_timeout(Duration::from_millis(50)))
+                .build();
+            let _ = handle_tx.send(server.handle());
+            server.run().await.expect("TLS test server failed");
+        });
+    });
+    let handle = handle_rx.await.expect("TLS server did not publish handle");
+    let mut stream = connect_with_retry(port)
+        .await
+        .expect("failed to connect idle TLS client");
+    let mut byte = [0_u8; 1];
+    let bytes = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut byte))
+        .await
+        .expect("idle TLS connection was not bounded")
+        .expect("idle TLS socket read failed");
+    assert_eq!(bytes, 0, "idle TLS connection remained open");
+
+    handle.shutdown();
+    tokio::task::spawn_blocking(move || thread.join().expect("TLS server thread panicked"))
+        .await
+        .expect("failed joining TLS server thread");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -545,6 +673,24 @@ async fn wait_for_server(port: u16) -> Result<(), std::io::Error> {
             ));
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+async fn connect_with_retry(port: u16) -> Result<TcpStream, std::io::Error> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match TcpStream::connect(("127.0.0.1", port)).await {
+            Ok(stream) => return Ok(stream),
+            Err(error) if error.kind() == ErrorKind::ConnectionRefused => {}
+            Err(error) => return Err(error),
+        }
+        if tokio::time::Instant::now() > deadline {
+            return Err(std::io::Error::new(
+                ErrorKind::TimedOut,
+                "timed out connecting to server",
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
 

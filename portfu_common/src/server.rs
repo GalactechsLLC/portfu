@@ -1,6 +1,7 @@
 pub mod builder;
 pub mod config;
 pub mod connection;
+pub(crate) mod runtime;
 #[cfg(feature = "tls")]
 mod ssl;
 pub mod state;
@@ -10,20 +11,21 @@ use crate::router::middleware::{Middleware, MiddlewareResult};
 use crate::router::route::Route;
 use crate::server::config::ServerConfig;
 use crate::server::connection::ConnectionInfo;
+use crate::server::runtime::ServerRuntime;
 #[cfg(feature = "tls")]
 use crate::server::ssl::{load_ssl_certs, negotiated_tls_version};
 use crate::service::request::{Request, RequestType};
 use crate::service::response::Response;
 use crate::service::{Service, StreamingBody};
-use crate::signal::await_termination;
+use crate::signal::TerminationSignals;
 use crate::stream::IntoStreamBody;
 #[cfg(feature = "websocket")]
-use crate::websocket::{WebSocketAdmissionMiddleware, WebSocketRuntime};
+use crate::websocket::WebSocketAdmissionMiddleware;
 use http::Extensions;
 use hyper::body::Incoming;
 use hyper::server::conn::http1::Builder;
 use hyper::service::service_fn;
-use hyper_util::rt::TokioIo;
+use hyper_util::rt::{TokioIo, TokioTimer};
 use log::{error, info, warn};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -61,11 +63,21 @@ inventory::collect!(TaskRegistration);
 pub struct ServerHandle {
     run: Arc<AtomicBool>,
     shutdown: watch::Sender<bool>,
+    runtime: Arc<ServerRuntime>,
 }
 
 impl ServerHandle {
+    /// Stops admission and accepting, then drains tracked work for the configured grace period.
     pub fn shutdown(&self) {
         self.run.store(false, Ordering::Relaxed);
+        self.runtime.begin_shutdown();
+        self.shutdown.send_replace(true);
+    }
+
+    /// Cancels all tracked work immediately without terminating the process.
+    pub fn force_shutdown(&self) {
+        self.run.store(false, Ordering::Relaxed);
+        self.runtime.force_shutdown();
         self.shutdown.send_replace(true);
     }
 }
@@ -98,8 +110,7 @@ pub struct Server {
     pub middleware: Vec<Arc<dyn Middleware + Send + Sync>>,
     pub default_service: Option<Service>,
     shutdown: watch::Sender<bool>,
-    #[cfg(feature = "websocket")]
-    pub(crate) websocket_runtime: Arc<WebSocketRuntime>,
+    pub(crate) runtime: Arc<ServerRuntime>,
     #[cfg(feature = "websocket")]
     pub(crate) websocket_admission: Vec<Arc<dyn WebSocketAdmissionMiddleware + Send + Sync>>,
 }
@@ -108,6 +119,7 @@ impl Server {
         ServerHandle {
             run: self.run.clone(),
             shutdown: self.shutdown.clone(),
+            runtime: self.runtime.clone(),
         }
     }
 
@@ -155,11 +167,11 @@ impl Server {
         http.keep_alive(server.config.keep_alive);
         http.preserve_header_case(server.config.preserve_header_case);
         http.max_buf_size(server.config.max_buf_size);
+        http.timer(TokioTimer::new());
+        http.header_read_timeout(server.config.http_header_read_timeout);
         let http = Arc::new(http);
         #[cfg(feature = "tls")]
         let loaded_tls = if server.config.tls.is_some()
-            || (env::var("PRIVATE_CA_CRT").ok().is_some()
-                && env::var("PRIVATE_CA_KEY").ok().is_some())
             || (env::var("SSL_CERTS").ok().is_some() && env::var("SSL_PRIVATE_KEY").ok().is_some())
         {
             Some(load_ssl_certs(&server.config)?)
@@ -174,10 +186,15 @@ impl Server {
         let client_verifier = loaded_tls
             .as_ref()
             .and_then(|tls| tls.client_verifier.clone());
+        #[cfg(feature = "tls")]
+        let tls_handshake_timeout = server
+            .config
+            .tls
+            .as_ref()
+            .map(|tls| tls.handshake_timeout)
+            .unwrap_or_else(|| crate::server::config::TlsConfig::default().handshake_timeout);
         #[cfg(not(feature = "tls"))]
         if server.config.tls.is_some()
-            || (env::var("PRIVATE_CA_CRT").ok().is_some()
-                && env::var("PRIVATE_CA_KEY").ok().is_some())
             || (env::var("SSL_CERTS").ok().is_some() && env::var("SSL_PRIVATE_KEY").ok().is_some())
         {
             return Err(PortfuError::Internal(
@@ -187,18 +204,27 @@ impl Server {
         let shutdown_handle = server.handle();
         let shutdown_rx = server.shutdown.subscribe();
         let signal_task = spawn(async move {
-            let _ = await_termination().await;
-            shutdown_handle.shutdown();
+            match TerminationSignals::new() {
+                Ok(mut signals) => {
+                    signals.recv().await;
+                    shutdown_handle.shutdown();
+                    signals.recv().await;
+                    error!("Received a second shutdown signal; forcing process termination");
+                    shutdown_handle.force_shutdown();
+                    std::process::exit(130);
+                }
+                Err(error) => error!("Failed to install shutdown signal handlers: {error}"),
+            }
         });
         let mut acceptor_handles = Vec::with_capacity(listeners.len());
-        let mut task_handles = Vec::new();
         for task in inventory::iter::<TaskRegistration> {
             let server = server.clone();
-            task_handles.push(spawn(async move {
+            let runtime = server.runtime.clone();
+            runtime.spawn_background(async move {
                 if let Err(e) = (task.run)(server).await {
                     error!("Background task failed: {e:?}");
                 }
-            }));
+            });
         }
         for listener in listeners {
             let server = server.clone();
@@ -227,10 +253,26 @@ impl Server {
                                     let tls_acceptor = tls_acceptor.clone();
                                     #[cfg(feature = "tls")]
                                     let client_verifier = client_verifier.clone();
-                                    spawn(async move {
+                                    #[cfg(feature = "tls")]
+                                    let tls_handshake_timeout = tls_handshake_timeout;
+                                    let cancellation = server.runtime.cancellation();
+                                    let runtime = server.runtime.clone();
+                                    runtime.spawn_http(async move {
                                         #[cfg(feature = "tls")]
                                         if let Some(acceptor) = tls_acceptor.as_ref() {
-                                            match acceptor.accept(stream).await {
+                                            let stream = tokio::select! {
+                                                _ = cancellation.cancelled() => return,
+                                                result = tokio::time::timeout(tls_handshake_timeout, acceptor.accept(stream)) => {
+                                                    match result {
+                                                        Ok(result) => result,
+                                                        Err(_) => {
+                                                            warn!("TLS handshake timed out for {address}");
+                                                            return;
+                                                        }
+                                                    }
+                                                },
+                                            };
+                                            match stream {
                                                 Ok(stream) => {
                                                     let (_, tls_connection) = stream.get_ref();
                                                     let mut connection_info = ConnectionInfo::plaintext(address, local_address);
@@ -246,8 +288,19 @@ impl Server {
                                                         Self::connection_handler(server, req, connection_info)
                                                     });
                                                     let connection = http.serve_connection(TokioIo::new(stream), service).with_upgrades();
-                                                    if let Err(err) = connection.await {
-                                                        error!("Error serving tls connection: {err:?}");
+                                                    tokio::pin!(connection);
+                                                    tokio::select! {
+                                                        result = &mut connection => {
+                                                            if let Err(err) = result {
+                                                                error!("Error serving tls connection: {err:?}");
+                                                            }
+                                                        }
+                                                        _ = cancellation.cancelled() => {
+                                                            connection.as_mut().graceful_shutdown();
+                                                            if let Err(err) = connection.await {
+                                                                error!("Error draining tls connection: {err:?}");
+                                                            }
+                                                        }
                                                     }
                                                 }
                                                 Err(e) => {
@@ -262,8 +315,19 @@ impl Server {
                                             Self::connection_handler(server, req, connection_info)
                                         });
                                         let connection = http.serve_connection(TokioIo::new(stream), service).with_upgrades();
-                                        if let Err(err) = connection.await {
-                                            error!("Error serving connection: {err:?}");
+                                        tokio::pin!(connection);
+                                        tokio::select! {
+                                            result = &mut connection => {
+                                                if let Err(err) = result {
+                                                    error!("Error serving connection: {err:?}");
+                                                }
+                                            }
+                                            _ = cancellation.cancelled() => {
+                                                connection.as_mut().graceful_shutdown();
+                                                if let Err(err) = connection.await {
+                                                    error!("Error draining connection: {err:?}");
+                                                }
+                                            }
                                         }
                                     });
                                 }
@@ -288,17 +352,12 @@ impl Server {
         for handle in acceptor_handles {
             let _ = handle.await;
         }
-        #[cfg(feature = "websocket")]
         if !server
-            .websocket_runtime
-            .shutdown(server.config.websocket_shutdown_grace_period)
+            .runtime
+            .drain(server.config.shutdown_grace_period)
             .await
         {
-            warn!("Timed out while draining WebSocket connections");
-        }
-        for handle in task_handles {
-            handle.abort();
-            let _ = handle.await;
+            warn!("Timed out while draining server connections and tasks");
         }
         signal_task.abort();
         let _ = signal_task.await;
@@ -468,90 +527,5 @@ impl Default for Server {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{DEFAULT_SCOPE, Route, Server};
-    use crate::server::builder::ServerBuilder;
-    use crate::server::connection::ConnectionInfo;
-    use crate::service::request::{Request, RequestType};
-    use http::Extensions;
-    use http_body_util::Full;
-    use hyper::body::Bytes;
-    use std::collections::HashMap;
-    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-    use std::sync::Arc;
-    use std::sync::atomic::Ordering;
-
-    struct DefaultState;
-    struct TenantState;
-    struct PreviousState;
-
-    #[test]
-    fn server_handle_requests_shutdown() {
-        let server = ServerBuilder::new().build();
-        let handle = server.handle();
-
-        handle.shutdown();
-
-        assert!(!server.run.load(Ordering::Relaxed));
-        assert!(*server.shutdown.borrow());
-    }
-
-    #[test]
-    fn set_request_scope_state_replaces_previous_candidate_scope_state() {
-        let mut scoped_state = HashMap::new();
-        let mut default_extensions = Extensions::new();
-        default_extensions.insert(Arc::new(DefaultState));
-        scoped_state.insert(DEFAULT_SCOPE.to_string(), default_extensions);
-
-        let mut tenant_extensions = Extensions::new();
-        tenant_extensions.insert(Arc::new(TenantState));
-        scoped_state.insert("tenant".to_string(), tenant_extensions);
-
-        let request = http::Request::builder()
-            .uri("/scoped")
-            .body(Full::new(Bytes::new()))
-            .expect("request build failed");
-        let mut request = Request::new(
-            RequestType::Sized(request),
-            Arc::new(Route::new("/scoped".to_string())),
-        );
-        request.insert(Arc::new(PreviousState));
-
-        let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080);
-        let connection = ConnectionInfo::plaintext(address, address);
-        Server::set_request_scope_state(&mut request, &scoped_state, "tenant", &connection);
-        assert!(request.get::<Arc<PreviousState>>().is_none());
-        assert!(request.get::<Arc<DefaultState>>().is_some());
-        assert!(request.get::<Arc<TenantState>>().is_some());
-
-        Server::set_request_scope_state(&mut request, &scoped_state, "other", &connection);
-        assert!(request.get::<Arc<DefaultState>>().is_some());
-        assert!(request.get::<Arc<TenantState>>().is_none());
-    }
-
-    #[test]
-    fn set_request_scope_state_preserves_pending_http_upgrade() {
-        let mut scoped_state = HashMap::new();
-        let mut default_extensions = Extensions::new();
-        default_extensions.insert(Arc::new(DefaultState));
-        scoped_state.insert(DEFAULT_SCOPE.to_string(), default_extensions);
-
-        let upgrade = hyper::upgrade::on(http::Request::new(()));
-        let request = http::Request::builder()
-            .uri("/ws")
-            .body(Full::new(Bytes::new()))
-            .expect("request build failed");
-        let mut request = Request::new(
-            RequestType::Sized(request),
-            Arc::new(Route::new("/ws".to_string())),
-        );
-        request.insert(upgrade);
-
-        let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080);
-        let connection = ConnectionInfo::plaintext(address, address);
-        Server::set_request_scope_state(&mut request, &scoped_state, DEFAULT_SCOPE, &connection);
-
-        assert!(request.get::<hyper::upgrade::OnUpgrade>().is_some());
-        assert!(request.get::<Arc<DefaultState>>().is_some());
-    }
-}
+#[path = "../tests/unit/server.rs"]
+mod tests;

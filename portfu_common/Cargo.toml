@@ -25,39 +25,36 @@ oauth = ["sessions", "dep:base64", "dep:oauth2", "dep:reqwest"]
 rate-limit = []
 sessions = ["dep:cookie", "dep:dashmap", "dep:hex", "dep:sha2"]
 tasks = []
-tls = ["dep:rcgen", "dep:rsa", "dep:rustls", "dep:rustls-pemfile", "dep:sha2", "dep:tokio-rustls", "dep:x509-cert"]
-websocket = ["dep:tokio-tungstenite", "dep:tokio-util"]
+tls = ["dep:rcgen", "dep:rustls", "dep:sha2", "dep:tokio-rustls"]
+websocket = ["dep:tokio-tungstenite"]
 
 [dependencies]
-cookie = { version = "0.18.1", optional = true }
-dashmap = { version = "6.1.0", optional = true }
+cookie = { workspace = true, optional = true }
+dashmap = { workspace = true, optional = true }
 hex = { version = "0.4.3", optional = true }
-http = "1.4.0"
-http-body = "1.0.1"
-http-body-util = { version = "0.1.3"}
-futures-util = "0.3.31"
-hyper = {version = "1.8.1", features = ["server", "http1", "http2"] }
-hyper-util = {version = "0.1.20", features = ["tokio"]}
-inventory = "0.3.21"
-regex = "1.12.3"
+http = { workspace = true }
+http-body = { workspace = true }
+http-body-util = { workspace = true }
+futures-util = { workspace = true }
+hyper = { workspace = true, features = ["server", "http1", "http2"] }
+hyper-util = { workspace = true, features = ["tokio"]}
+inventory = { workspace = true }
+regex = { workspace = true }
 urlencoding = "2.1.3"
-once_cell = "1.21.3"
-prometheus = { version = "0.14.0", optional = true }
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.149"
+once_cell = { workspace = true }
+prometheus = { workspace = true, optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 serde_urlencoded = "0.7.1"
-sha2 = { version = "0.10.8", features = ["oid"], optional = true }
-oauth2 = { version = "4.4.2", features = ["rustls-tls"], optional = true }
-reqwest = { version = "0.11.27", default-features = false, features = ["json", "rustls-tls"], optional = true }
+sha2 = { workspace = true, features = ["oid"], optional = true }
+oauth2 = { version = "5.0.0", default-features = false, optional = true }
+reqwest = { workspace = true, optional = true }
 base64 = { version = "0.22.1", optional = true }
-tokio = {version = "1.47.1", features=["rt-multi-thread", "sync", "signal", "macros", "process", "time", "fs", "net"]}
-tokio-tungstenite = { version = "0.28.0", optional = true }
-tokio-util = { version = "0.7.18", features = ["rt"], optional = true }
-uuid = { version = "1.21.0", features = ["v4"] }
-log = "0.4.28"
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true, optional = true }
+tokio-util = { workspace = true, features = ["rt"] }
+uuid = { workspace = true }
+log = { workspace = true }
 rcgen = { version = "0.13.2", optional = true }
-rsa = { version = "0.9.10", features = ["std", "pem", "sha2"], optional = true }
-rustls = { version = "0.23.20", optional = true }
-rustls-pemfile = { version = "2.2.0", optional = true }
-tokio-rustls = { version = "0.26.1", optional = true }
-x509-cert = { version = "0.2.5", features = ["std", "pem", "builder"], optional = true }
+rustls = { workspace = true, optional = true }
+tokio-rustls = { workspace = true, optional = true }

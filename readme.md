@@ -128,7 +128,8 @@ let tls = TlsConfig::new(TlsIdentity::new(
         TrustStore::new("internal-clients", internal_ca_pem),
     ],
 })
-.versions(TlsVersionPolicy::Tls13Only);
+.versions(TlsVersionPolicy::Tls13Only)
+.handshake_timeout(std::time::Duration::from_secs(10));
 
 let server = ServerBuilder::new().tls(tls).build();
 ```
@@ -142,7 +143,7 @@ async fn admin_report(identity: ClientIdentity) -> Result<String, PortfuError> {
 }
 ```
 
-WebSocket options are route-local. Portfu performs admission before returning `101`, then owns and tracks the upgraded task so `ServerHandle::shutdown()` can cancel it and wait up to the configured drain grace period. `ConnectionInfo` is extractable before upgrade and remains available through `WebSocket::connection_info()` afterward.
+WebSocket options are route-local. Portfu performs admission before returning `101`, then owns and tracks the upgraded task so `ServerHandle::shutdown()` can cancel it and wait up to the configured drain grace period. HTTP connections and background tasks are tracked by the same server runtime; HTTP requests already in flight are drained with Hyper's graceful shutdown behavior. `ConnectionInfo` is extractable before upgrade and remains available through `WebSocket::connection_info()` afterward.
 
 ```rust
 #[websocket(
@@ -162,6 +163,10 @@ async fn peer_socket(
 }
 ```
 
-Register server-wide WebSocket admission with `ServerBuilder::websocket_admission`. An admission middleware can reject a banned peer or an exhausted connection limit before the protocol switches, or return a `WebSocketAdmissionPermit` whose lifetime lasts until disconnect. Configure shutdown draining with `ServerBuilder::websocket_shutdown_grace_period`.
+Register server-wide WebSocket admission with `ServerBuilder::websocket_admission`. An admission middleware can reject a banned peer or an exhausted connection limit before the protocol switches, or return a `WebSocketAdmissionPermit` whose lifetime lasts until disconnect. Configure draining for HTTP connections, WebSockets, and background tasks with `ServerBuilder::shutdown_grace_period`. The first termination signal begins graceful shutdown; a second signal force-cancels tracked work and exits the process immediately.
+
+For programmatic control, call `ServerHandle::shutdown()` to drain or `ServerHandle::force_shutdown()` to cancel tracked work immediately. The latter does not exit the process; immediate process termination is reserved for the second OS termination signal.
+
+TLS handshakes and HTTP header reads are bounded by default. Customize them with `TlsConfig::handshake_timeout` and `ServerBuilder::http_header_read_timeout`. Forwarded client-IP headers are ignored unless `ServerBuilder::trust_proxy_headers(true)` is explicitly enabled; only enable that option when direct traffic is restricted to a trusted reverse proxy.
 
 Use owned `RequestHeaders` parameters in WebSocket handlers; Portfu clones the request headers before the task starts. Use `WebSocket` for server-side connections and `ClientWebSocket` for outbound `connect_async` connections.

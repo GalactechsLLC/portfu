@@ -4,38 +4,20 @@ use crate::server::config::{
 };
 use crate::server::connection::{ClientIdentity, NegotiatedTlsVersion};
 use rcgen::generate_simple_self_signed;
-use rsa::pkcs1::DecodeRsaPrivateKey;
-use rsa::pkcs1v15::SigningKey;
-use rsa::pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey};
-use rsa::rand_core::RngCore;
 use rustls::client::danger::HandshakeSignatureValid;
 use rustls::crypto::aws_lc_rs::default_provider;
 use rustls::crypto::aws_lc_rs::sign::any_supported_type;
+use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, DnsName, PrivateKeyDer, UnixTime};
 use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
 use rustls::server::{ClientHello, ParsedCertificate, ResolvesServerCert, WebPkiClientVerifier};
 use rustls::sign::CertifiedKey;
 use rustls::{DigitallySignedStruct, DistinguishedName, RootCertStore, SignatureScheme};
-use rustls_pemfile::{Item, certs, read_one};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::env;
-use std::io::{BufReader, Error, ErrorKind};
-use std::ops::Sub;
-use std::str::FromStr;
+use std::io::{Error, ErrorKind};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
-use x509_cert::Certificate;
-use x509_cert::builder::{Builder, CertificateBuilder, Profile};
-use x509_cert::der::asn1::{Ia5String, UtcTime};
-use x509_cert::der::pem::LineEnding;
-use x509_cert::der::{DateTime, DecodePem, EncodePem};
-use x509_cert::ext::pkix::SubjectAltName;
-use x509_cert::ext::pkix::name::GeneralName;
-use x509_cert::name::Name;
-use x509_cert::serial_number::SerialNumber;
-use x509_cert::spki::SubjectPublicKeyInfo;
-use x509_cert::time::{Time, Validity};
 
 pub struct LoadedTlsConfig {
     pub server_config: Arc<rustls::ServerConfig>,
@@ -47,7 +29,7 @@ pub fn load_ssl_certs(config: &ServerConfig) -> Result<LoadedTlsConfig, PortfuEr
     let mut resolver = ResolvesServerCertUsingSniWithDefault::new();
     let tls = config.tls.clone().unwrap_or_default();
 
-    let mut cert_configs = collect_server_certs(&tls)?;
+    let mut cert_configs = collect_server_certs(&tls);
     if cert_configs.is_empty() {
         cert_configs.push(default_localhost_cert()?);
     }
@@ -83,27 +65,8 @@ pub fn load_ssl_certs(config: &ServerConfig) -> Result<LoadedTlsConfig, PortfuEr
     })
 }
 
-fn collect_server_certs(config: &TlsConfig) -> Result<Vec<TlsIdentity>, PortfuError> {
+fn collect_server_certs(config: &TlsConfig) -> Vec<TlsIdentity> {
     let mut certs = config.identities.clone();
-    if certs.is_empty()
-        && let (Some(ca_crt), Some(ca_key)) = (
-            env::var("PRIVATE_CA_CRT").ok(),
-            env::var("PRIVATE_CA_KEY").ok(),
-        )
-    {
-        let domain = env::var("SSL_DOMAIN").unwrap_or_else(|_| "localhost".to_string());
-        let cert_name =
-            env::var("SSL_CRT_NAME").unwrap_or_else(|_| "CN=localhost, O=Portfu, C=US".to_string());
-        let (cert_bytes, key_bytes) = generate_ca_signed_cert(
-            ca_crt.as_bytes(),
-            ca_key.as_bytes(),
-            domain.as_str(),
-            Name::from_str(cert_name.as_str()).map_err(|e| {
-                PortfuError::Parsing(format!("Invalid SSL_CRT_NAME value `{cert_name}`: {e:?}"))
-            })?,
-        )?;
-        certs.push(TlsIdentity::new(domain, cert_bytes, key_bytes));
-    }
     if certs.is_empty()
         && let (Some(certs_pem), Some(key_pem)) =
             (env::var("SSL_CERTS").ok(), env::var("SSL_PRIVATE_KEY").ok())
@@ -111,7 +74,7 @@ fn collect_server_certs(config: &TlsConfig) -> Result<Vec<TlsIdentity>, PortfuEr
         let domain = env::var("SSL_DOMAIN").unwrap_or_else(|_| "localhost".to_string());
         certs.push(TlsIdentity::new(domain, certs_pem, key_pem));
     }
-    Ok(certs)
+    certs
 }
 
 fn default_localhost_cert() -> Result<TlsIdentity, PortfuError> {
@@ -129,106 +92,14 @@ fn default_localhost_cert() -> Result<TlsIdentity, PortfuError> {
 }
 
 fn load_certs(bytes: &[u8]) -> Result<Vec<CertificateDer<'static>>, PortfuError> {
-    let mut reader = BufReader::new(bytes);
-    Ok(certs(&mut reader).flatten().collect())
+    CertificateDer::pem_slice_iter(bytes)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| PortfuError::Parsing(format!("Invalid certificate PEM: {error}")))
 }
 
 fn load_private_key(bytes: &[u8]) -> Result<PrivateKeyDer<'static>, PortfuError> {
-    let mut reader = BufReader::new(bytes);
-    for item in std::iter::from_fn(|| read_one(&mut reader).transpose()) {
-        if let Some(item) = handle_item(item).map_err(PortfuError::Io)? {
-            return Ok(item);
-        }
-    }
-    Err(PortfuError::Io(Error::new(
-        ErrorKind::NotFound,
-        "Private Key Not Found",
-    )))
-}
-
-fn generate_ca_signed_cert(
-    cert_data: &[u8],
-    key_data: &[u8],
-    dns_name: &str,
-    name: Name,
-) -> Result<(Vec<u8>, Vec<u8>), PortfuError> {
-    let root_cert = Certificate::from_pem(cert_data)
-        .map_err(|e| PortfuError::Internal(format!("Failed to parse PRIVATE_CA_CRT: {e:?}")))?;
-    let root_key = rsa::RsaPrivateKey::from_pkcs1_pem(&String::from_utf8_lossy(key_data))
-        .or_else(|_| rsa::RsaPrivateKey::from_pkcs8_pem(&String::from_utf8_lossy(key_data)))
-        .map_err(|e| PortfuError::Internal(format!("Failed to parse PRIVATE_CA_KEY: {e:?}")))?;
-    let mut rng = rsa::rand_core::OsRng;
-    let cert_key = rsa::RsaPrivateKey::new(&mut rng, 2048)
-        .map_err(|e| PortfuError::Internal(format!("Failed to generate cert key: {e:?}")))?;
-    let pub_key = cert_key.to_public_key();
-    let signing_key: SigningKey<Sha256> = SigningKey::new(root_key);
-    let subject_pub_key = SubjectPublicKeyInfo::from_pem(
-        pub_key
-            .to_public_key_pem(LineEnding::default())
-            .map_err(|e| {
-                PortfuError::Internal(format!("Failed to convert generated pub key to PEM: {e:?}"))
-            })?
-            .as_bytes(),
-    )
-    .map_err(|e| PortfuError::Internal(format!("Failed to parse generated pub key PEM: {e:?}")))?;
-    let mut cert = CertificateBuilder::new(
-        Profile::Leaf {
-            issuer: root_cert.tbs_certificate.issuer,
-            enable_key_agreement: false,
-            enable_key_encipherment: false,
-        },
-        SerialNumber::from(rng.next_u32()),
-        Validity {
-            not_before: Time::UtcTime(
-                UtcTime::from_system_time(SystemTime::now().sub(Duration::from_secs(60 * 60 * 24)))
-                    .map_err(|e| {
-                        PortfuError::Internal(format!("Failed to build cert not_before: {e:?}"))
-                    })?,
-            ),
-            not_after: Time::UtcTime(
-                UtcTime::from_date_time(DateTime::new(2049, 8, 2, 0, 0, 0).map_err(|e| {
-                    PortfuError::Internal(format!("Failed to build cert not_after: {e:?}"))
-                })?)
-                .map_err(|e| {
-                    PortfuError::Internal(format!("Failed to build cert not_after utc time: {e:?}"))
-                })?,
-            ),
-        },
-        name,
-        subject_pub_key,
-        &signing_key,
-    )
-    .map_err(|e| PortfuError::Internal(format!("Failed to build generated certificate: {e:?}")))?;
-    cert.add_extension(&SubjectAltName(vec![GeneralName::DnsName(
-        Ia5String::new(dns_name)
-            .map_err(|e| PortfuError::Internal(format!("Invalid dns name `{dns_name}`: {e:?}")))?,
-    )]))
-    .map_err(|e| PortfuError::Internal(format!("Failed to add SAN extension: {e:?}")))?;
-    let cert = cert
-        .build()
-        .map_err(|e| PortfuError::Internal(format!("Failed to finalize generated cert: {e:?}")))?;
-    Ok((
-        cert.to_pem(LineEnding::default())
-            .map_err(|e| PortfuError::Internal(format!("Failed to encode generated cert: {e:?}")))?
-            .as_bytes()
-            .to_vec(),
-        cert_key
-            .to_pkcs8_pem(LineEnding::default())
-            .map_err(|e| {
-                PortfuError::Internal(format!("Failed to encode generated private key: {e:?}"))
-            })?
-            .as_bytes()
-            .to_vec(),
-    ))
-}
-
-fn handle_item(item: Result<Item, Error>) -> Result<Option<PrivateKeyDer<'static>>, Error> {
-    Ok(match item? {
-        Item::Pkcs8Key(key) => Some(PrivateKeyDer::Pkcs8(key)),
-        Item::Pkcs1Key(key) => Some(PrivateKeyDer::Pkcs1(key)),
-        Item::Sec1Key(key) => Some(PrivateKeyDer::Sec1(key)),
-        _ => None,
-    })
+    PrivateKeyDer::from_pem_slice(bytes)
+        .map_err(|error| PortfuError::Parsing(format!("Invalid private key PEM: {error}")))
 }
 
 #[derive(Debug)]
@@ -431,92 +302,5 @@ impl ResolvesServerCert for ResolvesServerCertUsingSniWithDefault {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::NamedClientVerifier;
-    use crate::server::config::{ClientAuthConfig, ClientCertificateMode, TlsConfig, TrustStore};
-    use rcgen::{
-        BasicConstraints, Certificate, CertificateParams, ExtendedKeyUsagePurpose, IsCa, KeyPair,
-        KeyUsagePurpose,
-    };
-    use rustls::crypto::aws_lc_rs::default_provider;
-    use rustls::pki_types::{CertificateDer, UnixTime};
-    use rustls::server::danger::ClientCertVerifier;
-    use sha2::{Digest, Sha256};
-    use std::sync::Arc;
-
-    fn certificate_chain() -> (Certificate, KeyPair, CertificateDer<'static>) {
-        let mut ca_params = CertificateParams::new(Vec::<String>::new()).unwrap();
-        ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        ca_params.key_usages = vec![
-            KeyUsagePurpose::DigitalSignature,
-            KeyUsagePurpose::KeyCertSign,
-            KeyUsagePurpose::CrlSign,
-        ];
-        let ca_key = KeyPair::generate().unwrap();
-        let ca = ca_params.self_signed(&ca_key).unwrap();
-
-        let mut leaf_params = CertificateParams::new(vec!["client.test".to_string()]).unwrap();
-        leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
-        leaf_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
-        let leaf_key = KeyPair::generate().unwrap();
-        let leaf = leaf_params.signed_by(&leaf_key, &ca, &ca_key).unwrap();
-        let leaf_der = CertificateDer::from(leaf.der().to_vec());
-        (ca, ca_key, leaf_der)
-    }
-
-    #[test]
-    fn named_verifier_classifies_and_fingerprints_client_certificates() {
-        let (public_ca, _, public_leaf) = certificate_chain();
-        let (private_ca, _, _) = certificate_chain();
-        let config = TlsConfig {
-            client_auth: ClientAuthConfig {
-                presentation: ClientCertificateMode::Optional,
-                trust_stores: vec![
-                    TrustStore::new("public-clients", public_ca.pem()),
-                    TrustStore::new("internal-clients", private_ca.pem()),
-                ],
-            },
-            ..TlsConfig::default()
-        };
-        let verifier = NamedClientVerifier::build(&config, Arc::new(default_provider()))
-            .unwrap()
-            .unwrap();
-
-        assert!(!verifier.client_auth_mandatory());
-        verifier
-            .verify_client_cert(&public_leaf, &[], UnixTime::now())
-            .expect("public certificate should verify");
-        let identity = verifier
-            .identity(std::slice::from_ref(&public_leaf))
-            .unwrap();
-        assert_eq!(identity.verified_by, vec!["public-clients"]);
-        assert_eq!(
-            identity.sha256_fingerprint,
-            <[u8; 32]>::from(Sha256::digest(public_leaf.as_ref()))
-        );
-        assert!(identity.chain_der.is_empty());
-    }
-
-    #[test]
-    fn named_verifier_rejects_certificates_outside_all_stores() {
-        let (trusted_ca, _, _) = certificate_chain();
-        let (_, _, unrelated_leaf) = certificate_chain();
-        let config = TlsConfig {
-            client_auth: ClientAuthConfig {
-                presentation: ClientCertificateMode::Required,
-                trust_stores: vec![TrustStore::new("trusted", trusted_ca.pem())],
-            },
-            ..TlsConfig::default()
-        };
-        let verifier = NamedClientVerifier::build(&config, Arc::new(default_provider()))
-            .unwrap()
-            .unwrap();
-
-        assert!(verifier.client_auth_mandatory());
-        assert!(
-            verifier
-                .verify_client_cert(&unrelated_leaf, &[], UnixTime::now())
-                .is_err()
-        );
-    }
-}
+#[path = "../../tests/unit/server_ssl.rs"]
+mod tests;

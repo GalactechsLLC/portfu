@@ -3,6 +3,7 @@ pub use portfu::prelude::*;
 use simple_logger::SimpleLogger;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 use tokio::sync::RwLock;
 
 #[static_files("chatroom_assets", name = "chatroom-ui")]
@@ -25,6 +26,7 @@ pub async fn main() -> Result<(), PortfuError> {
     ServerBuilder::from_env()
         .host("0.0.0.0")
         .global_state(ChatHub::default())
+        .shutdown_grace_period(Duration::from_secs(10))
         .build()
         .run()
         .await
@@ -35,7 +37,12 @@ pub async fn health() -> Result<String, PortfuError> {
     Ok("ok".to_string())
 }
 
-#[websocket("/ws/chat/{name}")]
+#[websocket(
+    "/ws/chat/{name}",
+    max_message_size = 65_536,
+    max_frame_size = 65_536,
+    upgrade_timeout_ms = 5_000
+)]
 pub async fn chat_socket(
     name: Path,
     websocket: WebSocket,

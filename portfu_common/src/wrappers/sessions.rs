@@ -1,5 +1,6 @@
 use crate::error::PortfuError;
 use crate::router::middleware::{Middleware, MiddlewareResult};
+use crate::server::Server;
 use crate::server::builder::ServerBuilder;
 use crate::service::request::{FromRequest, Request};
 use crate::service::response::Response;
@@ -127,6 +128,7 @@ impl SessionManager {
                 >= self.session_duration
             {
                 SESSIONS.remove(&server_session_id);
+                SESSION_CLIENT_IDS.remove(session_cookie.value_trimmed());
                 None
             } else {
                 session.write().await.last_update = Instant::now();
@@ -138,10 +140,16 @@ impl SessionManager {
     }
 
     pub fn get_session_from_id(client_session_id: &str) -> Option<Arc<RwLock<Session>>> {
-        let server_session_id = SESSION_CLIENT_IDS.get(client_session_id)?;
-        SESSIONS
-            .get(server_session_id.value())
-            .map(|v| v.value().clone())
+        let server_session_id = SESSION_CLIENT_IDS
+            .get(client_session_id)
+            .map(|entry| entry.value().clone())?;
+        match SESSIONS.get(&server_session_id) {
+            Some(session) => Some(session.value().clone()),
+            None => {
+                SESSION_CLIENT_IDS.remove(client_session_id);
+                None
+            }
+        }
     }
 
     pub async fn cleanup_expired(&self) {
@@ -149,11 +157,12 @@ impl SessionManager {
         for entry in SESSIONS.iter() {
             let session = entry.value().read().await;
             if session.last_update.elapsed() > self.session_duration {
-                to_remove.push(entry.key().clone());
+                to_remove.push((entry.key().clone(), session.id.to_string()));
             }
         }
-        for key in to_remove {
+        for (key, client_id) in to_remove {
             SESSIONS.remove(&key);
+            SESSION_CLIENT_IDS.remove(&client_id);
         }
     }
 }
@@ -206,21 +215,30 @@ impl ServerBuilder {
 }
 
 fn request_best_guess_ip(request: &Request) -> String {
-    if let Some(real_ip) = request.headers().get("x-real-ip")
-        && let Ok(as_str) = real_ip.to_str()
-    {
-        return as_str.to_string();
-    }
-    if let Some(cloudflare_ip) = request.headers().get("cf-connecting-ip")
-        && let Ok(as_str) = cloudflare_ip.to_str()
-    {
-        return as_str.to_string();
+    let trust_proxy_headers = request
+        .get::<Arc<Server>>()
+        .is_some_and(|server| server.config.trust_proxy_headers);
+    if trust_proxy_headers {
+        if let Some(real_ip) = request.headers().get("x-real-ip")
+            && let Ok(as_str) = real_ip.to_str()
+        {
+            return as_str.to_string();
+        }
+        if let Some(cloudflare_ip) = request.headers().get("cf-connecting-ip")
+            && let Ok(as_str) = cloudflare_ip.to_str()
+        {
+            return as_str.to_string();
+        }
     }
     request
         .get::<SocketAddr>()
         .map(|s| s.ip().to_string())
         .unwrap_or_else(|| "127.0.0.1".to_string())
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/wrappers_sessions.rs"]
+mod tests;
 
 pub fn get_session_cookie_from_request(request: &Request) -> Option<Cookie<'_>> {
     let mut session_cookie = None;

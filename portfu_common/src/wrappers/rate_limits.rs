@@ -1,5 +1,6 @@
 use crate::error::PortfuError;
 use crate::router::middleware::{Middleware, MiddlewareResult};
+use crate::server::Server;
 use crate::server::builder::ServerBuilder;
 use crate::service::request::Request;
 use crate::service::response::IntoResponse;
@@ -279,21 +280,30 @@ async fn enforce_body_limit(
 }
 
 fn best_guess_public_ip(request: &Request) -> String {
-    if let Some(real_ip) = request.headers().get("x-real-ip")
-        && let Ok(as_str) = real_ip.to_str()
-    {
-        return as_str.to_string();
-    }
-    if let Some(cloudflare_ip) = request.headers().get("cf-connecting-ip")
-        && let Ok(as_str) = cloudflare_ip.to_str()
-    {
-        return as_str.to_string();
+    let trust_proxy_headers = request
+        .get::<Arc<Server>>()
+        .is_some_and(|server| server.config.trust_proxy_headers);
+    if trust_proxy_headers {
+        if let Some(real_ip) = request.headers().get("x-real-ip")
+            && let Ok(as_str) = real_ip.to_str()
+        {
+            return as_str.to_string();
+        }
+        if let Some(cloudflare_ip) = request.headers().get("cf-connecting-ip")
+            && let Ok(as_str) = cloudflare_ip.to_str()
+        {
+            return as_str.to_string();
+        }
     }
     request
         .get::<SocketAddr>()
         .map(|s| s.ip().to_string())
         .unwrap_or_else(|| "127.0.0.1".to_string())
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/wrappers_rate_limits.rs"]
+mod tests;
 
 pub struct RateLimitServerBuilder {
     builder: ServerBuilder,
