@@ -542,7 +542,7 @@ async fn request_body_mutation_handles_sized_consumed_and_empty_requests() {
         .consume_body_bytes_limited(4, Duration::from_secs(1))
         .await
         .expect_err("oversized body should fail");
-    assert!(err.to_string().contains("exceeded 4 bytes"));
+    assert!(matches!(err, PortfuError::PayloadTooLarge(_)));
 
     let mut empty = Request::new(
         RequestType::Empty(http::HeaderMap::new()),
@@ -883,10 +883,7 @@ async fn session_and_oauth_extractors_read_request_session() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn session_manager_creates_reuses_and_expires_sessions() {
-    let manager = SessionManager {
-        session_duration: Duration::from_secs(60),
-        secure: false,
-    };
+    let manager = SessionManager::new(Duration::from_secs(60), false);
     let mut first = Request::new(
         RequestType::Sized(
             http::Request::builder()
@@ -910,6 +907,11 @@ async fn session_manager_creates_reuses_and_expires_sessions() {
         .get::<Arc<RwLock<Session>>>()
         .expect("session should be attached")
         .clone();
+    first_session
+        .write()
+        .await
+        .data
+        .insert("written session data".to_string());
     let mut response = Response::ok("ok");
     manager
         .after_with_request(&first, &mut response)
@@ -920,13 +922,7 @@ async fn session_manager_creates_reuses_and_expires_sessions() {
         .get("set-cookie")
         .expect("set-cookie should be present")
         .clone();
-    assert_eq!(
-        response
-            .headers()
-            .get("session_id")
-            .and_then(|v| v.to_str().ok()),
-        set_cookie.to_str().ok()
-    );
+    assert!(response.headers().get("session_id").is_none());
 
     let cookie_header = set_cookie.to_str().expect("cookie should be valid");
     let cookie_request = Request::new(
@@ -1998,6 +1994,13 @@ async fn server_builder_configures_cors_and_sessions_as_default_wrappers() {
             .expect("session before failed"),
         MiddlewareResult::Continue
     ));
+    request
+        .get::<Arc<RwLock<Session>>>()
+        .unwrap()
+        .write()
+        .await
+        .data
+        .insert(42_u64);
     server.middleware[1]
         .after_with_request(&request, &mut response)
         .await
@@ -2075,4 +2078,52 @@ where
     }
     request.insert(session);
     request
+}
+
+struct RejectAuthentication;
+impl FromRequest<Request> for RejectAuthentication {
+    type Error = PortfuError;
+    fn try_from<'a>(
+        _: &'a mut Request,
+    ) -> Pin<Box<dyn Future<Output = Result<Self, PortfuError>> + Send + Sync + 'a>> {
+        Box::pin(async { Err(PortfuError::Unauthorized("missing authentication".into())) })
+    }
+}
+
+#[post("/body-before-auth", name = "body-before-auth")]
+async fn body_before_auth_endpoint(
+    payload: Body,
+    _authentication: RejectAuthentication,
+) -> Result<String, PortfuError> {
+    Ok(payload.into_bytes().len().to_string())
+}
+
+#[tokio::test]
+async fn endpoint_authentication_precedes_body_buffering_even_when_body_argument_is_first() {
+    let services = load_registered_services();
+    let service = services
+        .iter()
+        .find(|service| service.name() == "body-before-auth")
+        .unwrap();
+    let polls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = polls.clone();
+    let stream = futures_util::stream::poll_fn(move |_| {
+        count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::task::Poll::<Option<Result<hyper::body::Frame<Bytes>, &'static str>>>::Pending
+    });
+    let body: portfu_common::service::PinnedBody =
+        Box::pin(http_body_util::StreamBody::new(stream));
+    let body = http_body_util::StreamBody::new(http_body_util::BodyStream::new(body));
+    let raw = http::Request::builder()
+        .method(Method::POST)
+        .uri("/body-before-auth")
+        .body(body)
+        .unwrap();
+    let mut request = Request::new(RequestType::Stream(raw), service.route());
+    let response = tokio::time::timeout(Duration::from_secs(1), service.serve(&mut request))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(response.status(), http::StatusCode::UNAUTHORIZED);
+    assert_eq!(polls.load(std::sync::atomic::Ordering::Relaxed), 0);
 }

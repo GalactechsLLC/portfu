@@ -15,7 +15,7 @@ use crate::server::runtime::ServerRuntime;
 #[cfg(feature = "tls")]
 use crate::server::ssl::{load_ssl_certs, negotiated_tls_version};
 use crate::service::request::{Request, RequestType};
-use crate::service::response::Response;
+use crate::service::response::{IntoResponse, Response};
 use crate::service::{Service, StreamingBody};
 use crate::signal::TerminationSignals;
 use crate::stream::IntoStreamBody;
@@ -398,6 +398,13 @@ impl Server {
             DEFAULT_ROUTE.clone(),
         );
         Self::set_request_scope_state(&mut request, &scoped_state, DEFAULT_SCOPE, &connection_info);
+        request.insert(server.clone());
+        if let Err(error) = request.limit_body(
+            server.config.request_size_limit_bytes,
+            server.config.body_read_timeout,
+        ) {
+            return Ok(error.into_response().into());
+        }
         for service in &server.services {
             Self::set_request_scope_state(
                 &mut request,
@@ -409,6 +416,7 @@ impl Server {
                 *request.route_mut() = service.route().clone();
                 return Self::serve_with_global_middleware(&server, service, &mut request)
                     .await
+                    .or_else(|error| Ok(error.into_response()))
                     .map(Into::into);
             }
         }
@@ -423,6 +431,7 @@ impl Server {
                 *request.route_mut() = service.route().clone();
                 return Self::serve_with_global_middleware(&server, service, &mut request)
                     .await
+                    .or_else(|error| Ok(error.into_response()))
                     .map(Into::into);
             }
         }
@@ -436,6 +445,7 @@ impl Server {
                 );
                 Self::serve_with_global_middleware(&server, service, &mut request)
                     .await
+                    .or_else(|error| Ok(error.into_response()))
                     .map(Into::into)
             }
             None => Self::finalize_with_global_middleware(
@@ -467,7 +477,10 @@ impl Server {
             }
         }
 
-        let response = service.serve(request).await?;
+        let response = service
+            .serve(request)
+            .await
+            .unwrap_or_else(IntoResponse::into_response);
         Self::finalize_with_global_middleware(&server.middleware, request, response).await
     }
 

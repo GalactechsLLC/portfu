@@ -1,19 +1,20 @@
 use crate::error::PortfuError;
 use crate::router::route::Route;
 use crate::service::response::IntoResponse;
-use crate::service::{DEFAULT_URI, StreamingBody};
+use crate::service::{DEFAULT_URI, PinnedBody, StreamingBody};
 use http::request::Parts;
 use http::{Extensions, HeaderMap, HeaderValue, Method, Uri};
 use http_body::Body as HttpBody;
-use http_body_util::BodyExt;
 use http_body_util::Full;
-use hyper::body::{Bytes, SizeHint};
+use http_body_util::{BodyExt, BodyStream, StreamBody};
+use hyper::body::{Bytes, Frame, SizeHint};
 use serde::de::DeserializeOwned;
 use std::mem::replace;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
-use tokio::time::timeout;
+use tokio::time::{Sleep, sleep};
 
 pub enum RequestType {
     Stream(http::Request<StreamingBody>),
@@ -130,102 +131,131 @@ impl Request {
             }
         }
     }
-    pub async fn consume_body_bytes(&mut self) -> Result<Bytes, PortfuError> {
-        match replace(&mut self.request_type, RequestType::Empty(HeaderMap::new())) {
-            RequestType::Stream(r) => {
-                let (parts, body) = r.into_parts();
-                let collected = body.collect().await.map_err(|e| {
-                    PortfuError::BadRequest(format!("Failed to read request body: {e}"))
-                })?;
-                self.request_type = RequestType::Consumed(parts);
-                Ok(collected.to_bytes())
-            }
-            RequestType::Sized(r) => {
-                let (parts, body) = r.into_parts();
-                let collected = body.collect().await.map_err(|e| {
-                    PortfuError::BadRequest(format!("Failed to read request body: {e}"))
-                })?;
-                self.request_type = RequestType::Consumed(parts);
-                Ok(collected.to_bytes())
-            }
-            RequestType::Consumed(parts) => {
-                self.request_type = RequestType::Consumed(parts);
-                Ok(Bytes::new())
-            }
-            RequestType::Empty(headers) => {
-                self.request_type = RequestType::Empty(headers);
-                Ok(Bytes::new())
+    fn body_limits(&self) -> BodyLimits {
+        let server = self.get::<Arc<crate::server::Server>>();
+        let mut limits = BodyLimits {
+            max_bytes: server.map_or(1024 * 1024, |s| s.config.request_size_limit_bytes),
+            timeout: server.map_or(Duration::from_secs(30), |s| s.config.body_read_timeout),
+        };
+        if let Some(local) = self.get::<BodyLimits>() {
+            limits.max_bytes = limits.max_bytes.min(local.max_bytes);
+            limits.timeout = limits.timeout.min(local.timeout);
+        }
+        limits
+    }
+
+    /// Reject a known oversized body without polling or buffering it.
+    pub fn check_body_limit(&self) -> Result<(), PortfuError> {
+        let limit = self.body_limits().max_bytes as u64;
+        if self.body_size_hint().lower() > limit {
+            return Err(PortfuError::PayloadTooLarge(
+                "Request body exceeded limit".into(),
+            ));
+        }
+        if let Some(value) = self.headers().get(http::header::CONTENT_LENGTH) {
+            let length = value
+                .to_str()
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .ok_or_else(|| PortfuError::BadRequest("Invalid Content-Length".into()))?;
+            if length > limit {
+                return Err(PortfuError::PayloadTooLarge(
+                    "Request body exceeded limit".into(),
+                ));
             }
         }
+        Ok(())
     }
+
+    /// Tighten body limits without reading any bytes. Server limits remain an upper bound.
+    pub fn limit_body(
+        &mut self,
+        max_bytes: usize,
+        read_timeout: Duration,
+    ) -> Result<(), PortfuError> {
+        let current = self.body_limits();
+        self.insert(BodyLimits {
+            max_bytes: current.max_bytes.min(max_bytes),
+            timeout: current.timeout.min(read_timeout),
+        });
+        self.check_body_limit()?;
+        // Wrap the raw stream as well, so custom handlers using request_type() cannot
+        // accidentally bypass the configured cap. No body frame is polled here.
+        if matches!(self.request_type, RequestType::Stream(_)) {
+            let limits = self.body_limits();
+            let RequestType::Stream(raw) =
+                replace(&mut self.request_type, RequestType::Empty(HeaderMap::new()))
+            else {
+                unreachable!()
+            };
+            let (parts, body) = raw.into_parts();
+            let bounded = RequestBody {
+                body: Box::pin(body),
+                remaining: limits.max_bytes,
+                read_timeout: limits.timeout,
+                deadline: None,
+                finished: false,
+            };
+            let body: PinnedBody = Box::pin(bounded.map_err(|error| match error {
+                PortfuError::PayloadTooLarge(_) => "portfu:payload-too-large",
+                PortfuError::RequestTimeout(_) => "portfu:request-timeout",
+                _ => "portfu:bad-request",
+            }));
+            self.request_type = RequestType::Stream(http::Request::from_parts(
+                parts,
+                StreamBody::new(BodyStream::new(body)),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Take the body stream, preserving request headers and extensions for other extractors.
+    pub fn take_body(&mut self) -> Result<RequestBody, PortfuError> {
+        self.check_body_limit()?;
+        let limits = self.body_limits();
+        let body: PinnedBody =
+            match replace(&mut self.request_type, RequestType::Empty(HeaderMap::new())) {
+                RequestType::Stream(r) => {
+                    let (parts, body) = r.into_parts();
+                    self.request_type = RequestType::Consumed(parts);
+                    Box::pin(body)
+                }
+                RequestType::Sized(r) => {
+                    let (parts, body) = r.into_parts();
+                    self.request_type = RequestType::Consumed(parts);
+                    Box::pin(body.map_err(|never| match never {}))
+                }
+                RequestType::Consumed(parts) => {
+                    self.request_type = RequestType::Consumed(parts);
+                    Box::pin(Full::new(Bytes::new()).map_err(|never| match never {}))
+                }
+                RequestType::Empty(headers) => {
+                    self.request_type = RequestType::Empty(headers);
+                    Box::pin(Full::new(Bytes::new()).map_err(|never| match never {}))
+                }
+            };
+        Ok(RequestBody {
+            body,
+            remaining: limits.max_bytes,
+            read_timeout: limits.timeout,
+            deadline: None,
+            finished: false,
+        })
+    }
+
+    pub async fn consume_body_bytes(&mut self) -> Result<Bytes, PortfuError> {
+        Ok(self.take_body()?.collect().await?.to_bytes())
+    }
+
     pub async fn consume_body_bytes_limited(
         &mut self,
         max_bytes: usize,
         read_timeout: Duration,
     ) -> Result<Bytes, PortfuError> {
-        match replace(&mut self.request_type, RequestType::Empty(HeaderMap::new())) {
-            RequestType::Stream(r) => {
-                let (parts, mut body) = r.into_parts();
-                let mut bytes = Vec::new();
-                loop {
-                    let frame = timeout(read_timeout, body.frame()).await.map_err(|_| {
-                        PortfuError::RequestTimeout(format!(
-                            "Timed out while reading request body after {:?}",
-                            read_timeout
-                        ))
-                    })?;
-                    let Some(frame) = frame else {
-                        break;
-                    };
-                    let frame = frame.map_err(|e| {
-                        PortfuError::BadRequest(format!("Failed to read request body: {e}"))
-                    })?;
-                    if let Some(chunk) = frame.data_ref() {
-                        if bytes.len().saturating_add(chunk.len()) > max_bytes {
-                            self.request_type = RequestType::Sized(http::Request::from_parts(
-                                parts,
-                                Full::new(Bytes::new()),
-                            ));
-                            return Err(PortfuError::PayloadTooLarge(format!(
-                                "Request body exceeded {max_bytes} bytes"
-                            )));
-                        }
-                        bytes.extend_from_slice(chunk);
-                    }
-                }
-                let bytes = Bytes::from(bytes);
-                self.request_type =
-                    RequestType::Sized(http::Request::from_parts(parts, Full::new(bytes.clone())));
-                Ok(bytes)
-            }
-            RequestType::Sized(r) => {
-                let (parts, body) = r.into_parts();
-                let collected = body.collect().await.map_err(|e| {
-                    PortfuError::BadRequest(format!("Failed to read request body: {e}"))
-                })?;
-                let bytes = collected.to_bytes();
-                if bytes.len() > max_bytes {
-                    self.request_type = RequestType::Sized(http::Request::from_parts(
-                        parts,
-                        Full::new(Bytes::new()),
-                    ));
-                    return Err(PortfuError::PayloadTooLarge(format!(
-                        "Request body exceeded {max_bytes} bytes"
-                    )));
-                }
-                self.request_type =
-                    RequestType::Sized(http::Request::from_parts(parts, Full::new(bytes.clone())));
-                Ok(bytes)
-            }
-            RequestType::Consumed(parts) => {
-                self.request_type = RequestType::Consumed(parts);
-                Ok(Bytes::new())
-            }
-            RequestType::Empty(headers) => {
-                self.request_type = RequestType::Empty(headers);
-                Ok(Bytes::new())
-            }
-        }
+        self.limit_body(max_bytes, read_timeout)?;
+        let bytes = self.consume_body_bytes().await?;
+        self.set_body_bytes(bytes.clone());
+        Ok(bytes)
     }
 
     pub fn get<T: Send + Sync + 'static>(&self) -> Option<&T> {
@@ -260,6 +290,111 @@ impl Request {
             RequestType::Empty(_) => None,
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct BodyLimits {
+    max_bytes: usize,
+    timeout: Duration,
+}
+
+/// An unbuffered request body. Each frame is bounded and subject to an idle timeout.
+/// Use BodyExt::frame() to consume it incrementally in an upload handler.
+pub struct RequestBody {
+    body: PinnedBody,
+    remaining: usize,
+    read_timeout: Duration,
+    deadline: Option<Pin<Box<Sleep>>>,
+    finished: bool,
+}
+
+impl HttpBody for RequestBody {
+    type Data = Bytes;
+    type Error = PortfuError;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Bytes>, PortfuError>>> {
+        if self.finished {
+            return Poll::Ready(None);
+        }
+        if self.deadline.is_none() {
+            self.deadline = Some(Box::pin(sleep(self.read_timeout)));
+        }
+        if self.deadline.as_mut().unwrap().as_mut().poll(cx).is_ready() {
+            self.finished = true;
+            return Poll::Ready(Some(Err(PortfuError::RequestTimeout(
+                "Body read timeout".into(),
+            ))));
+        }
+        match self.body.as_mut().poll_frame(cx) {
+            Poll::Ready(Some(Ok(frame))) => {
+                self.deadline = None;
+                if let Some(bytes) = frame.data_ref() {
+                    if bytes.len() > self.remaining {
+                        self.finished = true;
+                        return Poll::Ready(Some(Err(PortfuError::PayloadTooLarge(
+                            "Request body exceeded limit".into(),
+                        ))));
+                    }
+                    self.remaining -= bytes.len();
+                }
+                Poll::Ready(Some(Ok(frame)))
+            }
+            Poll::Ready(Some(Err(error))) => {
+                self.finished = true;
+                let error = match error {
+                    "portfu:payload-too-large" => {
+                        PortfuError::PayloadTooLarge("Request body exceeded limit".into())
+                    }
+                    "portfu:request-timeout" => {
+                        PortfuError::RequestTimeout("Body read timeout".into())
+                    }
+                    _ => PortfuError::BadRequest("Failed to read request body".into()),
+                };
+                Poll::Ready(Some(Err(error)))
+            }
+            Poll::Ready(None) => {
+                self.finished = true;
+                Poll::Ready(None)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.finished || self.body.is_end_stream()
+    }
+    fn size_hint(&self) -> SizeHint {
+        self.body.size_hint()
+    }
+}
+
+impl FromRequest<Request> for RequestBody {
+    type Error = PortfuError;
+    fn try_from<'a>(
+        request: &'a mut Request,
+    ) -> Pin<Box<dyn Future<Output = Result<Self, PortfuError>> + Send + Sync + 'a>> {
+        Box::pin(async move { request.take_body() })
+    }
+}
+
+/// A validated client address for request middleware.
+pub fn client_ip(request: &Request) -> std::net::IpAddr {
+    let peer = request
+        .get::<std::net::SocketAddr>()
+        .map(|peer| peer.ip())
+        .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+    request
+        .get::<Arc<crate::server::Server>>()
+        .filter(|server| {
+            server.config.trust_proxy_headers && server.config.trusted_proxies.contains(&peer)
+        })
+        .and_then(|server| request.headers().get(&server.config.forwarded_ip_header))
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<std::net::IpAddr>().ok())
+        .unwrap_or(peer)
 }
 
 pub struct Body(pub Bytes);

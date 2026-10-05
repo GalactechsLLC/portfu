@@ -122,8 +122,28 @@ impl ServerBuilder {
         self.config.http_header_read_timeout = timeout;
         self
     }
+    /// Enable or disable forwarded identity; only peers in trusted_proxies are accepted.
     pub fn trust_proxy_headers(mut self, trust: bool) -> Self {
         self.config.trust_proxy_headers = trust;
+        self
+    }
+    /// Trust forwarding headers from this direct peer only.
+    pub fn trusted_proxy(mut self, peer: std::net::IpAddr) -> Self {
+        self.config.trust_proxy_headers = true;
+        self.config.trusted_proxies.push(peer);
+        self
+    }
+    /// Select the header that the trusted proxy overwrites. There is no fallback header.
+    pub fn forwarded_ip_header(mut self, header: http::HeaderName) -> Self {
+        self.config.forwarded_ip_header = header;
+        self
+    }
+    pub fn request_size_limit(mut self, bytes: usize) -> Self {
+        self.config.request_size_limit_bytes = bytes;
+        self
+    }
+    pub fn body_read_timeout(mut self, timeout: Duration) -> Self {
+        self.config.body_read_timeout = timeout;
         self
     }
     pub fn shutdown_grace_period(mut self, grace_period: Duration) -> Self {
@@ -167,6 +187,14 @@ impl ServerBuilder {
         self
     }
     pub fn wrap(mut self, middleware: Arc<dyn Middleware + Send + Sync>) -> Self {
+        if middleware.is_session_manager()
+            && self
+                .middleware
+                .iter()
+                .any(|existing| existing.is_session_manager())
+        {
+            return self;
+        }
         self.middleware.push(middleware);
         self
     }

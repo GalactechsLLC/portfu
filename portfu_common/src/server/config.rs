@@ -120,8 +120,16 @@ pub struct ServerConfig {
     pub backlog: u32,
     pub acceptors: usize,
     pub reuse_port: bool,
-    /// Whether direct peers may supply forwarding headers used for client identity.
+    /// Enable forwarded client identity; trusted_proxies must also match the direct peer.
     pub trust_proxy_headers: bool,
+    /// Forwarding headers are accepted only from these direct peer addresses.
+    pub trusted_proxies: Vec<std::net::IpAddr>,
+    /// The single header the trusted proxy overwrites with a validated client address.
+    pub forwarded_ip_header: http::HeaderName,
+    /// Maximum request body bytes, including streaming extractors.
+    pub request_size_limit_bytes: usize,
+    /// Maximum idle time between request body frames.
+    pub body_read_timeout: Duration,
     pub shutdown_grace_period: Duration,
 }
 
@@ -142,6 +150,10 @@ impl Default for ServerConfig {
                 .unwrap_or(1),
             reuse_port: true,
             trust_proxy_headers: false,
+            trusted_proxies: Vec::new(),
+            forwarded_ip_header: http::HeaderName::from_static("x-real-ip"),
+            request_size_limit_bytes: 1024 * 1024,
+            body_read_timeout: Duration::from_secs(30),
             shutdown_grace_period: Duration::from_secs(10),
         }
     }

@@ -156,6 +156,8 @@ impl ToTokens for Endpoint {
                 return;
             }
         };
+        let mut body_vars = Vec::new();
+        let mut request_borrows = Vec::new();
         let mut has_generics = false;
         let generic_vals: Vec<Ident> = generics
             .params
@@ -290,7 +292,7 @@ impl ToTokens for Endpoint {
                         let response_headers: Ident =
                             Ident::new("ResponseHeaders", segment.ident.span());
                         if request == segment.ident {
-                            dyn_vars.push(quote! {
+                            request_borrows.push(quote! {
                                 let #ident_val = request;
                             });
                             additional_function_vars.push(quote! {
@@ -299,11 +301,11 @@ impl ToTokens for Endpoint {
                             continue;
                         } else if request_headers == segment.ident {
                             if reference.mutability.is_some() {
-                                dyn_vars.push(quote! {
+                                request_borrows.push(quote! {
                                     let #ident_val: &mut ::portfu::prelude::RequestHeaders = request.headers_mut();
                                 });
                             } else {
-                                dyn_vars.push(quote! {
+                                request_borrows.push(quote! {
                                     let #ident_val: &::portfu::prelude::RequestHeaders = request.headers();
                                 });
                             }
@@ -313,11 +315,11 @@ impl ToTokens for Endpoint {
                             continue;
                         } else if response_headers == segment.ident {
                             if reference.mutability.is_some() {
-                                dyn_vars.push(quote! {
+                                request_borrows.push(quote! {
                                     let #ident_val: &mut ::portfu::prelude::ResponseHeaders = response.headers_mut();
                                 });
                             } else {
-                                dyn_vars.push(quote! {
+                                request_borrows.push(quote! {
                                     let #ident_val: &::portfu::prelude::ResponseHeaders = response.headers();
                                 });
                             }
@@ -329,18 +331,28 @@ impl ToTokens for Endpoint {
                     }
                 }
             }
-            dyn_vars.push(quote! {
+            let extraction = quote! {
                 let #ident_val: #ident_type = match ::portfu::prelude::FromRequest::try_from(request).await {
                     Ok(v) => v,
                     Err(e) => {
                         return Ok(::portfu::prelude::IntoResponse::into_response(e));
                     }
                 };
-            });
+            };
+            let is_body = matches!(&ident_type, Type::Path(path) if path.path.segments.last()
+                .is_some_and(|segment| matches!(segment.ident.to_string().as_str(), "Body" | "Json" | "RequestBody")));
+            if is_body {
+                body_vars.push(extraction);
+            } else {
+                dyn_vars.push(extraction);
+            }
             additional_function_vars.push(quote! {
                 #ident_val,
             });
         }
+        // Authenticate and validate metadata before buffering a built-in body extractor.
+        dyn_vars.extend(body_vars);
+        dyn_vars.extend(request_borrows);
         let ok_response = ok_response_conversion(&ast.sig.output);
         let stream = quote! {
             #(#doc_attributes)*

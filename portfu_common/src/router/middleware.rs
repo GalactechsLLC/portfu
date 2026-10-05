@@ -12,6 +12,14 @@ pub enum MiddlewareResult {
 
 pub trait Middleware {
     fn name(&self) -> &str;
+    #[cfg(feature = "sessions")]
+    fn session_manager(&self) -> Option<&crate::wrappers::sessions::SessionManager> {
+        None
+    }
+    /// Identifies session middleware without relying on its display name.
+    fn is_session_manager(&self) -> bool {
+        false
+    }
     fn before<'a>(
         &'a self,
         data: &'a mut Request,

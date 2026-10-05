@@ -43,3 +43,13 @@ fn internal_error_details_are_not_exposed_to_clients() {
         "21"
     );
 }
+
+#[tokio::test]
+async fn parsing_errors_do_not_echo_body_fragments() {
+    use http_body_util::BodyExt;
+    let response: http::Response<_> = PortfuError::Parsing("secret body fragment".into())
+        .into_response()
+        .into();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(body, "Bad Request");
+}

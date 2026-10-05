@@ -56,8 +56,8 @@ pub mod prelude {
     pub use portfu_common::service::request::FromRequest;
     pub use portfu_common::service::request::Json;
     pub use portfu_common::service::request::Query;
-    pub use portfu_common::service::request::Request;
     pub use portfu_common::service::request::RequestType;
+    pub use portfu_common::service::request::{Request, RequestBody, client_ip};
     pub use portfu_common::service::response::Response;
     pub use portfu_common::service::response::{IntoResponse, ResponseError};
     pub use portfu_common::service::traits::Service as ServiceTrait;
@@ -80,7 +80,9 @@ pub mod prelude {
     };
     pub use portfu_common::wrappers;
     #[cfg(feature = "sessions")]
-    pub use portfu_common::wrappers::sessions::{Session, SessionState};
+    pub use portfu_common::wrappers::sessions::{
+        MemorySessionStore, Session, SessionManager, SessionState, SessionStore, SkipSession,
+    };
     #[cfg(any(
         feature = "client",
         feature = "endpoint",

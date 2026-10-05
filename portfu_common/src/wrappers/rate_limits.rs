@@ -1,6 +1,5 @@
 use crate::error::PortfuError;
 use crate::router::middleware::{Middleware, MiddlewareResult};
-use crate::server::Server;
 use crate::server::builder::ServerBuilder;
 use crate::service::request::Request;
 use crate::service::response::IntoResponse;
@@ -10,9 +9,9 @@ use log::{debug, warn};
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
-use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::RwLock;
@@ -47,6 +46,8 @@ impl Default for RateLimit {
 pub struct RecentRequests {
     requests: RwLock<HashMap<String, VecDeque<Instant>>>,
     depth: usize,
+    expires_at: Mutex<Instant>,
+    windows: RwLock<HashMap<String, (Duration, VecDeque<Instant>)>>,
 }
 
 impl RecentRequests {
@@ -54,11 +55,16 @@ impl RecentRequests {
         Self {
             depth,
             requests: Default::default(),
+            expires_at: Mutex::new(Instant::now()),
+            windows: RwLock::new(HashMap::new()),
         }
     }
 
     pub async fn add(&self, path: String) {
         let mut write_lock = self.requests.write().await;
+        if !write_lock.contains_key(&path) && write_lock.len() >= 64 {
+            return;
+        }
         match write_lock.entry(path) {
             Entry::Occupied(mut e) => {
                 e.get_mut().push_front(Instant::now());
@@ -68,6 +74,53 @@ impl RecentRequests {
                 e.insert(VecDeque::from([Instant::now()]));
             }
         }
+    }
+
+    async fn admit(&self, limits: &[(String, usize, Duration)], max_buckets: usize) -> bool {
+        let now = Instant::now();
+        let mut windows = self.windows.write().await;
+        windows.retain(|_, (window, times)| {
+            while times
+                .back()
+                .is_some_and(|time| now.duration_since(*time) >= *window)
+            {
+                times.pop_back();
+            }
+            !times.is_empty()
+        });
+        let missing = limits
+            .iter()
+            .filter(|(key, count, _)| *count > 0 && !windows.contains_key(key))
+            .count();
+        if windows.len().saturating_add(missing) > max_buckets {
+            return false;
+        }
+        for (key, count, window) in limits {
+            if *count == 0 {
+                continue;
+            }
+            if windows.get(key).is_some_and(|(_, times)| {
+                times
+                    .iter()
+                    .filter(|time| now.duration_since(**time) < *window)
+                    .count()
+                    >= *count
+            }) {
+                return false;
+            }
+        }
+        for (key, count, window) in limits {
+            if *count == 0 {
+                continue;
+            }
+            let entry = windows
+                .entry(key.clone())
+                .or_insert_with(|| (*window, VecDeque::new()));
+            entry.0 = *window;
+            entry.1.push_front(now);
+            entry.1.truncate(*count);
+        }
+        true
     }
 
     pub async fn recent_requests(&self, path: Option<&str>, last_seconds: u64) -> usize {
@@ -114,6 +167,10 @@ pub struct RateLimiter {
     pub client_rates: Arc<ClientMap>,
     pub enabled: Arc<AtomicBool>,
     pub body_read_timeout: Duration,
+    pub max_clients: usize,
+    pub max_buckets_per_client: usize,
+    pub client_idle_timeout: Duration,
+    last_cleanup: Mutex<Instant>,
 }
 
 impl RateLimiter {
@@ -128,6 +185,10 @@ impl RateLimiter {
             client_rates,
             enabled: Arc::new(AtomicBool::new(true)),
             body_read_timeout: Duration::from_secs(5),
+            max_clients: 10_000,
+            max_buckets_per_client: 64,
+            client_idle_timeout: Duration::from_secs(300),
+            last_cleanup: Mutex::new(Instant::now()),
         }
     }
 
@@ -137,6 +198,17 @@ impl RateLimiter {
             Arc::new(RwLock::new(HashMap::new())),
             Arc::new(global_limits),
         )
+    }
+
+    pub fn capacity(mut self, clients: usize, buckets_per_client: usize) -> Self {
+        self.max_clients = clients;
+        self.max_buckets_per_client = buckets_per_client;
+        self
+    }
+
+    pub fn client_idle_timeout(mut self, timeout: Duration) -> Self {
+        self.client_idle_timeout = timeout;
+        self
     }
 
     pub fn body_read_timeout(mut self, timeout: Duration) -> Self {
@@ -149,6 +221,14 @@ impl RateLimiter {
             .request_size_limit_bytes
             .store(bytes, Ordering::Relaxed);
         self
+    }
+
+    pub async fn cleanup_expired(&self) {
+        let now = Instant::now();
+        self.client_rates
+            .write()
+            .await
+            .retain(|_, recent| *recent.expires_at.lock().unwrap() > now);
     }
 
     pub async fn set_path_limit<S: Into<String>>(&self, path: S, limit: RateLimit) {
@@ -182,31 +262,48 @@ impl Middleware for RateLimiter {
 
             let remote = best_guess_public_ip(request);
             let path = request.uri().path().to_string();
-            let limit = self
-                .path_limits
-                .read()
-                .await
-                .get(path.as_str())
-                .cloned()
-                .unwrap_or_else(|| self.global_limits.clone());
-
-            let limit_requests = limit.requests_count.load(Ordering::Relaxed);
-            let limit_seconds = limit.count_seconds.load(Ordering::Relaxed);
-            let request_window = limit_requests.saturating_mul(limit_seconds);
-            let recent_requests = self.recent_requests(remote.clone(), request_window).await;
-            let recent_count = recent_requests
-                .recent_requests(Some(path.as_str()), limit_seconds as u64)
-                .await;
-
-            if request_window > 0 && recent_count >= request_window {
-                warn!("Rate limiting TooManyRequests: {remote}, {path}");
+            let configured = self.path_limits.read().await;
+            // Exact rules take precedence; templates group all content IDs together.
+            let rule = configured.get_key_value(path.as_str()).or_else(|| {
+                configured
+                    .iter()
+                    .filter(|(pattern, _)| {
+                        crate::router::route::Route::new((*pattern).clone()).matches(path.as_str())
+                    })
+                    .min_by(|(left, _), (right, _)| left.cmp(right))
+            });
+            let mut limits = vec![(
+                "global".to_string(),
+                self.global_limits.requests_count.load(Ordering::Relaxed),
+                Duration::from_secs(self.global_limits.count_seconds.load(Ordering::Relaxed) as u64),
+            )];
+            let limit = if let Some((pattern, limit)) = rule {
+                limits.push((
+                    format!("path:{pattern}"),
+                    limit.requests_count.load(Ordering::Relaxed),
+                    Duration::from_secs(limit.count_seconds.load(Ordering::Relaxed) as u64),
+                ));
+                limit.clone()
+            } else {
+                self.global_limits.clone()
+            };
+            drop(configured);
+            let retention = limits
+                .iter()
+                .map(|(_, _, window)| *window)
+                .max()
+                .unwrap_or_default()
+                .max(self.client_idle_timeout);
+            let accepted = match self.recent_requests(remote.clone(), retention).await {
+                Some(recent) => recent.admit(&limits, self.max_buckets_per_client).await,
+                None => false,
+            };
+            if !accepted {
                 return Ok(MiddlewareResult::Return(Response::from_status_and_message(
                     StatusCode::TOO_MANY_REQUESTS,
-                    format!("Too Many Requests {recent_count}, Limit is {request_window}"),
+                    "Too Many Requests",
                 )));
             }
-
-            recent_requests.add(path.clone()).await;
             let size_limit = limit.request_size_limit_bytes.load(Ordering::Relaxed);
             if size_limit == 0 {
                 return Ok(MiddlewareResult::Continue);
@@ -234,15 +331,36 @@ impl Middleware for RateLimiter {
 }
 
 impl RateLimiter {
-    async fn recent_requests(&self, remote: String, depth: usize) -> Arc<RecentRequests> {
-        match self.client_rates.write().await.entry(remote) {
-            Entry::Vacant(e) => {
-                let value = Arc::new(RecentRequests::new(depth.max(1)));
-                e.insert(value.clone());
-                value
+    async fn recent_requests(
+        &self,
+        remote: String,
+        retention: Duration,
+    ) -> Option<Arc<RecentRequests>> {
+        let now = Instant::now();
+        let mut clients = self.client_rates.write().await;
+        let cleanup = {
+            let mut last = self.last_cleanup.lock().unwrap();
+            if now.duration_since(*last) >= Duration::from_secs(60) {
+                *last = now;
+                true
+            } else {
+                false
             }
-            Entry::Occupied(e) => e.get().clone(),
+        };
+        if cleanup {
+            clients.retain(|_, recent| *recent.expires_at.lock().unwrap() > now);
         }
+        if !clients.contains_key(&remote) && clients.len() >= self.max_clients {
+            return None;
+        }
+        let recent = clients
+            .entry(remote)
+            .or_insert_with(|| Arc::new(RecentRequests::new(1)))
+            .clone();
+        let mut expires_at = recent.expires_at.lock().unwrap();
+        *expires_at = (*expires_at).max(now + retention);
+        drop(expires_at);
+        Some(recent)
     }
 }
 
@@ -251,54 +369,14 @@ async fn enforce_body_limit(
     size_limit: usize,
     read_timeout: Duration,
 ) -> Option<Response> {
-    let size_hint = request.body_size_hint();
-    if size_hint
-        .exact()
-        .is_some_and(|size| size > size_limit as u64)
-        || size_hint.lower() > size_limit as u64
-        || size_hint
-            .upper()
-            .is_some_and(|size| size > size_limit as u64)
-    {
-        return Some(Response::from_status_and_message(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            format!("Payload Too Large, Limit is {size_limit}"),
-        ));
-    }
-
-    if size_hint.upper().is_some() {
-        return None;
-    }
-
-    match request
-        .consume_body_bytes_limited(size_limit, read_timeout)
-        .await
-    {
-        Ok(_) => None,
-        Err(e) => Some(e.into_response()),
-    }
+    request
+        .limit_body(size_limit, read_timeout)
+        .err()
+        .map(IntoResponse::into_response)
 }
 
 pub(crate) fn best_guess_public_ip(request: &Request) -> String {
-    let trust_proxy_headers = request
-        .get::<Arc<Server>>()
-        .is_some_and(|server| server.config.trust_proxy_headers);
-    if trust_proxy_headers {
-        if let Some(real_ip) = request.headers().get("x-real-ip")
-            && let Ok(as_str) = real_ip.to_str()
-        {
-            return as_str.to_string();
-        }
-        if let Some(cloudflare_ip) = request.headers().get("cf-connecting-ip")
-            && let Ok(as_str) = cloudflare_ip.to_str()
-        {
-            return as_str.to_string();
-        }
-    }
-    request
-        .get::<SocketAddr>()
-        .map(|s| s.ip().to_string())
-        .unwrap_or_else(|| "127.0.0.1".to_string())
+    crate::service::request::client_ip(request).to_string()
 }
 
 pub struct RateLimitServerBuilder {
@@ -329,6 +407,16 @@ impl RateLimitServerBuilder {
 
     pub fn body_read_timeout(mut self, timeout: Duration) -> Self {
         self.limiter.body_read_timeout = timeout;
+        self
+    }
+
+    pub fn capacity(mut self, clients: usize, buckets_per_client: usize) -> Self {
+        self.limiter = self.limiter.capacity(clients, buckets_per_client);
+        self
+    }
+
+    pub fn client_idle_timeout(mut self, timeout: Duration) -> Self {
+        self.limiter.client_idle_timeout = timeout;
         self
     }
 

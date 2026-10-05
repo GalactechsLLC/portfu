@@ -316,3 +316,129 @@ fn jwt_token(claims: Value) -> String {
     let payload = URL_SAFE_NO_PAD.encode(claims.to_string());
     format!("{header}.{payload}.")
 }
+
+#[tokio::test]
+async fn oauth_callback_rotates_only_after_policy_approval_and_never_authenticates_old_id() {
+    use crate::auth::oauth::{
+        SessionCsrfToken, SessionOAuthIdentity, SessionOAuthToken, SessionPkceVerifier,
+    };
+    use crate::router::middleware::Middleware;
+    use crate::router::route::Route;
+    use crate::server::builder::ServerBuilder;
+    use crate::service::request::{Request, RequestType};
+    use crate::service::response::Response;
+    use crate::wrappers::sessions::{MemorySessionStore, Session, SessionManager, SessionStore};
+    use http_body_util::Full;
+    use hyper::body::Bytes;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::sync::RwLock;
+
+    for allow in [true, false] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let reply = json!({"access_token": jwt_token(json!({"sub": "dummy-user"})), "token_type": "Bearer"}).to_string();
+        let provider = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut input = [0; 4096];
+            let read = stream.read(&mut input).await.unwrap();
+            assert!(read > 0);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                reply.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+            stream.shutdown().await.unwrap();
+        });
+        let store = Arc::new(MemorySessionStore::new(2));
+        let manager = SessionManager::new(Duration::from_secs(60), false).store(store.clone());
+        let old = Arc::new(RwLock::new(Session::default()));
+        let old_id = old.read().await.id;
+        old.write()
+            .await
+            .data
+            .insert(SessionCsrfToken("dummy-state".into()));
+        old.write()
+            .await
+            .data
+            .insert(SessionPkceVerifier("dummy-verifier".into()));
+        store
+            .save(old.clone(), Duration::from_secs(60))
+            .await
+            .unwrap();
+        let policy_session = old.clone();
+        let server = ServerBuilder::new()
+            .session_manager(manager.clone())
+            .enable_oauth(OAUTH::CUSTOM)
+            .client_id("dummy-client")
+            .client_secret("dummy-secret")
+            .auth_url(format!("http://{address}/authorize"))
+            .token_url(format!("http://{address}/token"))
+            .redirect_url("http://127.0.0.1/callback")
+            .policy(move |context| {
+                let session = policy_session.clone();
+                async move {
+                    assert!(
+                        session
+                            .read()
+                            .await
+                            .data
+                            .get::<SessionOAuthToken>()
+                            .is_none()
+                    );
+                    if allow {
+                        Ok(OAuthPolicyDecision::allow(context.identity))
+                    } else {
+                        Ok(OAuthPolicyDecision::deny(context.identity, "Denied"))
+                    }
+                }
+            })
+            .build();
+        let callback = server
+            .services
+            .iter()
+            .find(|service| service.name() == "oauth_callback")
+            .unwrap();
+        let raw = http::Request::builder()
+            .uri("/callback?code=dummy-code&state=dummy-state")
+            .header(http::header::COOKIE, format!("session_id={old_id}"))
+            .body(Full::new(Bytes::new()))
+            .unwrap();
+        let mut request = Request::new(
+            RequestType::Sized(raw),
+            Arc::new(Route::new("/callback".into())),
+        );
+        manager.before(&mut request).await.unwrap();
+        let mut response =
+            tokio::time::timeout(Duration::from_secs(5), callback.serve(&mut request))
+                .await
+                .unwrap()
+                .unwrap();
+        manager
+            .after_with_request(&request, &mut response)
+            .await
+            .unwrap();
+        provider.await.unwrap();
+        let current = request.get::<Arc<RwLock<Session>>>().unwrap().read().await;
+        if allow {
+            assert_eq!(response.status(), http::StatusCode::OK);
+            assert_ne!(current.id, old_id);
+            assert!(current.data.get::<SessionOAuthToken>().is_some());
+            assert!(current.data.get::<SessionOAuthIdentity>().is_some());
+            assert!(response.headers().get(http::header::SET_COOKIE).is_some());
+            assert!(store.load(old_id).await.unwrap().is_none());
+            assert!(old.read().await.data.is_empty());
+        } else {
+            assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
+            assert_eq!(current.id, old_id);
+            assert!(current.data.get::<SessionOAuthToken>().is_none());
+            assert!(current.data.get::<SessionOAuthIdentity>().is_none());
+            assert!(response.headers().get(http::header::SET_COOKIE).is_none());
+        }
+        // Also check that response-only hooks cannot manufacture a session cookie.
+        let mut standalone = Response::ok("ok");
+        manager.after(&mut standalone).await.unwrap();
+        assert!(standalone.headers().get(http::header::SET_COOKIE).is_none());
+    }
+}

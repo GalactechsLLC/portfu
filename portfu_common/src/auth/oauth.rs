@@ -32,16 +32,16 @@ pub enum OAUTH {
     CUSTOM,
 }
 
-#[derive(Clone, Debug)]
-struct SessionCsrfToken(String);
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SessionCsrfToken(pub String);
 
-#[derive(Clone, Debug)]
-struct SessionPkceVerifier(String);
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SessionPkceVerifier(pub String);
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionOAuthToken(pub OAuthToken);
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionOAuthIdentity(pub OAuthIdentity);
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -358,7 +358,15 @@ impl OAuthServerBuilder {
                     .build(),
             );
 
-        builder.wrap(Arc::new(self.session_manager.unwrap_or_default()))
+        if builder
+            .middleware
+            .iter()
+            .any(|middleware| middleware.is_session_manager())
+        {
+            builder
+        } else {
+            builder.wrap(Arc::new(self.session_manager.unwrap_or_default()))
+        }
     }
 
     pub fn build(self) -> crate::server::Server {
@@ -423,7 +431,7 @@ impl Service for OAuthCallbackService {
             let client = OAuthClient::new(self.config.config.clone())?;
             match client.exchange_code(&session, &callback).await {
                 Ok(token) => {
-                    let decision = self.config.evaluate_policy(token).await?;
+                    let decision = self.config.evaluate_policy(token.clone()).await?;
                     if !decision.allow {
                         let mut session = session.write().await;
                         let _ = session.data.remove::<SessionOAuthToken>();
@@ -439,11 +447,14 @@ impl Service for OAuthCallbackService {
                                 .unwrap_or_else(|| "OAuth policy rejected request".to_string()),
                         ));
                     }
-                    session
-                        .write()
-                        .await
+                    SessionManager::rotate_session(request).await?;
+                    let authenticated = session_from_request(request)?;
+                    let mut authenticated = authenticated.write().await;
+                    authenticated.data.insert(SessionOAuthToken(token));
+                    authenticated
                         .data
                         .insert(SessionOAuthIdentity(decision.identity.clone()));
+                    drop(authenticated);
                     if let Some(success) = &self.config.success_redirect {
                         Ok(redirect(success))
                     } else {
@@ -1054,7 +1065,6 @@ impl OAuthClient {
         };
 
         let mut session = session.write().await;
-        session.data.insert(SessionOAuthToken(mapped.clone()));
         let _ = session.data.remove::<SessionCsrfToken>();
         let _ = session.data.remove::<SessionPkceVerifier>();
         Ok(mapped)

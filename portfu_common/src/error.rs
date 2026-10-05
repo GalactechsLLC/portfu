@@ -11,6 +11,7 @@ pub enum PortfuError {
     Forbidden(String),
     PayloadTooLarge(String),
     RequestTimeout(String),
+    ServiceUnavailable(String),
     Internal(String),
     Io(std::io::Error),
 }
@@ -24,6 +25,7 @@ impl Display for PortfuError {
             PortfuError::Forbidden(msg) => write!(f, "{}", msg),
             PortfuError::PayloadTooLarge(msg) => write!(f, "{}", msg),
             PortfuError::RequestTimeout(msg) => write!(f, "{}", msg),
+            PortfuError::ServiceUnavailable(msg) => write!(f, "{}", msg),
             PortfuError::Internal(msg) => write!(f, "{}", msg),
             PortfuError::Io(e) => write!(f, "{}", e),
         }
@@ -39,6 +41,7 @@ impl std::error::Error for PortfuError {
             PortfuError::Forbidden(_) => None,
             PortfuError::PayloadTooLarge(_) => None,
             PortfuError::RequestTimeout(_) => None,
+            PortfuError::ServiceUnavailable(_) => None,
             PortfuError::Internal(_) => None,
             PortfuError::Io(e) => Some(e),
         }
@@ -53,6 +56,7 @@ impl ResponseError for PortfuError {
             Self::Forbidden(_) => StatusCode::FORBIDDEN,
             Self::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
             Self::RequestTimeout(_) => StatusCode::REQUEST_TIMEOUT,
+            Self::ServiceUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             Self::Internal(_) | Self::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -60,7 +64,12 @@ impl ResponseError for PortfuError {
     fn error_response(&self) -> Response {
         let message = match self {
             Self::Internal(_) | Self::Io(_) => "Internal Server Error",
-            _ => return Response::from_status_and_message(self.status_code(), self.to_string()),
+            Self::Parsing(_) | Self::BadRequest(_) => "Bad Request",
+            Self::Unauthorized(_) => "Unauthorized",
+            Self::Forbidden(_) => "Forbidden",
+            Self::PayloadTooLarge(_) => "Payload Too Large",
+            Self::RequestTimeout(_) => "Request Timeout",
+            Self::ServiceUnavailable(_) => "Service Unavailable",
         };
         Response::from_status_and_message(self.status_code(), message)
     }
