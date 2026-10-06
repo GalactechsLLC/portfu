@@ -268,6 +268,12 @@ struct TestServer {
 
 impl TestServer {
     async fn start() -> Option<Self> {
+        Self::start_with(ServerBuilder::from_env).await
+    }
+
+    async fn start_with(
+        configure: impl FnOnce() -> ServerBuilder + Send + 'static,
+    ) -> Option<Self> {
         let port = match reserve_port() {
             Ok(port) => port,
             Err(err) if err.kind() == ErrorKind::PermissionDenied => {
@@ -285,10 +291,7 @@ impl TestServer {
                 .build()
                 .expect("failed to build tokio runtime for test server");
             runtime.block_on(async move {
-                let server = ServerBuilder::from_env()
-                    .host("127.0.0.1")
-                    .port(port)
-                    .build();
+                let server = configure().host("127.0.0.1").port(port).build();
                 let _ = handle_tx.send(server.handle());
                 server.run().await.expect("test server failed");
             });
@@ -350,6 +353,87 @@ impl TestServer {
             thread: Some(thread),
         })
     }
+}
+
+#[post("/limited-upload")]
+async fn limited_upload(
+    body: Body,
+    writes: State<std::sync::atomic::AtomicUsize>,
+) -> Result<String, PortfuError> {
+    writes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    Ok(body.into_bytes().len().to_string())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn body_limit_errors_keep_cors_headers_without_running_the_handler() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let writes = Arc::new(AtomicUsize::new(0));
+    let handler_writes = writes.clone();
+    let server = TestServer::start_with(move || {
+        ServerBuilder::new()
+            .request_size_limit(8)
+            .global_state::<AtomicUsize>(handler_writes)
+            .enable_cors()
+            .allowed_origin("https://app.example")
+            .allow_credentials(true)
+            .finish_cors()
+            .enable_sessions()
+            .finish_sessions()
+    })
+    .await
+    .expect("local socket required for body-limit regression");
+
+    for (origin, framing, expected_status) in [
+        // Headers alone must be sufficient to reject a known oversized body.
+        ("https://app.example", "Content-Length: 9\r\n\r\n", 413),
+        (
+            "https://untrusted.example",
+            "Content-Length: 9\r\n\r\n",
+            413,
+        ),
+        (
+            "https://app.example",
+            "Transfer-Encoding: chunked\r\n\r\n9\r\n123456789\r\n0\r\n\r\n",
+            413,
+        ),
+        (
+            "https://app.example",
+            "Content-Length: 8\r\n\r\n12345678",
+            200,
+        ),
+    ] {
+        let mut stream = connect_with_retry(server.port).await.unwrap();
+        let request = format!(
+            "POST /limited-upload HTTP/1.1\r\nHost: localhost\r\nOrigin: {origin}\r\nConnection: close\r\n{framing}"
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut bytes = Vec::new();
+        tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut bytes))
+            .await
+            .unwrap()
+            .unwrap();
+        let response = parse_http_response(&bytes).unwrap();
+        assert_eq!(response.status, expected_status);
+        if origin == "https://app.example" {
+            assert_eq!(
+                header(&response, "access-control-allow-origin"),
+                Some(origin)
+            );
+            assert_eq!(
+                header(&response, "access-control-allow-credentials"),
+                Some("true")
+            );
+            assert_eq!(header(&response, "vary"), Some("Origin"));
+        } else {
+            assert_eq!(header(&response, "access-control-allow-origin"), None);
+        }
+        assert_eq!(header(&response, "set-cookie"), None);
+        assert_eq!(
+            writes.load(Ordering::Relaxed),
+            usize::from(expected_status == 200)
+        );
+    }
+    server.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
