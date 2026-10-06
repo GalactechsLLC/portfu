@@ -403,7 +403,13 @@ impl Server {
             server.config.request_size_limit_bytes,
             server.config.body_read_timeout,
         ) {
-            return Ok(error.into_response().into());
+            return Self::finalize_with_global_middleware(
+                &server.middleware,
+                &request,
+                error.into_response(),
+            )
+            .await
+            .map(Into::into);
         }
         for service in &server.services {
             Self::set_request_scope_state(

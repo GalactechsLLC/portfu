@@ -55,6 +55,248 @@ use crate::wrappers::sessions::{MemorySessionStore, Session, SessionStore};
 use std::time::Duration;
 use tokio::sync::RwLock;
 
+struct FailingSessionStore {
+    inner: MemorySessionStore,
+    fail: std::sync::atomic::AtomicBool,
+}
+
+impl SessionStore for FailingSessionStore {
+    fn load<'a>(
+        &'a self,
+        id: uuid::Uuid,
+    ) -> crate::wrappers::sessions::StoreFuture<'a, Option<Arc<RwLock<Session>>>> {
+        self.inner.load(id)
+    }
+
+    fn save<'a>(
+        &'a self,
+        session: Arc<RwLock<Session>>,
+        ttl: Duration,
+    ) -> crate::wrappers::sessions::StoreFuture<'a, ()> {
+        Box::pin(async move {
+            if self.fail.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err(crate::error::PortfuError::ServiceUnavailable(
+                    "backend unavailable".into(),
+                ));
+            }
+            self.inner.save(session, ttl).await
+        })
+    }
+
+    fn remove<'a>(&'a self, id: uuid::Uuid) -> crate::wrappers::sessions::StoreFuture<'a, ()> {
+        self.inner.remove(id)
+    }
+}
+
+#[tokio::test]
+async fn read_only_session_does_not_save_after_handler_side_effects() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let store = Arc::new(FailingSessionStore {
+        inner: MemorySessionStore::new(2),
+        fail: AtomicBool::new(false),
+    });
+    let session = Arc::new(RwLock::new(Session::default()));
+    session.write().await.data.insert(42_u64);
+    let id = session.read().await.id;
+    store
+        .save(session.clone(), Duration::from_secs(60))
+        .await
+        .unwrap();
+    let manager = SessionManager::default().store(store.clone());
+    let mut request = request_with_forwarded_ip();
+    request.headers_mut().insert(
+        http::header::COOKIE,
+        format!("session_id={id}").parse().unwrap(),
+    );
+    manager.before(&mut request).await.unwrap();
+    // An upload reads its principal, commits its database write, then the backend fails.
+    assert_eq!(session.read().await.data.get::<u64>(), Some(&42));
+    let mut response = Response::json(serde_json::json!({"upload_id": 7}));
+    store.fail.store(true, Ordering::Relaxed);
+    manager
+        .after_with_request(&request, &mut response)
+        .await
+        .unwrap();
+    assert_eq!(response.status(), http::StatusCode::OK);
+    assert_eq!(
+        response.headers()[http::header::CACHE_CONTROL],
+        "private, no-store"
+    );
+    assert!(!response.headers().contains_key(http::header::SET_COOKIE));
+
+    // An outage already present at admission must stop the handler.
+    let mut next = request_with_forwarded_ip();
+    next.headers_mut().insert(
+        http::header::COOKIE,
+        format!("session_id={id}").parse().unwrap(),
+    );
+    assert!(manager.before(&mut next).await.is_err());
+
+    // Authentication/logout changes still require durable persistence.
+    session.write().await.data.remove::<u64>();
+    assert!(
+        manager
+            .after_with_request(&request, &mut response)
+            .await
+            .is_err()
+    );
+}
+
+#[cfg(feature = "oauth")]
+#[tokio::test]
+async fn abandoned_oauth_logins_cannot_exhaust_session_capacity_or_evict_application_data() {
+    use crate::auth::oauth::OAUTH;
+    // Exercise the real login route with a small capacity; the admission rule is
+    // independent of the default 10,000-entry limit.
+    let store = Arc::new(MemorySessionStore::new(8));
+    let manager = SessionManager::default().store(store.clone());
+    let established = Arc::new(RwLock::new(Session::default()));
+    established
+        .write()
+        .await
+        .data
+        .insert("application principal".to_string());
+    let established_id = established.read().await.id;
+    store
+        .save(established.clone(), Duration::from_secs(60))
+        .await
+        .unwrap();
+    let server = ServerBuilder::new()
+        .session_manager(manager.clone())
+        .enable_oauth(OAUTH::KEYCLOAK)
+        .client_id("test-client")
+        .client_secret("test-secret")
+        .auth_url("https://provider.example/authorize")
+        .token_url("https://provider.example/token")
+        .redirect_url("https://app.example/callback")
+        .login_path("/keycloak/login")
+        .build();
+    let login = server
+        .services
+        .iter()
+        .find(|service| service.name() == "oauth_login")
+        .unwrap();
+    let mut first = None;
+    let mut latest = None;
+    for _ in 0..20 {
+        let mut request = request_with_forwarded_ip();
+        manager.before(&mut request).await.unwrap();
+        let session = request.get::<Arc<RwLock<Session>>>().unwrap().clone();
+        let mut response = login.serve(&mut request).await.unwrap();
+        manager
+            .after_with_request(&request, &mut response)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), http::StatusCode::FOUND);
+        assert!(response.headers().contains_key(http::header::SET_COOKIE));
+        first.get_or_insert((session.read().await.id, session.clone()));
+        latest = Some(session.read().await.id);
+    }
+    let (first_id, first) = first.unwrap();
+    assert!(store.load(first_id).await.unwrap().is_none());
+    // An in-flight request must not resurrect an evicted handshake.
+    store.save(first, Duration::from_secs(60)).await.unwrap();
+    assert!(store.load(first_id).await.unwrap().is_none());
+    assert!(store.load(latest.unwrap()).await.unwrap().is_some());
+    assert!(store.load(established_id).await.unwrap().is_some());
+    assert_eq!(
+        established.read().await.data.get::<String>().unwrap(),
+        "application principal"
+    );
+}
+
+#[cfg(feature = "oauth")]
+#[tokio::test]
+async fn default_sized_store_remains_bounded_after_ten_thousand_pending_logins() {
+    use crate::auth::oauth::{SessionCsrfToken, SessionPkceVerifier};
+    let store = MemorySessionStore::new(10_000);
+    let mut ids = Vec::new();
+    for _ in 0..10_005 {
+        let mut session = Session::default();
+        session.data.insert(SessionCsrfToken("state".into()));
+        session.data.insert(SessionPkceVerifier("verifier".into()));
+        ids.push(session.id);
+        store
+            .save(Arc::new(RwLock::new(session)), Duration::from_secs(60))
+            .await
+            .unwrap();
+    }
+    for (index, id) in ids.into_iter().enumerate() {
+        assert_eq!(store.load(id).await.unwrap().is_some(), index >= 5);
+    }
+}
+
+#[cfg(feature = "oauth")]
+#[tokio::test]
+async fn pending_session_with_new_application_data_is_protected_before_its_next_save() {
+    use crate::auth::oauth::{SessionCsrfToken, SessionPkceVerifier};
+    let store = MemorySessionStore::new(1);
+    let session = Arc::new(RwLock::new(Session::default()));
+    {
+        let mut session = session.write().await;
+        session.data.insert(SessionCsrfToken("state".into()));
+        session.data.insert(SessionPkceVerifier("verifier".into()));
+    }
+    let id = session.read().await.id;
+    store
+        .save(session.clone(), Duration::from_secs(60))
+        .await
+        .unwrap();
+    session
+        .write()
+        .await
+        .data
+        .insert("DID principal".to_string());
+    assert!(
+        store
+            .save(
+                Arc::new(RwLock::new(Session::default())),
+                Duration::from_secs(60)
+            )
+            .await
+            .is_err()
+    );
+    assert!(store.load(id).await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn session_data_replacements_and_mutable_borrows_require_persistence() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let store = Arc::new(FailingSessionStore {
+        inner: MemorySessionStore::new(1),
+        fail: AtomicBool::new(false),
+    });
+    let session = Arc::new(RwLock::new(Session::default()));
+    let id = session.read().await.id;
+    session.write().await.data.insert(42_u64);
+    store
+        .save(session.clone(), Duration::from_secs(60))
+        .await
+        .unwrap();
+    let manager = SessionManager::default().store(store.clone());
+    for replace in [false, true] {
+        store.fail.store(false, Ordering::Relaxed);
+        let mut request = request_with_forwarded_ip();
+        request.headers_mut().insert(
+            http::header::COOKIE,
+            format!("session_id={id}").parse().unwrap(),
+        );
+        manager.before(&mut request).await.unwrap();
+        if replace {
+            session.write().await.data = Default::default();
+        } else {
+            *session.write().await.data.get_mut::<u64>().unwrap() = 7;
+        }
+        store.fail.store(true, Ordering::Relaxed);
+        assert!(
+            manager
+                .after_with_request(&request, &mut Response::ok("ok"))
+                .await
+                .is_err()
+        );
+    }
+}
+
 #[tokio::test]
 async fn anonymous_sessions_are_local_until_written_and_preserve_handler_cookies() {
     let store = Arc::new(MemorySessionStore::new(2));
