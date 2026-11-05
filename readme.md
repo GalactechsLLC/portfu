@@ -181,3 +181,15 @@ For programmatic control, call `ServerHandle::shutdown()` to drain or `ServerHan
 TLS handshakes and HTTP header reads are bounded by default. Customize them with `TlsConfig::handshake_timeout` and `ServerBuilder::http_header_read_timeout`. Forwarded client-IP headers are ignored unless `ServerBuilder::trust_proxy_headers(true)` is explicitly enabled; only enable that option when direct traffic is restricted to a trusted reverse proxy.
 
 Use owned `RequestHeaders` parameters in WebSocket handlers; Portfu clones the request headers before the task starts. Use `WebSocket` for server-side connections and `ClientWebSocket` for outbound `connect_async` connections.
+
+Session persistence
+--------
+Anonymous requests do not allocate stored sessions until session data is written. The default in-memory store holds at most 10,000 sessions. When full, it revokes the oldest session containing only OAuth CSRF/PKCE handshake data to make room; it never evicts a session containing application data. An evicted OAuth attempt must restart login. A store full of application sessions still rejects new sessions with 503. Use request rate limits to control login traffic and a shared `SessionStore` when running replicas; custom stores own their admission policy.
+
+Existing sessions are refreshed in the store before the handler runs. Session data reads do not cause another save after the handler, so a later store outage cannot turn a completed upload or database write into a session-refresh 503. New sessions, rotated IDs, and data changes still require a successful save. Operations that both mutate a session and write to another backend are not atomic; applications must coordinate those writes. This also means login and logout persistence failures remain errors rather than false successes.
+
+`Session::data` is now `SessionData`, which supports the `http::Extensions` methods through dereferencing. Existing `.data.get()`, `.insert()`, `.remove()`, and `.get_mut()` calls work unchanged. When constructing or replacing the field with an `Extensions` value, use `.into()`. Mutate stored values through `.data.get_mut()`; mutations through interior mutability are not tracked. Custom backends should populate `SessionData` before returning a loaded session.
+
+Custom authentication handlers, including DID login, must call `SessionManager::rotate_session(&mut request).await?` **before** inserting the authenticated principal, then retrieve the new session from the request. Previously extracted session handles refer to the revoked object. OAuth callbacks already do this. Updating portfu alone cannot rotate a session for an application-defined login handler.
+
+Server body-limit rejections run global response middleware, including CORS, without reading the oversized body or invoking the handler. Allowed cross-origin clients can therefore observe the HTTP 413 response.
