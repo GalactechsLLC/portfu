@@ -81,7 +81,8 @@ pub mod prelude {
     pub use portfu_common::wrappers;
     #[cfg(feature = "sessions")]
     pub use portfu_common::wrappers::sessions::{
-        MemorySessionStore, Session, SessionManager, SessionState, SessionStore, SkipSession,
+        MemorySessionStore, Session, SessionData, SessionManager, SessionState, SessionStore,
+        SkipSession,
     };
     #[cfg(any(
         feature = "client",
