@@ -12,3 +12,17 @@ jobs:
   lint:
     name: Lint
     uses: ./.github/workflows/lint.yml
+  audit:
+    name: Cargo audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked --version 0.22.1
+      - name: Audit dependencies
+        run: cargo audit --file Cargo.lock
