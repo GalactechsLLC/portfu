@@ -41,6 +41,16 @@ use tokio::{select, spawn};
 #[cfg(feature = "tls")]
 use tokio_rustls::TlsAcceptor;
 
+pub(crate) fn connection_error_level(error: &hyper::Error) -> log::Level {
+    if error.is_timeout() || error.is_incomplete_message() {
+        // Client deadlines/disconnects are not server failures. The HTTP
+        // parser still enforces the configured deadline and closes the socket.
+        log::Level::Warn
+    } else {
+        log::Level::Error
+    }
+}
+
 pub trait ServiceRegister: Send + Sync {
     fn register(self, registry: &mut ServiceRegistry);
 }
@@ -292,7 +302,7 @@ impl Server {
                                                     tokio::select! {
                                                         result = &mut connection => {
                                                             if let Err(err) = result {
-                                                                error!("Error serving tls connection: {err:?}");
+                                                                log::log!(connection_error_level(&err), "HTTP connection closed peer={address} tls=true reason={err:?}");
                                                             }
                                                         }
                                                         _ = cancellation.cancelled() => {
@@ -319,7 +329,7 @@ impl Server {
                                         tokio::select! {
                                             result = &mut connection => {
                                                 if let Err(err) = result {
-                                                    error!("Error serving connection: {err:?}");
+                                                    log::log!(connection_error_level(&err), "HTTP connection closed peer={address} tls=false reason={err:?}");
                                                 }
                                             }
                                             _ = cancellation.cancelled() => {

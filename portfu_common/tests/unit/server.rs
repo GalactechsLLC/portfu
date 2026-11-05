@@ -84,3 +84,44 @@ fn set_request_scope_state_preserves_pending_http_upgrade() {
     assert!(request.get::<hyper::upgrade::OnUpgrade>().is_some());
     assert!(request.get::<Arc<DefaultState>>().is_some());
 }
+
+#[tokio::test]
+async fn header_timeout_closes_incomplete_request_and_is_a_warning() {
+    use hyper::server::conn::http1;
+    use hyper::service::service_fn;
+    use hyper_util::rt::{TokioIo, TokioTimer};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (mut client, server) = tokio::io::duplex(1024);
+    let task = tokio::spawn(async move {
+        http1::Builder::new()
+            .timer(TokioTimer::new())
+            .header_read_timeout(std::time::Duration::from_millis(50))
+            .serve_connection(
+                TokioIo::new(server),
+                service_fn(|_| async {
+                    Ok::<_, std::convert::Infallible>(http::Response::new(Full::new(Bytes::new())))
+                }),
+            )
+            .await
+            .expect_err("incomplete headers must time out")
+    });
+    client.write_all(b"GET / HTTP/1.1\r\nHost:").await.unwrap();
+    let error = tokio::time::timeout(std::time::Duration::from_secs(2), task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(error.is_timeout());
+    assert_eq!(
+        crate::server::connection_error_level(&error),
+        log::Level::Warn
+    );
+    // The timeout still tears down the transport; this is not a disabled deadline.
+    let mut response = Vec::new();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        client.read_to_end(&mut response),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+}
