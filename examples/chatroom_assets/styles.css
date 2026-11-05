@@ -1,0 +1,57 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  background: linear-gradient(160deg, #f4f8ff, #eef3ec);
+  color: #1b2430;
+}
+
+.app {
+  max-width: 760px;
+  margin: 24px auto;
+  padding: 16px;
+}
+
+.panel {
+  background: #ffffff;
+  border: 1px solid #d9e2ec;
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.hidden {
+  display: none;
+}
+
+#messages {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0;
+  min-height: 240px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+#messages li {
+  padding: 8px 10px;
+  border-bottom: 1px solid #eef2f6;
+}
+
+input,
+button {
+  font: inherit;
+  padding: 8px;
+}
+
+#message-form {
+  display: flex;
+  gap: 8px;
+}
+
+#message-input {
+  flex: 1;
+}

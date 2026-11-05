@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Portfu Chatroom Example</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="app">
+      <h1>Chatroom</h1>
+      <p>Simple macro-based websocket chat example.</p>
+
+      <form id="join-form" class="panel">
+        <label for="name">Name</label>
+        <input id="name" name="name" placeholder="alice" required>
+        <button type="submit">Join</button>
+      </form>
+
+      <section id="chat" class="panel hidden">
+        <div id="status"></div>
+        <ul id="messages"></ul>
+        <form id="message-form">
+          <input id="message-input" placeholder="Type a message..." autocomplete="off">
+          <button type="submit">Send</button>
+        </form>
+      </section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>

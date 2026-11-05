@@ -1,0 +1,11 @@
+[package]
+name = "portfu_examples"
+version = "2.0.0"
+edition = "2024"
+
+[dependencies]
+futures-util = { workspace = true }
+log = { workspace = true }
+portfu = { path= "../portfu" }
+simple_logger = { workspace = true }
+tokio = { workspace = true }

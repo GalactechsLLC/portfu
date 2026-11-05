@@ -2,61 +2,57 @@
 resolver = "2"
 
 members = [
-    "portfu_runtime",
-    "portfu_admin",
     "portfu",
-    "portfu_core",
     "portfu_macros",
-    "portfu_operator"
+    "portfu_common",
+    "examples",
+    "tests",
 ]
 
 [workspace.dependencies]
-async-trait = "0.1.80"
-cookie = "0.18.1"
-dashmap = "5.5.3"
-futures-core = "0.3.30"
-futures-util = "0.3.30"
+async-trait = "0.1.89"
+cookie = "0.18.2"
+dashmap = "6.2.1"
+futures-core = "0.3.34"
+futures-util = "0.3.34"
 hex = "0.4.3"
-http = "1.1.0"
-http-body = "1.0.0"
-http-body-util = { version = "0.1.1"}
-hyper = {version="1.3.1", features=["full"]}
-hyper-util = {version="0.1.5", features=["full"]}
-jsonwebtoken = "9"
-log = "0.4.21"
-mime_guess = "2.0.4"
-notify = "6.1.1"
-once_cell = "1.19.0"
-portfu = {path = "./portfu", version = "1.3.1", default-features = false}
-portfu_admin = {path = "./portfu_admin", version = "1.3.3", default-features = false}
-portfu_core = {path = "./portfu_core", version = "1.3.3", default-features = false}
-portfu_macros = {path = "./portfu_macros", version = "1.3.3", default-features = false}
-portfu_operator = {path = "./portfu_operator", version = "1.3.3", default-features = false}
-portfu_operator_lib = {path = "./portfu_operator", version = "1.3.3", default-features = false}
-portfu_runtime = {path = "./portfu_runtime", version = "1.3.3", default-features = false}
-portfu_runtime_lib = {path = "./portfu_runtime", version = "1.3.3", default-features = false}
-prometheus = "0.13.4"
-proc-macro2 = "1.0.84"
-quote = "1.0.36"
-rand = "0.8.5"
-regex = "1.10.4"
-reqwest = {version="0.12.4", default-features = false, features = ["rustls-tls", "json", "stream"] }
-rustls = {version = "0.23.27" }
-rustls-pemfile = "2.1.2"
-rsa = { version = "0.9.6", features = ["std", "pem", "sha2"] }
-serde = { version = "1.0.203", features = ["derive"] }
-serde_html_form = "0.2.7"
-serde_json = "1.0.117"
-sha2 = "0.10.8"
-simple_logger = "5.0.0"
+http = "1.5.0"
+http-body = "1.1.0"
+http-body-util = { version = "0.1.5"}
+hyper = {version="1.11.1", features=["full"]}
+hyper-util = {version="0.1.20", features=["full"]}
+inventory = "0.3.24"
+jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"]}
+log = "0.4.34"
+maud = "0.27.0"
+mime_guess = "2.0.5"
+notify = "8.2.0"
+once_cell = "1.21.4"
+portfu = {path = "./portfu", version = "2.0.0", default-features = false}
+portfu_examples = {path = "./examples", version = "2.0.0", default-features = false}
+portfu_tests = {path = "./tests", version = "2.0.0", default-features = false}
+portfu_common = {path = "./portfu_common", version = "2.0.0"}
+portfu_macros = {path = "./portfu_macros", version = "2.0.0"}
+prometheus = "0.14.0"
+proc-macro2 = "1.0.107"
+quote = "1.0.47"
+rand = "0.10.2"
+regex = "1.13.1"
+reqwest = {version="0.13.4", default-features = false, features = ["json", "stream", "rustls"] }
+rcgen = "0.13.2"
+rustls = {version = "0.23.46" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_html_form = "0.4.0"
+serde_json = "1.0.151"
+sha2 = "0.10.9"
+simple_logger = "5.2.0"
 struct-field-names-as-array = "0.3.0"
-syn = { version="2.0.66", features = ["extra-traits"]}
-time = { version = "0.3.36", features = ["serde-well-known"] }
-tokio = {version = "1.38.0", features=["rt-multi-thread", "sync", "signal", "macros", "process", "time", "fs", "net"]}
-tokio-rustls = { version = "0.26.2" }
-tokio-tungstenite = {version = "0.26.2", features = ["rustls", "rustls-tls-webpki-roots"] }
-tokio-util = "0.7.11"
-url = "2.5.0"
-uuid = {version = "1.8.0", features = ["v4", "serde"]}
-x509-cert = { version = "0.2.5", features = ["std", "pem", "builder"] }
-webpki-roots = "0.26.1"
+syn = { version="2.0.119", features = ["extra-traits", "full"]}
+time = { version = "0.3.55", features = ["serde-well-known"] }
+tokio = {version = "1.54.1", features=["rt-multi-thread", "sync", "signal", "macros", "process", "time", "fs", "net"]}
+tokio-rustls = { version = "0.26.4" }
+tokio-tungstenite = {version = "0.28.0", features = ["rustls", "rustls-tls-webpki-roots"] }
+tokio-util = "0.7.19"
+url = "2.5.8"
+uuid = {version = "1.26.0", features = ["v4", "serde"]}
+webpki-roots = "1.0.11"

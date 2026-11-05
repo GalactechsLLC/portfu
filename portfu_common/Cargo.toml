@@ -1,0 +1,60 @@
+[package]
+name = "portfu_common"
+version = "2.0.0"
+edition = "2024"
+
+[features]
+default = ["full"]
+full = [
+    "client",
+    "cors",
+    "files",
+    "metrics",
+    "oauth",
+    "rate-limit",
+    "sessions",
+    "tasks",
+    "tls",
+    "websocket",
+]
+client = []
+cors = []
+files = []
+metrics = ["dep:prometheus"]
+oauth = ["sessions", "dep:base64", "dep:oauth2", "dep:reqwest"]
+rate-limit = []
+sessions = ["dep:cookie", "dep:dashmap", "dep:hex", "dep:sha2"]
+tasks = []
+tls = ["dep:rcgen", "dep:rustls", "dep:sha2", "dep:tokio-rustls"]
+websocket = ["dep:tokio-tungstenite"]
+
+[dependencies]
+cookie = { workspace = true, optional = true }
+dashmap = { workspace = true, optional = true }
+hex = { version = "0.4.3", optional = true }
+http = { workspace = true }
+http-body = { workspace = true }
+http-body-util = { workspace = true }
+futures-util = { workspace = true }
+hyper = { workspace = true, features = ["server", "http1", "http2"] }
+hyper-util = { workspace = true, features = ["tokio"]}
+inventory = { workspace = true }
+regex = { workspace = true }
+urlencoding = "2.1.3"
+once_cell = { workspace = true }
+prometheus = { workspace = true, optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_urlencoded = "0.7.1"
+sha2 = { workspace = true, features = ["oid"], optional = true }
+oauth2 = { version = "5.0.0", default-features = false, optional = true }
+reqwest = { workspace = true, optional = true }
+base64 = { version = "0.22.1", optional = true }
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true, optional = true }
+tokio-util = { workspace = true, features = ["rt"] }
+uuid = { workspace = true }
+log = { workspace = true }
+rcgen = { workspace = true, optional = true }
+rustls = { workspace = true, optional = true }
+tokio-rustls = { workspace = true, optional = true }

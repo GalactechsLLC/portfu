@@ -1,37 +1,99 @@
+#[cfg(feature = "client")]
 pub mod client;
-pub mod filters;
-pub mod wrappers;
 
-pub extern crate portfu_core as pfcore;
-pub extern crate portfu_macros as macros;
+#[cfg(test)]
+#[path = "../tests/unit/mod.rs"]
+mod unit_tests;
 
 pub mod prelude {
-    pub extern crate async_trait;
-    pub extern crate futures_util;
-    pub extern crate http;
-    pub extern crate http_body_util;
-    pub extern crate hyper;
-    pub extern crate hyper_util;
-    pub extern crate log;
-    pub extern crate once_cell;
-    pub extern crate serde_json;
-    pub extern crate tokio_tungstenite;
-    pub extern crate uuid;
-    pub type Service = ::pfcore::service::Service;
-    pub type ServiceType = ::pfcore::ServiceType;
-    pub type Server = ::pfcore::server::Server;
-    pub type ServerBuilder = ::pfcore::server::ServerBuilder;
-    pub type SslConfig = ::pfcore::server::SslConfig;
-    pub type ServiceResponse = ::pfcore::service::ServiceResponse;
-    pub type ServiceGroup = ::pfcore::service::ServiceGroup;
-    pub type IncomingRequest = ::pfcore::service::IncomingRequest;
-    pub type ServiceRegistry = ::pfcore::ServiceRegistry;
-    pub type ServiceData = ::pfcore::ServiceData;
-    pub type Path = ::pfcore::Path;
-    pub type Body<T> = ::pfcore::Body<T>;
-    pub type State<T> = ::pfcore::State<T>;
-    pub type WebSocket = ::pfcore::sockets::WebSocket;
-    pub type WebsocketMsgStream = ::pfcore::sockets::WebsocketMsgStream;
-    pub type WebsocketConnection = ::pfcore::sockets::WebsocketConnection;
-    pub type Peers = ::pfcore::sockets::Peers;
+    #[cfg(feature = "client")]
+    pub use crate::client;
+    #[cfg(feature = "client")]
+    pub use crate::client::SupportedBody;
+    pub use http;
+    pub use http_body_util;
+    pub use hyper;
+    pub use hyper_util;
+    pub use inventory;
+    pub use log;
+    #[cfg(feature = "maud")]
+    pub use maud;
+    #[cfg(feature = "maud")]
+    pub use maud::{Markup, PreEscaped, Render, html};
+    #[cfg(feature = "oauth")]
+    pub use portfu_common::auth;
+    #[cfg(feature = "oauth")]
+    pub use portfu_common::auth::oauth::{
+        OAUTH, OAuthIdentity, OAuthToken, SessionOAuthIdentity, SessionOAuthToken,
+    };
+    pub use portfu_common::error::PortfuError;
+    pub use portfu_common::router::filter as filters;
+    pub use portfu_common::router::middleware::client_trust::ClientTrust;
+    pub use portfu_common::router::path::Path;
+    pub use portfu_common::router::path::PathImpl;
+    pub use portfu_common::router::path::PathName;
+    pub use portfu_common::server::Server;
+    pub use portfu_common::server::ServerHandle;
+    pub use portfu_common::server::ServiceRegister;
+    pub use portfu_common::server::ServiceRegistration;
+    pub use portfu_common::server::ServiceRegistry;
+    pub use portfu_common::server::TaskRegistration;
+    pub use portfu_common::server::builder::ServerBuilder;
+    pub use portfu_common::server::config::{
+        ClientAuthConfig, ClientCertificateMode, TlsConfig, TlsIdentity, TlsVersionPolicy,
+        TrustStore,
+    };
+    pub use portfu_common::server::connection::{
+        ClientIdentity, ConnectionInfo, NegotiatedTlsVersion,
+    };
+    pub use portfu_common::service::RequestHeaders;
+    pub use portfu_common::service::ResponseHeaders;
+    pub use portfu_common::service::Service;
+    pub use portfu_common::service::State;
+    pub use portfu_common::service::builder::ServiceBuilder;
+    pub use portfu_common::service::group::ServiceGroup;
+    pub use portfu_common::service::request::Body;
+    pub use portfu_common::service::request::FromRequest;
+    pub use portfu_common::service::request::Json;
+    pub use portfu_common::service::request::Query;
+    pub use portfu_common::service::request::RequestType;
+    pub use portfu_common::service::request::{Request, RequestBody, client_ip};
+    pub use portfu_common::service::response::Response;
+    pub use portfu_common::service::response::{IntoResponse, ResponseError};
+    pub use portfu_common::service::traits::Service as ServiceTrait;
+    #[cfg(feature = "websocket")]
+    pub use portfu_common::websocket::ClientWebSocket;
+    #[cfg(feature = "websocket")]
+    pub use portfu_common::websocket::ClientWebSocketInner;
+    #[cfg(feature = "websocket")]
+    pub use portfu_common::websocket::Message;
+    #[cfg(feature = "websocket")]
+    pub use portfu_common::websocket::Peers;
+    #[cfg(feature = "websocket")]
+    pub use portfu_common::websocket::WebSocket;
+    #[cfg(feature = "websocket")]
+    pub use portfu_common::websocket::WebsocketConnection;
+    #[cfg(feature = "websocket")]
+    pub use portfu_common::websocket::{
+        WebSocketAdmission, WebSocketAdmissionMiddleware, WebSocketAdmissionPermit,
+        WebSocketRouteConfig, upgrade as websocket_upgrade,
+    };
+    pub use portfu_common::wrappers;
+    #[cfg(feature = "sessions")]
+    pub use portfu_common::wrappers::sessions::{
+        MemorySessionStore, Session, SessionData, SessionManager, SessionState, SessionStore,
+        SkipSession,
+    };
+    #[cfg(any(
+        feature = "client",
+        feature = "endpoint",
+        feature = "files",
+        feature = "maud",
+        feature = "tasks",
+        feature = "websocket"
+    ))]
+    pub use portfu_macros::*;
+    #[cfg(feature = "websocket")]
+    pub use tokio_tungstenite;
+    pub use uuid;
 }
